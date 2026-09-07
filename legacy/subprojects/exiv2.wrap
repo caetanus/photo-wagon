@@ -1,0 +1,5 @@
+[wrap-git]
+directory = exiv2
+url = https://github.com/Exiv2/exiv2.git
+revision = v0.28.7
+depth = 1

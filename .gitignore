@@ -1,0 +1,19 @@
+# build outputs
+daemon/photowagond
+daemon/photowagond-test
+daemon/.dub/
+daemon/tests/e2e-work/
+ui/photo-wagon
+*.o
+*.a
+
+# face models: 800 MB of third-party weights, fetched separately (see ROADMAP M3)
+models/
+
+# the old prototype's build trees and binaries
+legacy/build/
+legacy/builddir/
+legacy/build-meson/
+legacy/photowagond/photowagond
+legacy/photowagond/.dub/
+legacy/.ipynb_checkpoints/

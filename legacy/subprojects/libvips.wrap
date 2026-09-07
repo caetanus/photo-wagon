@@ -1,0 +1,5 @@
+[wrap-git]
+directory = libvips
+url = https://github.com/libvips/libvips.git
+revision = v8.17.1
+depth = 1

@@ -1,0 +1,9 @@
+name "photowagond"
+description "Photo Wagon D daemon — indexer, face service, metadata"
+targetType "executable"
+
+dependency "vibe-d:http" version=">=0.10.0"
+
+libs "gexiv2" "vips" "gobject-2.0" "glib-2.0" "sqlite3"
+libs "face_opencv" "opencv_objdetect" "opencv_imgcodecs" "opencv_imgproc" "opencv_dnn" "opencv_core" "stdc++"
+lflags "-L../photowagond/csrc"

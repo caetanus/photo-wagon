@@ -1,0 +1,10 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+  <qresource prefix="/">
+    <file>Main.qml</file>
+    <file>PhotoGrid.qml</file>
+    <file>DateTreeSidebar.qml</file>
+    <file>PhotoFocusView.qml</file>
+    <file>PeersPanel.qml</file>
+  </qresource>
+</RCC>

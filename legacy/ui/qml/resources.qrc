@@ -1,0 +1,8 @@
+<RCC>
+    <qresource prefix="/ui/qml">
+        <file>Main.qml</file>
+        <file>DateTreeSidebar.qml</file>
+        <file>PhotoGrid.qml</file>
+        <file>PhotoFocusView.qml</file>
+    </qresource>
+</RCC>

@@ -1,0 +1,6 @@
+option(
+  'auto_download_subprojects',
+  type: 'boolean',
+  value: false,
+  description: 'Automatically run "meson subprojects download" during setup'
+)

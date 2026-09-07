@@ -1,0 +1,92 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "build-photo-wagon",
+			"type": "shell",
+			"command": "meson",
+			"args": [
+				"compile",
+				"-C",
+				"builddir"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "run-photo-wagon-offscreen",
+			"type": "shell",
+			"command": "env",
+			"args": [
+				"QT_QPA_PLATFORM=offscreen",
+				"./builddir/photo-wagon"
+			],
+			"isBackground": true
+		},
+		{
+			"label": "build-photo-wagon-verify",
+			"type": "shell",
+			"command": "meson",
+			"args": [
+				"setup",
+				"builddir",
+				".",
+				"--reconfigure",
+				"&&",
+				"meson",
+				"compile",
+				"-C",
+				"builddir"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "run-photo-wagon-offscreen-verify",
+			"type": "shell",
+			"command": "env",
+			"args": [
+				"QT_QPA_PLATFORM=offscreen",
+				"./builddir/photo-wagon"
+			],
+			"isBackground": true
+		},
+		{
+			"label": "show-main-line-141",
+			"type": "shell",
+			"command": "nl",
+			"args": [
+				"-ba",
+				"ui/qml/Main.qml"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "build-photo-wagon-verify-2",
+			"type": "shell",
+			"command": "meson",
+			"args": [
+				"setup",
+				"builddir",
+				".",
+				"--reconfigure",
+				"&&",
+				"meson",
+				"compile",
+				"-C",
+				"builddir"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "run-photo-wagon-offscreen-5s",
+			"type": "shell",
+			"command": "timeout",
+			"args": [
+				"5s",
+				"env",
+				"QT_QPA_PLATFORM=offscreen",
+				"./builddir/photo-wagon"
+			],
+			"isBackground": false
+		}
+	]
+}

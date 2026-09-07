@@ -1,0 +1,4 @@
+ninja: Entering directory `/home/caetano/lab/photo-wagon/builddir'
+ninja: no work to do.
+INFO: autodetecting backend as ninja
+INFO: calculating backend command to run: /usr/bin/ninja -C /home/caetano/lab/photo-wagon/builddir

@@ -9,6 +9,8 @@ import photowagon.core.db.sqlite : Database, Statement;
 import photowagon.core.ipc.protocol : ApiError, nullable;
 import photowagon.core.store.store : ContentStore;
 
+public import photowagon.core.library.calendar : dateRange, fileUrl;
+
 struct Photo
 {
 	long id;
@@ -333,56 +335,6 @@ final class PhotoRepo
 	}
 }
 
-/// [from, to) in unix seconds, local time, for a year, a month or a day.
-long[2] dateRange(int year, int month, int day)
-{
-	import std.datetime : DateTime, SysTime, LocalTime, Date;
-	import core.time : days;
-
-	long ts(Date d)
-	{
-		return SysTime(DateTime(d, TimeOfDayZero), LocalTime()).toUnixTime;
-	}
-
-	if (month == 0)
-		return [ts(Date(year, 1, 1)), ts(Date(year + 1, 1, 1))];
-	if (day == 0)
-	{
-		auto next = month == 12 ? Date(year + 1, 1, 1) : Date(year, month + 1, 1);
-		return [ts(Date(year, month, 1)), ts(next)];
-	}
-	auto d = Date(year, month, day);
-	return [ts(d), ts(d + 1.days)];
-}
-
-private import std.datetime : TimeOfDay;
-private enum TimeOfDayZero = TimeOfDay(0, 0, 0);
-
-/// `file://` URL for an absolute path, percent-encoding what QUrl would trip on.
-string fileUrl(string path) pure
-{
-	import std.ascii : isAlphaNum;
-	import std.format : format;
-
-	string out_ = "file://";
-	foreach (char c; path)
-	{
-		if (c.isAlphaNum || c == '/' || c == '-' || c == '_' || c == '.' || c == '~')
-			out_ ~= c;
-		else
-			out_ ~= format("%%%02X", cast(ubyte) c);
-	}
-	return out_;
-}
-
-unittest
-{
-	assert(fileUrl("/a b/c#1.jpg") == "file:///a%20b/c%231.jpg");
-	auto r = dateRange(2024, 2, 0);
-	assert(r[1] - r[0] == 29 * 86_400);
-	auto y = dateRange(2023, 0, 0);
-	assert(y[1] - y[0] == 365 * 86_400);
-}
 
 unittest
 {

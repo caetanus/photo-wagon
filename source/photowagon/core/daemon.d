@@ -7,6 +7,7 @@ module photowagon.core.daemon;
 import core.thread : Thread;
 import std.conv : to;
 import std.file : mkdirRecurse, write, remove, exists;
+import std.path : buildPath;
 
 import vibe.core.core : runTask, runEventLoop, exitEventLoop;
 import vibe.core.log : logInfo, logWarn, logError;
@@ -15,9 +16,11 @@ import libp2p.util.fibers : FiberGroup;
 
 import photowagon.core.api.album_api : registerAlbumApi;
 import photowagon.core.api.daemon_api : registerDaemonApi;
+import photowagon.core.api.import_api : registerImportApi;
 import photowagon.core.api.library_api : registerLibraryApi;
 import photowagon.core.api.media_api : registerMediaApi;
 import photowagon.core.api.p2p_api : registerP2pApi;
+import photowagon.core.api.pairing_api : registerPairingApi, ServerControl;
 import photowagon.core.config : Config;
 import photowagon.core.db.schema : migrate;
 import photowagon.core.db.sqlite : Database;
@@ -35,16 +38,21 @@ import photowagon.core.p2p.identity : loadOrCreateIdentity;
 import photowagon.core.p2p.node : Node;
 import photowagon.core.p2p.peers : PeerRepo;
 import photowagon.core.p2p.sharing : Sharing;
+import photowagon.core.pairing : loadOrCreateToken;
 import photowagon.core.store.store : ContentStore;
 
 enum coreVersion = "0.4.0";
 
-final class Daemon
+final class Daemon : ServerControl
 {
 	private Config cfg;
 	private InProcessLink link; // null when headless
 	private Database db;
 	private IpcServer ipc;
+	private Registry registry;
+	private Events events;
+	private string token;
+	private ushort ipcPortInUse;
 	private RequestHandler inproc;
 	private FiberGroup own;
 	private Indexer indexer;
@@ -72,7 +80,8 @@ final class Daemon
 		db = new Database(cfg.dbPath);
 		migrate(db);
 		auto store = new ContentStore(cfg.storeDir);
-		auto events = new Events;
+		events = new Events;
+		token = loadOrCreateToken(buildPath(cfg.dataDir, "pair.token"));
 		auto roots = new RootRepo(db);
 		auto photos = new PhotoRepo(db, store);
 		auto dates = new DateTree(db);
@@ -95,10 +104,12 @@ final class Daemon
 			}
 		}
 
-		auto registry = new Registry;
+		registry = new Registry;
 		registerDaemonApi(registry, cfg, node, &requestStop);
+		registerPairingApi(registry, this);
 		registerLibraryApi(registry, roots, photos, dates, indexer, events);
 		registerMediaApi(registry, photos, store);
+		registerImportApi(registry, cfg, roots, photos, indexer);
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerP2pApi(registry, node, sharing);
 
@@ -110,17 +121,54 @@ final class Daemon
 			logInfo("core %s: serving the UI in-process, data in %s", coreVersion, cfg.dataDir);
 		}
 		if (cfg.serve)
-		{
-			mkdirRecurse(cfg.runtimeDir);
-			ipc = new IpcServer(registry, events);
-			immutable port = ipc.listen(cfg.ipcAddress, cfg.ipcPort);
-			write(cfg.portFile, port.to!string ~ "\n");
-			logInfo("core %s: ipc on %s:%s (port file %s), data in %s", coreVersion, cfg.ipcAddress, port, cfg.portFile, cfg.dataDir);
-		}
+			startServing(cfg.ipcAddress);
 
 		// pick up changes since last run
 		foreach (root; roots.list())
 			indexer.start(root.id, root.path);
+	}
+
+	// ---- ServerControl: the loopback/LAN listener, on demand ------------------------
+
+	ushort startServing(string address)
+	{
+		if (ipc !is null)
+			return ipcPortInUse;
+		mkdirRecurse(cfg.runtimeDir);
+		ipc = new IpcServer(registry, events, token);
+		ipcPortInUse = ipc.listen(address, cfg.ipcPort);
+		write(cfg.portFile, ipcPortInUse.to!string ~ "\n");
+		logInfo("core %s: ipc on %s:%s (port file %s), data in %s", coreVersion, address, ipcPortInUse, cfg.portFile, cfg.dataDir);
+		return ipcPortInUse;
+	}
+
+	void stopServing()
+	{
+		if (ipc is null)
+			return;
+		ipc.close();
+		ipc = null;
+		try
+			if (cfg.portFile.exists)
+				remove(cfg.portFile);
+		catch (Exception)
+		{
+		}
+	}
+
+	bool serving()
+	{
+		return ipc !is null;
+	}
+
+	ushort servingPort()
+	{
+		return ipcPortInUse;
+	}
+
+	string pairingToken()
+	{
+		return token;
 	}
 
 	/// Moves request lines from the UI to the handler, for as long as the core runs.
@@ -164,7 +212,7 @@ final class Daemon
 		if (db)
 			db.close();
 		try
-			if (cfg.serve && cfg.portFile.exists)
+			if (cfg.portFile.exists)
 				remove(cfg.portFile);
 		catch (Exception)
 		{

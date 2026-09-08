@@ -8,8 +8,12 @@ Rectangle {
     id: viewer
     required property QtObject theme
     property var photo: null
+    /// Phone: show "Send to computer" (enabled when a computer is reachable).
+    property bool canSend: false
+    property bool sendEnabled: false
 
     signal closed()
+    signal send(int id)
 
     color: Qt.rgba(0, 0, 0, 0.94)
     focus: visible
@@ -106,7 +110,14 @@ Rectangle {
                 color: theme.muted
             }
             Item { Layout.fillWidth: true }
+            Button {
+                visible: viewer.canSend
+                enabled: viewer.sendEnabled && viewer.photo && !viewer.photo.sent
+                text: viewer.photo && viewer.photo.sent ? "Sent" : "Send to computer"
+                onClicked: viewer.send(viewer.photo.id)
+            }
             Label {
+                visible: !viewer.canSend
                 text: viewer.photo ? viewer.photo.path : ""
                 color: theme.muted
                 elide: Text.ElideMiddle

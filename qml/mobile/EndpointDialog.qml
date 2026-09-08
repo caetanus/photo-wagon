@@ -10,10 +10,9 @@ Dialog {
 
     signal chosen(string host, int port)
 
-    title: "Connect to a library"
+    title: "Computer to send photos to"
     modal: true
     standardButtons: Dialog.Ok | Dialog.Cancel
-    closePolicy: current.length ? Popup.CloseOnEscape | Popup.CloseOnPressOutside : Popup.NoAutoClose
 
     onAboutToShow: {
         const i = current.indexOf(":")
@@ -30,11 +29,18 @@ Dialog {
         spacing: 12
         width: Math.max(280, dialog.availableWidth)
         Label {
-            text: "On the computer with your photos, run\nphoto-wagon --serve --ipc-address 0.0.0.0\nand type its address and port here."
+            text: "On the computer, click “Phone” in Photo Wagon and scan the code it shows. Photos you send land in its library."
             color: theme.muted
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
         }
+        Button {
+            text: "Scan QR code"
+            Layout.fillWidth: true
+            // handled by MainActivity (pwscan:// intent → ML Kit scanner → settings/scanned)
+            onClicked: { Qt.openUrlExternally("pwscan://start"); dialog.close() }
+        }
+        Label { text: "or type the address by hand:"; color: theme.muted }
         TextField {
             id: hostField
             placeholderText: "192.168.0.10"

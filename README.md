@@ -36,6 +36,16 @@ the port to `$XDG_RUNTIME_DIR/photowagon/daemon.port`:
 printf '{"id":1,"method":"daemon.hello"}\n' | nc 127.0.0.1 "$(cat "$XDG_RUNTIME_DIR/photowagon/daemon.port")"
 ```
 
+## Phone
+
+`mobile/` is Photo Wagon on the phone: it shows the phone's own photos and
+sends them to your computer's library. Click **Phone** on the computer, scan the
+QR code with the app (⚙ → Scan QR code), then **Send all** or **Send to
+computer** in the viewer. `mobile/build-android.sh` builds the arm64 APK,
+installs it and launches it on the attached phone; `ANDROID.md` has the
+toolchain and the pairing details. The same client builds for the desktop for
+offscreen tests: `cd mobile && dub build -c desktop --compiler=ldc2`.
+
 ## Tests
 
 ```sh
@@ -50,7 +60,8 @@ QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software PW_SHOT=/tmp/shot.png ./phot
 source/photowagon/core/   indexer, store, SQLite, gexiv2, vips, libp2p node, IPC
 source/photowagon/ui/     app, Library facade, bridge to the core thread
 source/photowagon/main.d  picks UI + core thread, or headless
-qml/                      the interface
+mobile/                   the phone client (D, TcpBridge), Android packaging and toolchain
+qml/                      the interface; qml/mobile/ the phone layout
 docs/ipc.md               the line protocol between UI and core
 tests/                    unit test runner, e2e.py
 models/                   face-detection models (used from milestone 3 on)

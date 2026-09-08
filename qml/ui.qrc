@@ -6,5 +6,6 @@
     <file>DateTreeSidebar.qml</file>
     <file>PhotoFocusView.qml</file>
     <file>PeersPanel.qml</file>
+    <file>PhonePanel.qml</file>
   </qresource>
 </RCC>

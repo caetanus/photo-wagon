@@ -108,6 +108,11 @@ ApplicationWindow {
                 onClicked: folderDialog.open()
             }
             ToolButton {
+                text: "Phone"
+                enabled: status.connected
+                onClicked: phonePanel.open()
+            }
+            ToolButton {
                 text: "Peers"
                 onClicked: peersPanel.open()
             }
@@ -153,6 +158,14 @@ ApplicationWindow {
     }
     } // shell
 
+    PhonePanel {
+        id: phonePanel
+        theme: root.theme
+        pairing: JSON.parse(library.pairing)
+        anchors.centerIn: parent
+        width: Math.min(460, root.width - 80)
+    }
+
     PeersPanel {
         id: peersPanel
         theme: root.theme
@@ -170,9 +183,14 @@ ApplicationWindow {
         onTriggered: library.openPhoto(library.shotOpenId)
     }
     Timer {
+        running: library.shotPath.length > 0 && library.shotSend && root.status.connected
+        interval: 600
+        onTriggered: phonePanel.open()   // PW_SHOT_SEND=1 on the desktop: photograph the pairing panel
+    }
+    Timer {
         running: library.shotPath.length > 0
         interval: 3000
-        onTriggered: shell.grabToImage(function (r) {
+        onTriggered: (library.shotSend ? phonePanel.body : shell).grabToImage(function (r) {
             r.saveToFile(library.shotPath)
             console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length)
             library.quit()

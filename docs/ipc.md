@@ -30,6 +30,19 @@ has a matching response, even on failure.
 | `daemon.hello` | — | `{version, dataDir, peerId, addrs: [multiaddr], methods}` — `peerId` is null with `--no-p2p` |
 | `daemon.shutdown` | — | `{}` then the daemon exits |
 
+### pairing and authentication
+
+| method | params | result |
+|---|---|---|
+| `phone.pairing` | `{enable?: bool}` | `{enabled, port, addrs, code, qr: {width, rows}, qrImage}` — turns the LAN listener (0.0.0.0) on/off; `code` is `pw://<token>@<ip>:<port>[,…]`, `qrImage` a PNG data: URL of it |
+| `daemon.auth` | `{token}` | `{ok: true}` or `unauthorized` |
+| `library.import` | `{name, base64, takenAt?}` | `{existed, path, id?}` — stores the bytes under `<data dir>/imports/<yyyy-mm>/` and indexes them; a photo already in the library (same hash) is reported with `existed: true` |
+
+A client that is not on the loopback interface must send `daemon.auth` with the
+token from the pairing code before anything but `daemon.hello`; every other
+method answers `{"error": {"code": "unauthorized"}}` until then. The token is
+created once per library (`<data dir>/pair.token`).
+
 ### library
 
 | method | params | result |

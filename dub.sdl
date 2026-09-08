@@ -10,7 +10,7 @@ importPaths "source"
 dependency "vibe-core" version="~>2.14"
 dependency "libp2p" path="../libp2p-dlang"
 
-libs "sqlite3" "gexiv2" "vips" "gobject-2.0" "glib-2.0"
+libs "sqlite3" "gexiv2" "vips" "gobject-2.0" "glib-2.0" "qrencode"
 
 // The full application: UI + core. Needs the DSide binding generated at
 // ../qt-dlang-gen (see README). Build with ldc2 or dmd; the matching binding

@@ -31,6 +31,7 @@ import photowagon.ui.transport : Bridge;
     Signal!() helloChanged;
     Signal!() currentChanged;
     Signal!() endpointChanged;
+    Signal!() pairingChanged;
 
     /// {"total":N,"offset":o,"items":[Photo…]} — accumulated across loadPage calls.
     @Property("pageChanged")    string page   = `{"total":0,"offset":0,"items":[]}`;
@@ -48,10 +49,16 @@ import photowagon.ui.transport : Bridge;
     @Property("statusChanged") string shotPath = "";
     /// PW_SHOT_OPEN=<id> opens that photo in the viewer before the capture.
     @Property("statusChanged") int shotOpenId = 0;
+    /// PW_SHOT_SEND=1 (phone) calls sendAll() before the capture.
+    @Property("statusChanged") bool shotSend = false;
     /// "host:port" of a remote core (mobile), "" when the core is in-process.
     @Property("endpointChanged") string endpoint = "";
     /// True when photos are fetched over the network (no file:// URLs).
     @Property("endpointChanged") bool remote = false;
+    /// Phone: whether the computer at `endpoint` is reachable right now.
+    @Property("endpointChanged") bool computerConnected = false;
+    /// Desktop: {enabled, port, addrs, code, qr:{width, rows}} while a phone may pair.
+    @Property("pairingChanged") string pairing = `{"enabled":false}`;
 
     private Bridge client;
     private string[long] thumbCache; // id → data: URL, remote only
@@ -68,6 +75,7 @@ import photowagon.ui.transport : Bridge;
         import std.process : environment;
         shotPath = environment.get("PW_SHOT", "");
         shotOpenId = environment.get("PW_SHOT_OPEN", "0").to!int;
+        shotSend = environment.get("PW_SHOT_SEND", "") == "1";
         client = bridge;
         remote = client.remote();
         endpoint = client.endpoint();
@@ -239,6 +247,40 @@ import photowagon.ui.transport : Bridge;
         QCoreApplication.quit();
     }
 
+    /// Desktop: open (or close) the door for a phone and refresh the QR payload.
+    @Slot void setPairing(bool on)
+    {
+        JSONValue params = ["enable": JSONValue(on)];
+        client.request("phone.pairing", params, (r, e) {
+            if (e.type != JSONType.null_) { report("pairing", e); return; }
+            pairing = r.toString();
+            pairingChanged.emit();
+        });
+    }
+
+    /// Phone: push one photo to the computer's library.
+    @Slot void sendToComputer(int id)
+    {
+        JSONValue params = ["id": JSONValue(id)];
+        setStatus(true, indexing, "sending…");
+        client.request("photo.upload", params, (r, e) {
+            if (e.type != JSONType.null_) { report("send", e); return; }
+            setStatus(true, indexing, "sent to the computer");
+            if (current.length && parseJSON(current)["id"].integer == id)
+                openPhoto(id); // refresh the "sent" flag in the viewer
+        });
+    }
+
+    /// Phone: push everything not sent yet, one after another.
+    @Slot void sendAll()
+    {
+        client.request("library.sendAll", (r, e) {
+            if (e.type != JSONType.null_) { report("sendAll", e); return; }
+            immutable n = r["queued"].integer;
+            setStatus(true, indexing, n ? "sending " ~ n.to!string ~ " photo" ~ (n == 1 ? "" : "s") ~ "…" : "nothing new to send");
+        });
+    }
+
     // ---- daemon → D ------------------------------------------------------------
 
     private void onLink(bool up)
@@ -287,6 +329,18 @@ import photowagon.ui.transport : Bridge;
         case "p2p.fetch":
             setStatus(true, indexing, "fetching album " ~ data["done"].integer.to!string
                 ~ " / " ~ data["total"].integer.to!string);
+            break;
+        case "computer.link":
+            computerConnected = data["connected"].boolean;
+            endpoint = data["endpoint"].str;
+            endpointChanged.emit();
+            break;
+        case "upload.progress":
+            setStatus(true, indexing, "sending " ~ (data["done"].integer + 1).to!string ~ " / " ~ data["total"].integer.to!string);
+            break;
+        case "upload.done":
+            setStatus(true, indexing, data["sent"].integer.to!string ~ " sent"
+                ~ (data["failed"].integer ? ", " ~ data["failed"].integer.to!string ~ " failed" : ""));
             break;
         case "log":
             writeln("daemon: ", data["message"].str);

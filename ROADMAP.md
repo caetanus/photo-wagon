@@ -38,10 +38,11 @@ fetched album are not pulled, only thumbnails.
 - QUIC transport, circuit relay v2, DCUtR, AutoNAT (all present in libp2p-dlang)
 
 ## M7 — Other screens (mobile started 2026-09-07)
-- [x] `mobile/`: the same Qt Quick UI in D as a phone client of `photo-wagon --serve` (TcpBridge,
-  thumbnails and photos as data: URLs through `library.thumbs` / `photo.file`)
-- [ ] Android package (arm64): LDC cross build + DSide binding for Qt Android, see ANDROID.md
-- [ ] discovery of the desktop on the LAN (mDNS) instead of typing host:port
+- [x] `mobile/`: the same Qt Quick UI in D on the phone's own photos (D scan, pure-D EXIF, Qt thumbnails,
+  JSON index), sending them to the computer through `library.import`
+- [x] Android package (arm64): LDC cross build + DSide binding for Qt Android, verified on a device (`ANDROID.md`)
+- [x] pairing by QR code (`phone.pairing` + token, ML Kit scanner in the activity)
+- [ ] the phone as a libp2p peer (album sharing both ways) once the core's deps build for Android
 - [ ] the core itself on the phone (needs libsodium, openssl, c-ares, sqlite, vips, gexiv2 for Android)
 - HTTP front-end from the core for a TV
 

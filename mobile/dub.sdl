@@ -4,7 +4,10 @@ license "MIT"
 targetPath "."
 sourcePaths "source"
 importPaths "source" "../source" "../../qt-dlang-gen/generated/qt-6.11/cxx-quick" "../../qt-dlang-gen/runtime/qrc"
-sourceFiles "../source/photowagon/ui/backend.d" "../source/photowagon/ui/transport.d" "../../qt-dlang-gen/runtime/qrc/qrc.d"
+sourceFiles "../source/photowagon/ui/backend.d" "../source/photowagon/ui/transport.d" \
+	"../source/photowagon/core/indexer/scan.d" "../source/photowagon/core/library/calendar.d" \
+	"../source/photowagon/core/metadata/exifparse.d" "../source/photowagon/core/pairingcode.d" \
+	"../../qt-dlang-gen/runtime/qrc/qrc.d"
 stringImportPaths "../qml"
 
 // Same client, host build: for developing the phone UI offscreen against a
@@ -28,5 +31,5 @@ configuration "desktop" {
 configuration "android" {
 	targetType "dynamicLibrary"
 	targetName "photo-wagon-mobile_arm64-v8a"
-	versions "Android"
+	versions "PhotoWagonMobile"
 }

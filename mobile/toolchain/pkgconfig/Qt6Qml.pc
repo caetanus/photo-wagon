@@ -1,0 +1,9 @@
+prefix=/home/caetano/Qt/6.11.1/android_arm64_v8a
+includedir=${prefix}/include
+libdir=${prefix}/lib
+Name: Qt6Qml
+Description: Qt 6.11.1 android_arm64_v8a Qt6Qml (hand-written .pc for xiboca / cross builds)
+Version: 6.11.1
+Requires: Qt6QmlIntegration Qt6Network Qt6Core
+Cflags: --target=aarch64-linux-android35 --sysroot=/opt/android-sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/sysroot -I${includedir}/QtQml -I${includedir} -DQT_QML_LIB -I${prefix}/mkspecs/android-clang
+Libs: -L${libdir} -lQt6Qml_arm64-v8a

@@ -64,7 +64,19 @@ ApplicationWindow {
             anchors.leftMargin: 4
             anchors.rightMargin: 4
             spacing: 4
-            ToolButton { text: "☰"; font.pixelSize: 20; onClicked: dates.open() }
+            ToolButton {
+                onClicked: dates.open()
+                implicitWidth: 44
+                // drawn, not a glyph: Android's default font has no U+2630
+                contentItem: Column {
+                    anchors.centerIn: parent
+                    spacing: 4
+                    Repeater {
+                        model: 3
+                        Rectangle { width: 20; height: 2; radius: 1; color: theme.text }
+                    }
+                }
+            }
             ColumnLayout {
                 spacing: 0
                 Layout.fillWidth: true
@@ -79,22 +91,27 @@ ApplicationWindow {
                     Layout.fillWidth: true
                 }
                 Label {
-                    text: library.endpoint.length
-                        ? (status.connected ? status.text : "connecting to " + library.endpoint + "…")
-                        : "no library chosen"
-                    color: status.connected ? theme.muted : "#ff8a80"
+                    text: status.text + (library.endpoint.length
+                        ? " · " + (library.computerConnected ? "computer: " + library.endpoint : "computer offline")
+                        : " · no computer set")
+                    color: theme.muted
                     font.pixelSize: 12
                     elide: Text.ElideRight
                     Layout.fillWidth: true
                 }
             }
             BusyIndicator {
-                running: status.indexing || (library.endpoint.length && !status.connected)
+                running: status.indexing
                 visible: running
                 implicitWidth: 22
                 implicitHeight: 22
             }
-            ToolButton { text: "⚙"; font.pixelSize: 20; onClicked: endpointDialog.open() }
+            ToolButton {
+                text: "Send all"
+                enabled: library.computerConnected
+                onClicked: library.sendAll()
+            }
+            ToolButton { text: "⚙"; font.pixelSize: 22; onClicked: endpointDialog.open() }
         }
     }
 
@@ -117,7 +134,10 @@ ApplicationWindow {
             theme: root.theme
             photo: root.current
             visible: root.current !== null
+            canSend: true
+            sendEnabled: library.computerConnected
             onClosed: library.closePhoto()
+            onSend: (id) => library.sendToComputer(id)
         }
     }
 
@@ -154,8 +174,13 @@ ApplicationWindow {
         onTriggered: library.openPhoto(library.shotOpenId)
     }
     Timer {
+        running: library.shotPath.length > 0 && library.shotSend && library.computerConnected
+        interval: 2500
+        onTriggered: library.sendAll()
+    }
+    Timer {
         running: library.shotPath.length > 0
-        interval: 5000
+        interval: library.shotSend ? 12000 : 5000
         onTriggered: shell.grabToImage(function (r) {
             r.saveToFile(library.shotPath)
             console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length)
@@ -163,9 +188,5 @@ ApplicationWindow {
         })
     }
 
-    Component.onCompleted: {
-        if (!library.endpoint.length && !library.shotPath.length)
-            endpointDialog.open()
-        library.loadDates()
-    }
+    Component.onCompleted: library.loadDates()
 }

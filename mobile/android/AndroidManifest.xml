@@ -6,6 +6,8 @@
     android:versionName="-- %%INSERT_VERSION_NAME%% --">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <!-- %%INSERT_PERMISSIONS -->
     <!-- %%INSERT_FEATURES -->
     <supports-screens
@@ -23,7 +25,7 @@
         android:allowBackup="true"
         android:fullBackupOnly="false">
         <activity
-            android:name="org.qtproject.qt.android.bindings.QtActivity"
+            android:name="org.photowagon.mobile.MainActivity"
             android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|layoutDirection|locale|fontScale|keyboard|keyboardHidden|navigation|mcc|mnc|density"
             android:label="Photo Wagon"
             android:launchMode="singleTop"
@@ -32,6 +34,12 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="pwscan" />
             </intent-filter>
             <meta-data
                 android:name="android.app.lib_name"

@@ -13,20 +13,22 @@ import vibe.core.task : InterruptException;
 
 import photowagon.core.ipc.events : Events, EventSink;
 import photowagon.core.ipc.handler : RequestHandler;
-import photowagon.core.ipc.protocol : Registry;
+import photowagon.core.ipc.protocol : Registry, getString;
 
 final class IpcServer
 {
 	private Registry registry;
 	private Events events;
+	private string token; // required from non-loopback clients when set
 	private TCPListener listener;
 	private Client[] clients;
 	private bool closed;
 
-	this(Registry registry, Events events)
+	this(Registry registry, Events events, string token = null)
 	{
 		this.registry = registry;
 		this.events = events;
+		this.token = token;
 	}
 
 	/// Binds and returns the port actually in use.
@@ -57,7 +59,7 @@ final class IpcServer
 			conn.close();
 			return;
 		}
-		auto c = new Client(conn, registry, events);
+		auto c = new Client(conn, registry, events, token);
 		clients ~= c;
 		scope (exit)
 		{
@@ -90,15 +92,65 @@ private final class Client
 	private TaskMutex writeLock;
 	private RequestHandler handler;
 	private EventSink sink;
+	private string token;
+	private bool authed;
 	private bool gone;
 
-	this(TCPConnection conn, Registry registry, Events events)
+	this(TCPConnection conn, Registry registry, Events events, string token)
 	{
 		this.conn = conn;
 		this.events = events;
+		this.token = token;
 		writeLock = new TaskMutex;
 		handler = new RequestHandler(registry, &send);
 		sink = &send;
+		// a client on this machine (a test, a tool, adb reverse) needs no token
+		immutable peer = conn.peerAddress;
+		import std.string : startsWith;
+
+		authed = token.length == 0 || peer.startsWith("127.") || peer.startsWith("[::1]") || peer.startsWith("::1")
+			|| peer.startsWith("[::ffff:127.");
+	}
+
+	/// `daemon.auth {token}` is answered here; everything else waits for it.
+	private void dispatch(string line)
+	{
+		import std.json;
+		import std.string : strip;
+
+		if (authed)
+		{
+			handler.handle(line);
+			return;
+		}
+		JSONValue msg;
+		try
+			msg = parseJSON(line);
+		catch (Exception)
+		{
+			handler.handle(line); // let the handler produce the bad_json answer
+			return;
+		}
+		immutable method = getString(msg, "method");
+		JSONValue id = msg.type == JSONType.object && "id" in msg.object ? msg["id"] : JSONValue(null);
+		if (method == "daemon.auth")
+		{
+			immutable given = msg.type == JSONType.object && "params" in msg.object ? getString(msg["params"], "token") : null;
+			if (given == token)
+			{
+				authed = true;
+				send(JSONValue(["id": id, "result": JSONValue(["ok": JSONValue(true)])]).toString() ~ "\n");
+			}
+			else
+				send(RequestHandler.errorLine(id, "unauthorized", "wrong token"));
+			return;
+		}
+		if (method == "daemon.hello")
+		{
+			handler.handle(line);
+			return;
+		}
+		send(RequestHandler.errorLine(id, "unauthorized", "pair first: daemon.auth {token}"));
 	}
 
 	void run()
@@ -139,7 +191,7 @@ private final class Client
 			{
 				auto line = cast(string) pending[0 .. nl].idup;
 				pending = pending[nl + 1 .. $];
-				handler.handle(line);
+				dispatch(line);
 			}
 			if (pending.length > 16 * 1024 * 1024)
 			{

@@ -18,6 +18,7 @@ import libp2p.util.fibers : FiberGroup;
 import photowagon.core.config : Config;
 import photowagon.core.indexer.hash : sha256File;
 import photowagon.core.indexer.scan : Candidate, scanImages;
+import photowagon.core.library.calendar : isoTime;
 import photowagon.core.ipc.events : Events;
 import photowagon.core.library.photos : Photo, PhotoRepo;
 import photowagon.core.metadata.exif : ExifInfo, readExif;
@@ -30,6 +31,7 @@ final class Indexer
 	private Events events;
 	private FiberGroup jobs;
 	private bool[long] running; // root ids with a job in flight
+	private bool[long] again; // roots asked for again while running
 
 	this(Config cfg, PhotoRepo photos, Events events)
 	{
@@ -55,12 +57,20 @@ final class Indexer
 	void start(long rootId, string path)
 	{
 		if (rootId in running)
+		{
+			again[rootId] = true; // files arrived mid-run; go once more when done
 			return;
+		}
 		running[rootId] = true;
 		jobs.spawn(() {
 			scope (exit)
 				running.remove(rootId);
 			new Job(this, rootId, path).run();
+			if (rootId in again)
+			{
+				again.remove(rootId);
+				new Job(this, rootId, path).run();
+			}
 		});
 	}
 
@@ -220,16 +230,4 @@ private final class Job
 			"skipped": JSONValue(skipped), "total": JSONValue(candidates.length)
 		]));
 	}
-}
-
-string isoTime(long unix)
-{
-	import std.datetime : SysTime, UTC;
-
-	return SysTime.fromUnixTime(unix, UTC()).toISOExtString();
-}
-
-unittest
-{
-	assert(isoTime(0) == "1970-01-01T00:00:00Z");
 }

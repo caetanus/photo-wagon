@@ -2,7 +2,9 @@
 /// returns a value type, so it can run on a worker thread via `async`.
 module photowagon.core.metadata.exif;
 
-import std.string : fromStringz, toStringz, strip, startsWith;
+import std.string : fromStringz, toStringz, strip;
+
+public import photowagon.core.metadata.exifparse : cameraName, parseExifTimestamp;
 
 private extern (C) nothrow @nogc
 {
@@ -115,68 +117,6 @@ ExifInfo readExif(string path)
 			g_error_free(e);
 	}
 	return info;
-}
-
-/// "Canon" + "Canon EOS R6" → "Canon EOS R6"; "NIKON CORPORATION" + "NIKON D750" → "NIKON D750".
-string cameraName(string make, string model) pure
-{
-	import std.uni : toLower;
-	import std.string : split;
-
-	if (model.length == 0)
-		return make.length ? make : null;
-	if (make.length == 0)
-		return model;
-	immutable firstWord = make.split.length ? make.split[0] : make;
-	if (model.toLower.startsWith(firstWord.toLower))
-		return model;
-	return make ~ " " ~ model;
-}
-
-/// EXIF "YYYY:MM:DD HH:MM:SS" (also tolerates ISO-8601 from XMP). Local time
-/// zone, which is what EXIF timestamps mean. 0 on failure.
-long parseExifTimestamp(string s)
-{
-	import std.datetime : DateTime, SysTime, LocalTime, UTC;
-	import std.conv : to;
-
-	try
-	{
-		if (s.length < 19)
-			return 0;
-		immutable year = s[0 .. 4].to!int;
-		immutable month = s[5 .. 7].to!int;
-		immutable day = s[8 .. 10].to!int;
-		immutable hour = s[11 .. 13].to!int;
-		immutable minute = s[14 .. 16].to!int;
-		immutable second = s[17 .. 19].to!int;
-		if (year < 1900 || month < 1 || month > 12 || day < 1 || day > 31)
-			return 0;
-		auto dt = DateTime(year, month, day, hour, minute, second);
-		// XMP may carry an explicit zone; honour Z / ±hh:mm
-		if (s.length > 19)
-		{
-			auto rest = s[19 .. $];
-			if (rest.length && (rest[0] == '.'))
-			{
-				size_t i = 1;
-				while (i < rest.length && rest[i] >= '0' && rest[i] <= '9')
-					i++;
-				rest = rest[i .. $];
-			}
-			if (rest == "Z")
-				return SysTime(dt, UTC()).toUnixTime;
-			if (rest.length == 6 && (rest[0] == '+' || rest[0] == '-'))
-			{
-				immutable off = (rest[1 .. 3].to!int * 60 + rest[4 .. 6].to!int) * 60;
-				immutable base = SysTime(dt, UTC()).toUnixTime;
-				return rest[0] == '+' ? base - off : base + off;
-			}
-		}
-		return SysTime(dt, LocalTime()).toUnixTime;
-	}
-	catch (Exception)
-		return 0;
 }
 
 unittest

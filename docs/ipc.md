@@ -1,10 +1,12 @@
-# IPC — UI ⟷ daemon
+# IPC — UI ⟷ core
 
-One TCP connection on the loopback interface. Both directions carry **one JSON
-object per line** (`\n` terminated, no pretty-printing). The daemon writes the
-port it picked to `$XDG_RUNTIME_DIR/photowagon/daemon.port` (fallback
-`~/.local/share/photowagon/daemon.port`); the UI reads that file, and if it is
-missing or stale it spawns `photowagond` and waits for the file to appear.
+Both directions carry **one JSON object per line** (`\n` terminated, no
+pretty-printing). Inside the application the lines travel through
+`InProcessLink` (two queues between the Qt thread and the core thread). In
+headless mode (`--headless`, or `--serve` alongside the UI) the same lines go
+over one TCP connection on the loopback interface; the core writes the port it
+picked to `$XDG_RUNTIME_DIR/photowagon/daemon.port` (fallback
+`<data dir>/daemon.port`).
 
 Three message shapes:
 

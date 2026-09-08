@@ -1,58 +1,63 @@
 # Architecture
 
-Photo Wagon is two D programs.
+Photo Wagon is one D program with two threads.
 
 ```
- photo-wagon      Qt Quick UI in D (DSide binding), one thread, Qt event loop
-     │  JSON lines over loopback TCP           docs/ipc.md
- photowagond      vibe-core fibers: indexer · content store · SQLite · libp2p node
+ main thread    Qt Quick UI (DSide binding) — the only thread that touches QObjects
+     │  InProcessLink: JSON lines in two queues; wake by pipe ↑ / vibe event ↓   (docs/ipc.md)
+ core thread    vibe-core event loop: indexer · content store · SQLite · libp2p node
      │
  ~/.local/share/photowagon/   library.db · store/ab/cdef… (thumbnails, shared blobs)
 ```
 
-Why two processes and not one: the UI binding pins every `QObject` to a single
-thread and aborts on a violation, while libp2p-dlang and the indexer live on
-vibe-core fibers with their own event loop. Two loops in one process would mean
-one of them polling the other. Two processes also let the daemon run headless
-(the future web/TV front-end) and keep a UI crash from taking the node down.
+Why a thread and not the same loop: the UI binding pins every `QObject` to the
+thread that created it and aborts on a violation, while libp2p-dlang and the
+indexer live on vibe-core fibers with their own event loop. Each loop gets its
+own thread; they share nothing but the two queues. The UI is woken through a
+`QSocketNotifier` on a pipe, so a response is handled on the Qt thread; the core
+is woken through a shared vibe `ManualEvent`, so a request is handled on a fiber.
 
-## Daemon (`daemon/`)
+The same core also runs alone (`--headless`, or the `headless` dub configuration
+for a machine without Qt) and then speaks the identical line protocol over
+loopback TCP — that is what `tests/e2e.py` and a future TV/web front-end use.
+
+## Core (`source/photowagon/core/`)
 
 | package | owns |
 |---|---|
-| `app` | startup, wiring, shutdown |
-| `config` | data directory, port file, defaults |
-| `ipc` | TCP listener, JSON-lines framing, method dispatch, event fan-out |
-| `db` | SQLite handle, schema, migrations, typed queries |
+| `daemon` | wiring and lifecycle; `runCore` (this thread) and `CoreThread` (behind a UI) |
+| `config` | data directory, port file, defaults, flags |
+| `ipc` | `protocol` (methods, errors), `handler` (one request → one fiber → one reply), `link` (in-process queues), `server` (TCP, headless), `events` (fan-out) |
+| `db` | SQLite handle, schema, migrations |
 | `store` | content-addressed blob store: `sha256 → store/ab/cdef…` |
 | `metadata` | EXIF/XMP via gexiv2: timestamp, camera, orientation, GPS |
 | `thumbs` | thumbnails via libvips into the store |
 | `indexer` | walks roots, hashes files, calls metadata + thumbs, writes rows, emits progress |
-| `library` | read-side queries: pages, date tree, neighbours, albums |
-| `p2p` | libp2p `Host` (TCP · Noise · yamux), identify, ping, Kademlia, the album protocol |
+| `library` | read-side queries: photos, pages, date tree, neighbours, roots, albums |
+| `p2p` | libp2p `Host` (TCP · Noise · yamux), identify, ping, Kademlia, `/photowagon/blob/1.0.0`, album manifests |
+| `api` | binds the services to method names |
 
 Rules that shape the code:
 
-- **The UI never touches files or the database.** It asks the daemon; the daemon
+- **The UI never touches files or the database.** It asks the core; the core
   answers with data and `file://` URLs it chose to expose.
 - **Originals stay where they are.** Import indexes by reference; the store holds
   derived and shared blobs only. Editing (later) is a recipe over the original.
-- **CPU-bound work leaves the fiber loop.** Hashing and vips run through
-  `vibe.core.concurrency.async` on worker threads; SQLite stays on the main
-  thread, one statement at a time.
+- **CPU-bound work leaves the fiber loop.** Hashing, EXIF and vips run through
+  `vibe.core.concurrency.async` on worker threads; SQLite is used from the core
+  thread only, one statement at a time.
 - **Fibers have owners.** Every `runTask` is reachable from an object whose
   `close()` interrupts and joins it (same law as libp2p-dlang's DESIGN.md).
 
-## UI (`ui/`)
+## UI (`source/photowagon/ui/`)
 
 - `app.d` builds the `QGuiApplication` and a `QQmlApplicationEngine`, registers
   the `.qrc` in CTFE, exposes one `@QObject` (`Library`) as a context property.
 - `Library` (`backend.d`) is the only object QML sees. Lists cross as
-  `@Property string` JSON (route B from the DSide notes): one page at a time,
-  parsed with `JSON.parse` in QML. Commands are `@Slot`s.
-- `client.d` owns the `QTcpSocket`, the request table and the daemon lifecycle
-  (`QProcess` spawn when no port file is present).
-- QML under `ui/qml/`: `Main.qml` (ApplicationWindow, sidebar + grid + viewer),
+  `@Property string` JSON, one page at a time, parsed with `JSON.parse` in QML.
+  Commands are `@Slot`s.
+- `bridge.d` (`CoreBridge`) owns the request table and the wake-up from the core.
+- QML under `qml/`: `Main.qml` (ApplicationWindow, sidebar + grid + viewer),
   `PhotoGrid.qml`, `DateTreeSidebar.qml`, `PhotoFocusView.qml`, `PeersPanel.qml`.
 
 ## P2P

@@ -1,0 +1,48 @@
+name "photo-wagon"
+description "Local-first photo manager: Qt Quick UI in D with the indexer and a libp2p node in the same process"
+license "MIT"
+targetType "executable"
+targetName "photo-wagon"
+targetPath "."
+sourcePaths "source"
+importPaths "source"
+
+dependency "vibe-core" version="~>2.14"
+dependency "libp2p" path="../libp2p-dlang"
+
+libs "sqlite3" "gexiv2" "vips" "gobject-2.0" "glib-2.0"
+
+// The full application: UI + core. Needs the DSide binding generated at
+// ../qt-dlang-gen (see README). Build with ldc2 or dmd; the matching binding
+// archive is picked by compiler.
+configuration "app" {
+	targetType "executable"
+	versions "WithUi"
+	importPaths "../qt-dlang-gen/generated/qt-6.11/cxx-quick" "../qt-dlang-gen/runtime/qrc"
+	sourceFiles "../qt-dlang-gen/runtime/qrc/qrc.d"
+	stringImportPaths "qml"
+	libs "Qt6Quick" "Qt6QmlModels" "Qt6Qml" "Qt6Gui" "Qt6Network" "Qt6Core" "stdc++"
+	lflags "--start-group" "$PACKAGE_DIR/../qt-dlang-gen/.build/qt-6.11-cxx-quick/libbinding_ldc2.a" \
+	       "$PACKAGE_DIR/../qt-dlang-gen/.build/qt-6.11-cxx-quick/libshims.a" "--end-group" \
+	       "--gc-sections" "--as-needed" platform="ldc"
+	lflags "--start-group" "$PACKAGE_DIR/../qt-dlang-gen/.build/qt-6.11-cxx-quick/libbinding_dmd.a" \
+	       "$PACKAGE_DIR/../qt-dlang-gen/.build/qt-6.11-cxx-quick/libshims.a" "--end-group" \
+	       "--gc-sections" "--as-needed" platform="dmd"
+}
+
+// Core only, no Qt: for a machine without the binding, or a server/TV box.
+// The same binary as "app" also runs headless with --headless.
+configuration "headless" {
+	targetType "executable"
+	targetName "photo-wagon-headless"
+	excludedSourceFiles "source/photowagon/ui/*"
+}
+
+configuration "unittest" {
+	targetType "executable"
+	targetName "photo-wagon-test"
+	excludedSourceFiles "source/photowagon/ui/*" "source/photowagon/main.d"
+	mainSourceFile "tests/runner.d"
+	sourcePaths "source" "tests"
+	importPaths "source" "tests"
+}

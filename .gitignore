@@ -1,9 +1,9 @@
 # build outputs
-daemon/photowagond
-daemon/photowagond-test
-daemon/.dub/
-daemon/tests/e2e-work/
-ui/photo-wagon
+photo-wagon
+photo-wagon-headless
+photo-wagon-test
+.dub/
+tests/e2e-work/
 *.o
 *.a
 

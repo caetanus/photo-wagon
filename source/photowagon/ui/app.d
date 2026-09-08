@@ -1,7 +1,7 @@
-// Photo Wagon UI entry point: one QGuiApplication, one QQmlApplicationEngine,
-// one context property (`library`). Everything the QML sees goes through
-// backend.Library; the daemon connection lives in client.DaemonClient.
-module app;
+// Photo Wagon UI: one QGuiApplication, one QQmlApplicationEngine, one context
+// property (`library`). Everything the QML sees goes through backend.Library;
+// the core (on its own thread) is reached through bridge.CoreBridge.
+module photowagon.ui.app;
 
 import qt.quick.qguiapplication;
 import qt.quick.qcoreapplication;
@@ -16,7 +16,9 @@ import qtmoc, cxxrt, qrc;
 import std.stdio : writeln, stdout, stderr;
 import std.process : environment;
 
-import backend : Library;
+import photowagon.ui.backend : Library;
+import photowagon.core.config : Config;
+import photowagon.core.ipc.link : InProcessLink;
 
 enum APP_ID      = "photo-wagon";
 enum APP_NAME    = "Photo Wagon";
@@ -26,7 +28,8 @@ mixin(qtdApplication!"QGuiApplication");
 // The resource tree is assembled in CTFE from qml/ui.qrc (-J=qml). No rcc step.
 mixin(qrcRegister(import("ui.qrc"), "qt.quick"));
 
-int main()
+/// Runs the Qt event loop on the calling (main) thread until the window closes.
+int runUi(Config cfg, InProcessLink link)
 {
     // Fusion honours the palette we set in Main.qml; Basic mostly ignores it.
     if ("QT_QUICK_CONTROLS_STYLE" !in environment)
@@ -39,9 +42,9 @@ int main()
     QGuiApplication.setApplicationDisplayName(APP_NAME);
 
     // newQObject registers the meta-object; only after that may signals be emitted,
-    // which is why the daemon connection is started in a second step.
+    // which is why the bridge is started in a second step.
     auto lib = newQObject!Library();
-    lib.start();
+    lib.start(link);
 
     auto engine = new QQmlApplicationEngine(cast(cppq.QObject) null);
     engine.rootContext().setContextProperty("library", cppq.QObject.wrap(qobjOf(lib)));

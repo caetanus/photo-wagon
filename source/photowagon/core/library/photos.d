@@ -1,0 +1,412 @@
+/// Photo rows: the one place that knows the `photos` table, and how a row
+/// becomes the `Photo` JSON of docs/ipc.md.
+module photowagon.core.library.photos;
+
+import std.json;
+import std.typecons : Nullable;
+
+import photowagon.core.db.sqlite : Database, Statement;
+import photowagon.core.ipc.protocol : ApiError, nullable;
+import photowagon.core.store.store : ContentStore;
+
+struct Photo
+{
+	long id;
+	string hash;
+	string path; // null when remote
+	long rootId; // 0 when remote
+	long size;
+	long mtimeMs;
+	long takenTs;
+	string takenAt;
+	int width;
+	int height;
+	int orientation = 1;
+	string camera;
+	bool hasGps;
+	double lat;
+	double lon;
+	string thumbHash;
+	string originPeer;
+}
+
+/// Restricts a page or a count. Zero means "no restriction" for every field.
+struct Filter
+{
+	long rootId;
+	long albumId;
+	int year;
+	int month;
+	int day;
+}
+
+struct Neighbours
+{
+	long prev; // 0 = none
+	long next;
+}
+
+final class PhotoRepo
+{
+	private Database db;
+	private ContentStore store;
+
+	this(Database db, ContentStore store)
+	{
+		this.db = db;
+		this.store = store;
+	}
+
+	// ---- writes ---------------------------------------------------------------
+
+	Nullable!Photo byPath(string path)
+	{
+		auto s = db.prepare(selectColumns ~ " FROM photos p WHERE p.path = ?");
+		s.bind(1, path);
+		if (!s.step())
+			return Nullable!Photo.init;
+		return Nullable!Photo(readRow(s));
+	}
+
+	Nullable!Photo byHash(string hash)
+	{
+		auto s = db.prepare(selectColumns ~ " FROM photos p WHERE p.hash = ?");
+		s.bind(1, hash);
+		if (!s.step())
+			return Nullable!Photo.init;
+		return Nullable!Photo(readRow(s));
+	}
+
+	bool hasHash(string hash)
+	{
+		auto s = db.prepare("SELECT 1 FROM photos WHERE hash = ?");
+		s.bind(1, hash);
+		return s.step();
+	}
+
+	long insert(ref Photo p)
+	{
+		auto s = db.prepare(`INSERT INTO photos (hash, path, root_id, size, mtime_ms, taken_ts, taken_at,
+			width, height, orientation, camera, lat, lon, thumb_hash, origin_peer)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+		bindPhoto(s, p);
+		s.run();
+		p.id = db.lastInsertId();
+		return p.id;
+	}
+
+	/// Replaces every column of the row with `p.id`.
+	void update(ref Photo p)
+	{
+		auto s = db.prepare(`UPDATE photos SET hash = ?, path = ?, root_id = ?, size = ?, mtime_ms = ?,
+			taken_ts = ?, taken_at = ?, width = ?, height = ?, orientation = ?, camera = ?, lat = ?, lon = ?,
+			thumb_hash = ?, origin_peer = ? WHERE id = ?`);
+		bindPhoto(s, p);
+		s.bind(16, p.id);
+		s.run();
+	}
+
+	private static void bindPhoto(ref Statement s, ref Photo p)
+	{
+		s.bind(1, p.hash).bind(2, p.path);
+		if (p.rootId)
+			s.bind(3, p.rootId);
+		else
+			s.bindNull(3);
+		s.bind(4, p.size).bind(5, p.mtimeMs).bind(6, p.takenTs).bind(7, p.takenAt)
+			.bind(8, p.width).bind(9, p.height).bind(10, p.orientation).bind(11, p.camera);
+		if (p.hasGps)
+			s.bind(12, p.lat).bind(13, p.lon);
+		else
+			s.bindNull(12).bindNull(13);
+		s.bind(14, p.thumbHash).bind(15, p.originPeer);
+	}
+
+	long deleteMissingUnder(long rootId, bool delegate(string path) stillExists)
+	{
+		long[] gone;
+		{
+			auto s = db.prepare("SELECT id, path FROM photos WHERE root_id = ?");
+			s.bind(1, rootId);
+			while (s.step())
+				if (!stillExists(s.getString(1)))
+					gone ~= s.getLong(0);
+		}
+		foreach (id; gone)
+		{
+			auto d = db.prepare("DELETE FROM photos WHERE id = ?");
+			d.bind(1, id);
+			d.run();
+		}
+		return gone.length;
+	}
+
+	// ---- reads ----------------------------------------------------------------
+
+	Photo get(long id)
+	{
+		auto s = db.prepare(selectColumns ~ " FROM photos p WHERE p.id = ?");
+		s.bind(1, id);
+		if (!s.step())
+			throw new ApiError("not_found", "no photo " ~ idString(id));
+		return readRow(s);
+	}
+
+	long count(Filter f)
+	{
+		auto w = whereClause(f);
+		auto s = db.prepare("SELECT count(*) FROM photos p" ~ w.joins ~ w.where);
+		w.bind(s);
+		s.step();
+		return s.getLong(0);
+	}
+
+	/// Newest first, then by id so the order is total. Inside an album the
+	/// album's own order wins.
+	Photo[] page(Filter f, long offset, long limit)
+	{
+		auto w = whereClause(f);
+		auto s = db.prepare(selectColumns ~ " FROM photos p" ~ w.joins ~ w.where
+				~ (f.albumId ? " ORDER BY ap.position ASC" : " ORDER BY p.taken_ts DESC, p.id DESC")
+				~ " LIMIT ? OFFSET ?");
+		immutable n = w.bind(s);
+		s.bind(n + 1, limit).bind(n + 2, offset);
+		Photo[] out_;
+		while (s.step())
+			out_ ~= readRow(s);
+		return out_;
+	}
+
+	Neighbours neighbours(long id, Filter f)
+	{
+		auto me = get(id);
+		Neighbours nb;
+		if (f.albumId)
+			return albumNeighbours(me.id, f.albumId);
+		{
+			// previous = the next newer one in display order
+			auto w = whereClause(f);
+			auto s = db.prepare("SELECT p.id FROM photos p" ~ w.joins ~ w.where
+					~ " AND (p.taken_ts > ? OR (p.taken_ts = ? AND p.id > ?)) ORDER BY p.taken_ts ASC, p.id ASC LIMIT 1");
+			immutable n = w.bind(s);
+			s.bind(n + 1, me.takenTs).bind(n + 2, me.takenTs).bind(n + 3, me.id);
+			if (s.step())
+				nb.prev = s.getLong(0);
+		}
+		{
+			auto w = whereClause(f);
+			auto s = db.prepare("SELECT p.id FROM photos p" ~ w.joins ~ w.where
+					~ " AND (p.taken_ts < ? OR (p.taken_ts = ? AND p.id < ?)) ORDER BY p.taken_ts DESC, p.id DESC LIMIT 1");
+			immutable n = w.bind(s);
+			s.bind(n + 1, me.takenTs).bind(n + 2, me.takenTs).bind(n + 3, me.id);
+			if (s.step())
+				nb.next = s.getLong(0);
+		}
+		return nb;
+	}
+
+	private Neighbours albumNeighbours(long id, long albumId)
+	{
+		Neighbours nb;
+		auto pos = db.prepare("SELECT position FROM album_photos WHERE album_id = ? AND photo_id = ?");
+		pos.bind(1, albumId).bind(2, id);
+		if (!pos.step())
+			return nb;
+		immutable at = pos.getLong(0);
+		auto prev = db.prepare("SELECT photo_id FROM album_photos WHERE album_id = ? AND position < ? ORDER BY position DESC LIMIT 1");
+		prev.bind(1, albumId).bind(2, at);
+		if (prev.step())
+			nb.prev = prev.getLong(0);
+		auto next = db.prepare("SELECT photo_id FROM album_photos WHERE album_id = ? AND position > ? ORDER BY position ASC LIMIT 1");
+		next.bind(1, albumId).bind(2, at);
+		if (next.step())
+			nb.next = next.getLong(0);
+		return nb;
+	}
+
+	JSONValue toJson(ref const Photo p)
+	{
+		JSONValue j = [
+			"id": JSONValue(p.id),
+			"hash": JSONValue(p.hash),
+			"path": p.path is null ? JSONValue(null) : JSONValue(p.path),
+			"fileUrl": p.path is null ? JSONValue(null) : JSONValue(fileUrl(p.path)),
+			"thumbUrl": p.thumbHash is null ? JSONValue(null) : JSONValue(fileUrl(store.pathFor(p.thumbHash))),
+			"takenAt": JSONValue(p.takenAt),
+			"takenTs": JSONValue(p.takenTs),
+			"width": JSONValue(p.width),
+			"height": JSONValue(p.height),
+			"orientation": JSONValue(p.orientation),
+			"camera": p.camera is null ? JSONValue(null) : JSONValue(p.camera),
+			"lat": nullable(p.lat, p.hasGps),
+			"lon": nullable(p.lon, p.hasGps),
+			"size": JSONValue(p.size),
+			"remote": JSONValue(p.originPeer !is null),
+		];
+		return j;
+	}
+
+	JSONValue toJsonArray(Photo[] photos)
+	{
+		JSONValue[] items;
+		items.reserve(photos.length);
+		foreach (ref p; photos)
+			items ~= toJson(p);
+		return JSONValue(items);
+	}
+
+	// ---- internals --------------------------------------------------------------
+
+	private enum selectColumns = `SELECT p.id, p.hash, p.path, p.root_id, p.size, p.mtime_ms, p.taken_ts, p.taken_at,
+		p.width, p.height, p.orientation, p.camera, p.lat, p.lon, p.thumb_hash, p.origin_peer`;
+
+	private static Photo readRow(ref Statement s)
+	{
+		Photo p;
+		p.id = s.getLong(0);
+		p.hash = s.getString(1);
+		p.path = s.getString(2);
+		p.rootId = s.isNull(3) ? 0 : s.getLong(3);
+		p.size = s.getLong(4);
+		p.mtimeMs = s.getLong(5);
+		p.takenTs = s.getLong(6);
+		p.takenAt = s.getString(7);
+		p.width = s.getInt(8);
+		p.height = s.getInt(9);
+		p.orientation = s.getInt(10);
+		p.camera = s.getString(11);
+		p.hasGps = !s.isNull(12) && !s.isNull(13);
+		if (p.hasGps)
+		{
+			p.lat = s.getDouble(12);
+			p.lon = s.getDouble(13);
+		}
+		p.thumbHash = s.getString(14);
+		p.originPeer = s.getString(15);
+		return p;
+	}
+
+	private struct Where
+	{
+		string joins;
+		string where = " WHERE 1=1";
+		long[] longs;
+
+		/// Binds the collected values starting at 1; returns how many were bound.
+		int bind(ref Statement s)
+		{
+			int i = 0;
+			foreach (v; longs)
+				s.bind(++i, v);
+			return i;
+		}
+	}
+
+	private static Where whereClause(Filter f)
+	{
+		Where w;
+		if (f.albumId)
+		{
+			w.joins ~= " JOIN album_photos ap ON ap.photo_id = p.id AND ap.album_id = ?";
+			w.longs ~= f.albumId;
+		}
+		if (f.rootId)
+		{
+			w.where ~= " AND p.root_id = ?";
+			w.longs ~= f.rootId;
+		}
+		if (f.year)
+		{
+			auto r = dateRange(f.year, f.month, f.day);
+			w.where ~= " AND p.taken_ts >= ? AND p.taken_ts < ?";
+			w.longs ~= r[0];
+			w.longs ~= r[1];
+		}
+		return w;
+	}
+
+	private static string idString(long id)
+	{
+		import std.conv : to;
+
+		return id.to!string;
+	}
+}
+
+/// [from, to) in unix seconds, local time, for a year, a month or a day.
+long[2] dateRange(int year, int month, int day)
+{
+	import std.datetime : DateTime, SysTime, LocalTime, Date;
+	import core.time : days;
+
+	long ts(Date d)
+	{
+		return SysTime(DateTime(d, TimeOfDayZero), LocalTime()).toUnixTime;
+	}
+
+	if (month == 0)
+		return [ts(Date(year, 1, 1)), ts(Date(year + 1, 1, 1))];
+	if (day == 0)
+	{
+		auto next = month == 12 ? Date(year + 1, 1, 1) : Date(year, month + 1, 1);
+		return [ts(Date(year, month, 1)), ts(next)];
+	}
+	auto d = Date(year, month, day);
+	return [ts(d), ts(d + 1.days)];
+}
+
+private import std.datetime : TimeOfDay;
+private enum TimeOfDayZero = TimeOfDay(0, 0, 0);
+
+/// `file://` URL for an absolute path, percent-encoding what QUrl would trip on.
+string fileUrl(string path) pure
+{
+	import std.ascii : isAlphaNum;
+	import std.format : format;
+
+	string out_ = "file://";
+	foreach (char c; path)
+	{
+		if (c.isAlphaNum || c == '/' || c == '-' || c == '_' || c == '.' || c == '~')
+			out_ ~= c;
+		else
+			out_ ~= format("%%%02X", cast(ubyte) c);
+	}
+	return out_;
+}
+
+unittest
+{
+	assert(fileUrl("/a b/c#1.jpg") == "file:///a%20b/c%231.jpg");
+	auto r = dateRange(2024, 2, 0);
+	assert(r[1] - r[0] == 29 * 86_400);
+	auto y = dateRange(2023, 0, 0);
+	assert(y[1] - y[0] == 365 * 86_400);
+}
+
+unittest
+{
+	import photowagon.core.db.schema : migrate;
+	import std.file : tempDir;
+	import std.path : buildPath;
+
+	auto db = new Database(":memory:");
+	scope (exit)
+		db.close();
+	migrate(db);
+	auto repo = new PhotoRepo(db, new ContentStore(buildPath(tempDir, "pw-photos-ut-store")));
+	Photo a = {hash: "a", path: "/a.jpg", takenTs: 200, takenAt: "x"};
+	Photo b = {hash: "b", path: "/b.jpg", takenTs: 100, takenAt: "y"};
+	repo.insert(a);
+	repo.insert(b);
+	assert(repo.count(Filter.init) == 2);
+	auto pg = repo.page(Filter.init, 0, 10);
+	assert(pg.length == 2 && pg[0].hash == "a");
+	auto nb = repo.neighbours(a.id, Filter.init);
+	assert(nb.prev == 0 && nb.next == b.id);
+	assert(repo.byPath("/b.jpg").get.id == b.id);
+	assert(repo.hasHash("a") && !repo.hasHash("zz"));
+	auto j = repo.toJson(pg[0]);
+	assert(j["fileUrl"].str == "file:///a.jpg");
+	assert(j["lat"].type == JSONType.null_);
+}

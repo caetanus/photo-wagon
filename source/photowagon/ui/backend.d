@@ -3,7 +3,7 @@
 // Lists cross to QML as JSON strings, one page at a time (DSide route B); the
 // QML does JSON.parse and nothing else. Commands are void @Slots. Every payload
 // here mirrors a method in docs/ipc.md; the client does the wire work.
-module backend;
+module photowagon.ui.backend;
 
 import qtmoc;
 import qt.quick.qcoreapplication;
@@ -14,7 +14,8 @@ import std.string : startsWith, strip;
 import std.conv : to;
 import std.datetime.systime : Clock;
 
-import client : DaemonClient;
+import photowagon.ui.bridge : CoreBridge;
+import photowagon.core.ipc.link : InProcessLink;
 
 @QObject class Library
 {
@@ -44,7 +45,7 @@ import client : DaemonClient;
     /// PW_SHOT_OPEN=<id> opens that photo in the viewer before the capture.
     @Property("statusChanged") int shotOpenId = 0;
 
-    private DaemonClient client;
+    private CoreBridge client;
     private JSONValue[] items;
     private long total;
     private int fYear, fMonth, fDay;
@@ -53,12 +54,12 @@ import client : DaemonClient;
     private string progressText;
 
     /// Second half of construction: runs after newQObject registered us.
-    void start()
+    void start(InProcessLink link)
     {
         import std.process : environment;
         shotPath = environment.get("PW_SHOT", "");
         shotOpenId = environment.get("PW_SHOT_OPEN", "0").to!int;
-        client = new DaemonClient;
+        client = new CoreBridge(link);
         client.onEvent = &onEvent;
         client.onConnected = &onLink;
         client.start();
@@ -218,13 +219,15 @@ import client : DaemonClient;
         {
         case "index.progress":
             indexing = true;
-            progressText = "indexing " ~ data["imported"].integer.to!string
+            progressText = "indexing " ~ (data["imported"].integer + data["skipped"].integer).to!string
                 ~ " / " ~ data["total"].integer.to!string;
             setStatus(true, true, progressText);
             break;
         case "index.done":
             indexing = false;
-            progressText = "indexed " ~ data["imported"].integer.to!string ~ " photos";
+            progressText = data["imported"].integer
+                ? data["imported"].integer.to!string ~ " new photo" ~ (data["imported"].integer == 1 ? "" : "s")
+                : "library up to date";
             setStatus(true, false, progressText);
             loadDates();
             loadRoots();
@@ -292,6 +295,9 @@ import client : DaemonClient;
 
     private void publishPage()
     {
+        if (!indexing)
+            setStatus(client.connected(), false, total.to!string ~ " photo" ~ (total == 1 ? "" : "s")
+                ~ (progressText.length ? " · " ~ progressText : ""));
         JSONValue p = JSONValue.emptyObject;
         p["total"] = total;
         p["offset"] = cast(long) items.length;

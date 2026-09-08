@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Two photowagond instances: index on A, publish an album, fetch it on B over libp2p.
+"""Two headless photo-wagon instances: index on A, publish an album, fetch it on B over libp2p.
 
 Run after `dub build`: tests/e2e.py <folder>. The folder must hold 9 images of which
 exactly two are byte-identical (the dedupe check counts on it); a subfolder is fine."""
@@ -7,7 +7,7 @@ import json, os, socket, subprocess, sys, time, shutil
 
 S = os.path.dirname(os.path.abspath(__file__))
 
-DAEMON = os.path.join(S, "..", "photowagond")
+DAEMON = os.path.join(S, "..", "photo-wagon")
 WORK = os.path.join(S, "e2e-work")
 os.makedirs(WORK, exist_ok=True)
 PHOTOS = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else sys.exit("usage: e2e.py <dir with 9 images, two identical>")
@@ -20,7 +20,7 @@ class Node:
         shutil.rmtree(self.dir, ignore_errors=True)
         os.makedirs(self.dir)
         self.log = open(os.path.join(self.dir, "daemon.log"), "w")
-        self.proc = subprocess.Popen([DAEMON, "--data", self.dir, "--runtime", self.dir, "-v",
+        self.proc = subprocess.Popen([DAEMON, "--headless", "--data", self.dir, "--runtime", self.dir, "-v",
                                       "--p2p-listen", "/ip4/127.0.0.1/tcp/0"],
                                      stdout=self.log, stderr=subprocess.STDOUT)
         portfile = os.path.join(self.dir, "daemon.port")

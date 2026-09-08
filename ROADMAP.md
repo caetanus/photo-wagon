@@ -2,12 +2,13 @@
 
 ## M0 — Rebuild in D (done 2026-09-07)
 - [x] repo layout, docs, IPC protocol (`docs/ipc.md`)
-- [x] daemon: config, SQLite schema, content store, IPC server
-- [x] daemon: indexer (walk · hash · gexiv2 · vips) with progress events, incremental rescan, dedupe by hash
-- [x] daemon: libp2p host up (TCP · Noise · yamux · identify · ping · Kademlia)
-- [x] daemon: album manifests + `/photowagon/blob/1.0.0` (publish on A, fetch on B — `daemon/tests/e2e.py`)
-- [x] UI: DSide app, `Library` facade, daemon spawn + reconnect
+- [x] core: config, SQLite schema, content store, IPC server
+- [x] core: indexer (walk · hash · gexiv2 · vips) with progress events, incremental rescan, dedupe by hash
+- [x] core: libp2p host up (TCP · Noise · yamux · identify · ping · Kademlia)
+- [x] core: album manifests + `/photowagon/blob/1.0.0` (publish on A, fetch on B — `tests/e2e.py`)
+- [x] UI: DSide app, `Library` facade
 - [x] UI: sidebar by date, grid, viewer, peers panel
+- [x] one process: core on its own thread, `InProcessLink` instead of a socket; `--headless` keeps the TCP protocol
 
 Known gaps carried into M1: a second path with identical bytes is skipped rather
 than recorded; `p2p.status` reports the listen address as given (a `0.0.0.0`

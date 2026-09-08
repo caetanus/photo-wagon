@@ -16,6 +16,7 @@ import libp2p.util.fibers : FiberGroup;
 import photowagon.core.api.album_api : registerAlbumApi;
 import photowagon.core.api.daemon_api : registerDaemonApi;
 import photowagon.core.api.library_api : registerLibraryApi;
+import photowagon.core.api.media_api : registerMediaApi;
 import photowagon.core.api.p2p_api : registerP2pApi;
 import photowagon.core.config : Config;
 import photowagon.core.db.schema : migrate;
@@ -97,6 +98,7 @@ final class Daemon
 		auto registry = new Registry;
 		registerDaemonApi(registry, cfg, node, &requestStop);
 		registerLibraryApi(registry, roots, photos, dates, indexer, events);
+		registerMediaApi(registry, photos, store);
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerP2pApi(registry, node, sharing);
 

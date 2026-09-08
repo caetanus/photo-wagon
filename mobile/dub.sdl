@@ -1,0 +1,32 @@
+name "photo-wagon-mobile"
+description "Photo Wagon for a phone: the same Qt Quick UI in D, talking to a photo-wagon --serve on the network"
+license "MIT"
+targetPath "."
+sourcePaths "source"
+importPaths "source" "../source" "../../qt-dlang-gen/generated/qt-6.11/cxx-quick" "../../qt-dlang-gen/runtime/qrc"
+sourceFiles "../source/photowagon/ui/backend.d" "../source/photowagon/ui/transport.d" "../../qt-dlang-gen/runtime/qrc/qrc.d"
+stringImportPaths "../qml"
+
+// Same client, host build: for developing the phone UI offscreen against a
+// `photo-wagon --headless --ipc-address 0.0.0.0` on this machine.
+configuration "desktop" {
+	targetType "executable"
+	targetName "photo-wagon-mobile"
+	libs "Qt6Quick" "Qt6QmlModels" "Qt6Qml" "Qt6Gui" "Qt6Network" "Qt6Core" "stdc++"
+	lflags "--start-group" "$PACKAGE_DIR/../../qt-dlang-gen/.build/qt-6.11-cxx-quick/libbinding_ldc2.a" \
+	       "$PACKAGE_DIR/../../qt-dlang-gen/.build/qt-6.11-cxx-quick/libshims.a" "--end-group" \
+	       "--gc-sections" "--as-needed" platform="ldc"
+	lflags "--start-group" "$PACKAGE_DIR/../../qt-dlang-gen/.build/qt-6.11-cxx-quick/libbinding_dmd.a" \
+	       "$PACKAGE_DIR/../../qt-dlang-gen/.build/qt-6.11-cxx-quick/libshims.a" "--end-group" \
+	       "--gc-sections" "--as-needed" platform="dmd"
+}
+
+// Android arm64: a shared library Qt's activity loads and calls main() in.
+// Driven by build-android.sh, which supplies the cross flags (-mtriple, the
+// ldc2.conf with the Android runtime, the cross binding archives, Qt for
+// Android). See ../ANDROID.md.
+configuration "android" {
+	targetType "dynamicLibrary"
+	targetName "photo-wagon-mobile_arm64-v8a"
+	versions "Android"
+}

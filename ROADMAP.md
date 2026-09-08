@@ -37,8 +37,13 @@ fetched album are not pulled, only thumbnails.
 ## M6 — Reachability
 - QUIC transport, circuit relay v2, DCUtR, AutoNAT (all present in libp2p-dlang)
 
-## M7 — Other screens
-- HTTP front-end from the daemon for TV/phone (the daemon already owns the data)
+## M7 — Other screens (mobile started 2026-09-07)
+- [x] `mobile/`: the same Qt Quick UI in D as a phone client of `photo-wagon --serve` (TcpBridge,
+  thumbnails and photos as data: URLs through `library.thumbs` / `photo.file`)
+- [ ] Android package (arm64): LDC cross build + DSide binding for Qt Android, see ANDROID.md
+- [ ] discovery of the desktop on the LAN (mDNS) instead of typing host:port
+- [ ] the core itself on the phone (needs libsodium, openssl, c-ares, sqlite, vips, gexiv2 for Android)
+- HTTP front-end from the core for a TV
 
 ## M8 — Polish
 - Flatpak / AppImage, caching, startup time

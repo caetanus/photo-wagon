@@ -17,6 +17,7 @@ import std.stdio : writeln, stdout, stderr;
 import std.process : environment;
 
 import photowagon.ui.backend : Library;
+import photowagon.ui.bridge : CoreBridge;
 import photowagon.core.config : Config;
 import photowagon.core.ipc.link : InProcessLink;
 
@@ -44,7 +45,7 @@ int runUi(Config cfg, InProcessLink link)
     // newQObject registers the meta-object; only after that may signals be emitted,
     // which is why the bridge is started in a second step.
     auto lib = newQObject!Library();
-    lib.start(link);
+    lib.start(new CoreBridge(link));
 
     auto engine = new QQmlApplicationEngine(cast(cppq.QObject) null);
     engine.rootContext().setContextProperty("library", cppq.QObject.wrap(qobjOf(lib)));

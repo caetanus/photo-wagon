@@ -1,0 +1,4 @@
+photo-wagon-mobile
+libphoto-wagon-mobile*.so
+.dub/
+build-android/

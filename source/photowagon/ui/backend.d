@@ -2,7 +2,11 @@
 //
 // Lists cross to QML as JSON strings, one page at a time (DSide route B); the
 // QML does JSON.parse and nothing else. Commands are void @Slots. Every payload
-// here mirrors a method in docs/ipc.md; the client does the wire work.
+// here mirrors a method in docs/ipc.md; the bridge does the wire work.
+//
+// With a remote bridge (the mobile app) photos cannot be file:// URLs: the
+// thumbnails of a page and the bytes of the open photo are fetched through
+// `library.thumbs` / `photo.file` and handed to QML as data: URLs.
 module photowagon.ui.backend;
 
 import qtmoc;
@@ -14,8 +18,7 @@ import std.string : startsWith, strip;
 import std.conv : to;
 import std.datetime.systime : Clock;
 
-import photowagon.ui.bridge : CoreBridge;
-import photowagon.core.ipc.link : InProcessLink;
+import photowagon.ui.transport : Bridge;
 
 @QObject class Library
 {
@@ -27,6 +30,7 @@ import photowagon.core.ipc.link : InProcessLink;
     Signal!() statusChanged;
     Signal!() helloChanged;
     Signal!() currentChanged;
+    Signal!() endpointChanged;
 
     /// {"total":N,"offset":o,"items":[Photo…]} — accumulated across loadPage calls.
     @Property("pageChanged")    string page   = `{"total":0,"offset":0,"items":[]}`;
@@ -36,7 +40,7 @@ import photowagon.core.ipc.link : InProcessLink;
     @Property("albumsChanged")  string albums = `{"albums":[]}`;
     @Property("peersChanged")   string peers  = `{"peerId":"","addrs":[],"peers":[]}`;
     /// {"connected":bool,"indexing":bool,"text":"…"}
-    @Property("statusChanged")  string status = `{"connected":false,"indexing":false,"text":"starting daemon…"}`;
+    @Property("statusChanged")  string status = `{"connected":false,"indexing":false,"text":"starting…"}`;
     @Property("helloChanged")   string hello  = `{}`;
     /// Photo JSON with "prev"/"next" ids added, or "" when nothing is open.
     @Property("currentChanged") string current = "";
@@ -44,8 +48,13 @@ import photowagon.core.ipc.link : InProcessLink;
     @Property("statusChanged") string shotPath = "";
     /// PW_SHOT_OPEN=<id> opens that photo in the viewer before the capture.
     @Property("statusChanged") int shotOpenId = 0;
+    /// "host:port" of a remote core (mobile), "" when the core is in-process.
+    @Property("endpointChanged") string endpoint = "";
+    /// True when photos are fetched over the network (no file:// URLs).
+    @Property("endpointChanged") bool remote = false;
 
-    private CoreBridge client;
+    private Bridge client;
+    private string[long] thumbCache; // id → data: URL, remote only
     private JSONValue[] items;
     private long total;
     private int fYear, fMonth, fDay;
@@ -54,15 +63,26 @@ import photowagon.core.ipc.link : InProcessLink;
     private string progressText;
 
     /// Second half of construction: runs after newQObject registered us.
-    void start(InProcessLink link)
+    void start(Bridge bridge)
     {
         import std.process : environment;
         shotPath = environment.get("PW_SHOT", "");
         shotOpenId = environment.get("PW_SHOT_OPEN", "0").to!int;
-        client = new CoreBridge(link);
+        client = bridge;
+        remote = client.remote();
+        endpoint = client.endpoint();
+        endpointChanged.emit();
         client.onEvent = &onEvent;
         client.onConnected = &onLink;
         client.start();
+    }
+
+    /// Mobile: point the bridge at a core on the network and reconnect.
+    @Slot void setEndpoint(string host, int port)
+    {
+        client.setEndpoint(host.strip(), cast(ushort) port);
+        endpoint = client.endpoint();
+        endpointChanged.emit();
     }
 
     // ---- slots (QML → D) -------------------------------------------------------
@@ -103,9 +123,13 @@ import photowagon.core.ipc.link : InProcessLink;
             if (off == 0)
                 items.length = 0;
             total = r["total"].integer;
+            immutable first = items.length;
             foreach (it; r["items"].array)
                 items ~= it;
-            publishPage();
+            if (remote)
+                fetchThumbs(first);
+            else
+                publishPage();
         });
     }
 
@@ -141,8 +165,28 @@ import photowagon.core.ipc.link : InProcessLink;
                 JSONValue photo = r;
                 photo["prev"] = (e2.type == JSONType.null_ && "prev" in n) ? n["prev"] : JSONValue(null);
                 photo["next"] = (e2.type == JSONType.null_ && "next" in n) ? n["next"] : JSONValue(null);
+                if (!remote)
+                {
+                    current = photo.toString();
+                    currentChanged.emit();
+                    return;
+                }
+                // show the thumbnail at once, the real bytes when they arrive
+                if (auto t = cast(long) id in thumbCache)
+                    photo["fileUrl"] = *t;
                 current = photo.toString();
                 currentChanged.emit();
+                JSONValue fp = JSONValue.emptyObject;
+                fp["id"] = id;
+                fp["maxEdge"] = 2048;
+                client.request("photo.file", fp, (f, e3) {
+                    if (e3.type != JSONType.null_ || current.length == 0) return;
+                    auto cur = parseJSON(current);
+                    if (cur["id"].integer != id) return; // moved on already
+                    cur["fileUrl"] = "data:" ~ f["mime"].str ~ ";base64," ~ f["base64"].str;
+                    current = cur.toString();
+                    currentChanged.emit();
+                });
             });
         });
     }
@@ -254,6 +298,41 @@ import photowagon.core.ipc.link : InProcessLink;
     }
 
     // ---- helpers ---------------------------------------------------------------
+
+    /// Remote only: replaces thumbUrl of items[first..$] with data: URLs, then publishes.
+    private void fetchThumbs(size_t first)
+    {
+        JSONValue[] want;
+        foreach (ref it; items[first .. $])
+        {
+            immutable id = it["id"].integer;
+            if (auto t = id in thumbCache)
+                it["thumbUrl"] = *t;
+            else
+                want ~= JSONValue(id);
+        }
+        if (want.length == 0)
+        {
+            publishPage();
+            return;
+        }
+        JSONValue params = JSONValue.emptyObject;
+        params["ids"] = JSONValue(want);
+        client.request("library.thumbs", params, (r, e) {
+            if (e.type == JSONType.null_ && "thumbs" in r)
+            {
+                foreach (key, b64; r["thumbs"].object)
+                {
+                    immutable id = key.to!long;
+                    thumbCache[id] = "data:image/jpeg;base64," ~ b64.str;
+                }
+                foreach (ref it; items)
+                    if (auto t = it["id"].integer in thumbCache)
+                        it["thumbUrl"] = *t;
+            }
+            publishPage();
+        });
+    }
 
     private void step(string dir)
     {

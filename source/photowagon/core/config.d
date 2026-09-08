@@ -84,6 +84,9 @@ Config parseArgs(string[] args)
 		case "--runtime":
 			c.runtimeDir = next().expandTilde;
 			break;
+		case "--ipc-address":
+			c.ipcAddress = next();
+			break;
 		case "--port":
 			c.ipcPort = next().to!ushort;
 			break;
@@ -123,5 +126,9 @@ Config parseArgs(string[] args)
 	return c;
 }
 
-enum usage = `photo-wagon [--headless] [--serve] [--data DIR] [--runtime DIR] [--port N]
-            [--no-p2p] [--p2p-listen MULTIADDR]... [--workers N] [--thumb PX] [-v]`;
+enum usage = `photo-wagon [--headless] [--serve] [--ipc-address ADDR] [--port N] [--data DIR]
+            [--runtime DIR] [--no-p2p] [--p2p-listen MULTIADDR]... [--workers N] [--thumb PX] [-v]
+
+--serve exposes the protocol of docs/ipc.md on ADDR:N (default 127.0.0.1, random
+port). With --ipc-address 0.0.0.0 any device on the network can drive the
+library: only do that on a network you trust (the mobile app needs it).`;

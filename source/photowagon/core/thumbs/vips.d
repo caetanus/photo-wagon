@@ -15,6 +15,7 @@ private extern (C) nothrow @nogc
 	int vips_image_get_height(void* image);
 	int vips_thumbnail(const char* filename, void** out_, int width, ...);
 	int vips_jpegsave_buffer(void* in_, void** buf, size_t* len, ...);
+	int vips_thumbnail_buffer(void* buf, size_t len, void** out_, int width, ...);
 	const(char)* vips_error_buffer();
 	void vips_error_clear();
 	void g_object_unref(void* obj);
@@ -90,4 +91,22 @@ ThumbResult makeThumbnail(string source, string storeRoot, int size)
 	r.hash = storeBytes(storeRoot, (cast(ubyte*) buf)[0 .. len]);
 	r.ok = true;
 	return r;
+}
+
+/// A JPEG of `source` whose longest edge is at most `maxEdge`, EXIF-rotated,
+/// metadata stripped. Worker-safe. Throws on failure.
+ubyte[] renderJpeg(string source, int maxEdge, int quality)
+{
+	void* img;
+	if (vips_thumbnail(source.toStringz, &img, maxEdge, "height".ptr, maxEdge, null) != 0)
+		throw new Exception("render: " ~ vipsError());
+	scope (exit)
+		g_object_unref(img);
+	void* buf;
+	size_t len;
+	if (vips_jpegsave_buffer(img, &buf, &len, "Q".ptr, quality, "strip".ptr, 1, null) != 0)
+		throw new Exception("jpegsave: " ~ vipsError());
+	scope (exit)
+		g_free(buf);
+	return (cast(ubyte*) buf)[0 .. len].dup;
 }

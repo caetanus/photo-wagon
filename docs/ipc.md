@@ -56,6 +56,14 @@ has a matching response, even on failure.
 peer (its thumbnail is in the store; the original has not been fetched). `width`
 and `height` are already rotated by `orientation`.
 
+### media (for a front-end on another machine)
+
+| method | params | result |
+|---|---|---|
+| `library.thumbs` | `{ids: []}` (≤ 200) | `{thumbs: {"<id>": base64-jpeg}}` — ids without a thumbnail are absent |
+| `photo.thumb` | `{id}` | `{mime, base64}` |
+| `photo.file` | `{id, maxEdge?}` | `{mime, size, base64}` — the original, or a JPEG no larger than `maxEdge` on its longest side |
+
 ### albums
 
 | method | params | result |

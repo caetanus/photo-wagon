@@ -4,17 +4,36 @@ module photowagon.core.library.dates;
 import std.json;
 
 import photowagon.core.db.sqlite : Database;
+import photowagon.core.library.calendar : dateRange, fileUrl;
+import photowagon.core.store.store : ContentStore;
 
 final class DateTree
 {
 	private Database db;
+	private ContentStore store;
 
-	this(Database db)
+	this(Database db, ContentStore store = null)
 	{
 		this.db = db;
+		this.store = store;
 	}
 
-	/// `{years: [{year, count, months: [{month, count, days: [{day, count}]}]}]}`, newest first.
+	/// Thumbnail URL of the newest photo in [from, to), or null.
+	private JSONValue cover(long from, long to, long rootId)
+	{
+		if (store is null)
+			return JSONValue(null);
+		auto s = db.prepare("SELECT thumb_hash FROM photos WHERE taken_ts >= ? AND taken_ts < ? AND thumb_hash IS NOT NULL"
+				~ (rootId ? " AND root_id = ?" : "") ~ " ORDER BY taken_ts DESC, id DESC LIMIT 1");
+		s.bind(1, from).bind(2, to);
+		if (rootId)
+			s.bind(3, rootId);
+		if (!s.step())
+			return JSONValue(null);
+		return JSONValue(fileUrl(store.pathFor(s.getString(0))));
+	}
+
+	/// `{years: [{year, count, cover, months: [{month, count, cover, days: [{day, count}]}]}]}`, newest first.
 	JSONValue build(long rootId = 0)
 	{
 		import std.conv : to;
@@ -56,6 +75,17 @@ final class DateTree
 			(*month)["days"].array ~= JSONValue(["day": JSONValue(dd), "count": JSONValue(n)]);
 			(*month)["count"] = JSONValue((*month)["count"].integer + n);
 			(*year)["count"] = JSONValue((*year)["count"].integer + n);
+		}
+		foreach (ref y; years)
+		{
+			immutable yr = cast(int) y["year"].integer;
+			auto yrange = dateRange(yr, 0, 0);
+			y["cover"] = cover(yrange[0], yrange[1], rootId);
+			foreach (ref m; y["months"].array)
+			{
+				auto mrange = dateRange(yr, cast(int) m["month"].integer, 0);
+				m["cover"] = cover(mrange[0], mrange[1], rootId);
+			}
 		}
 		return JSONValue(["years": JSONValue(years)]);
 	}

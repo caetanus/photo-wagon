@@ -3,57 +3,126 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
 
+// Photo Wagon — desktop. A Photos-style window: source list on the left, a
+// toolbar with Years / Months / Days / All Photos and a zoom slider, the grid,
+// the viewer in place of the grid, People, and the Info panel.
 ApplicationWindow {
     id: root
     width: 1280
     height: 820
     visible: true
     title: "Photo Wagon"
-    color: theme.bg
+    color: theme.window
+    font.family: "Noto Sans"
+    font.pixelSize: 13
 
-    // Dark theme tokens shared by every component through `theme`.
+    // ---- theme: follows the system; light by default --------------------------------
+    readonly property bool dark: Application.styleHints.colorScheme === Qt.ColorScheme.Dark
     readonly property QtObject theme: QtObject {
-        readonly property color bg: "#16181d"
-        readonly property color panel: "#1e2128"
-        readonly property color panelAlt: "#262a33"
-        readonly property color border: "#31363f"
-        readonly property color text: "#e6e8ec"
-        readonly property color muted: "#8b93a3"
-        readonly property color accent: "#5aa2ff"
+        readonly property color window: root.dark ? "#1e1e1e" : "#ffffff"
+        readonly property color content: root.dark ? "#1e1e1e" : "#ffffff"
+        readonly property color sidebar: root.dark ? "#262628" : "#f2f2f7"
+        readonly property color panel: root.dark ? "#242426" : "#f7f7f9"
+        readonly property color toolbar: root.dark ? "#1e1e1e" : "#ffffff"
+        readonly property color viewerBg: root.dark ? "#161616" : "#f5f5f7"
+        readonly property color tile: root.dark ? "#2a2a2c" : "#ebebef"
+        readonly property color separator: root.dark ? "#3a3a3c" : "#e5e5ea"
+        readonly property color selection: root.dark ? "#3a3a3d" : "#dcdce1"
+        readonly property color hover: root.dark ? "#2e2e30" : "#e8e8ed"
+        readonly property color text: root.dark ? "#f5f5f7" : "#1d1d1f"
+        readonly property color muted: root.dark ? "#98989d" : "#86868b"
+        readonly property color accent: "#0a7aff"
+        readonly property color field: root.dark ? "#2c2c2e" : "#ececf0"
     }
+    readonly property QtObject icons: Icons { }
 
     palette {
-        window: theme.bg
+        window: theme.window
         windowText: theme.text
-        base: theme.panel
-        alternateBase: theme.panelAlt
+        base: theme.field
+        alternateBase: theme.panel
         text: theme.text
-        button: theme.panelAlt
+        button: theme.panel
         buttonText: theme.text
         highlight: theme.accent
         highlightedText: "#ffffff"
         placeholderText: theme.muted
-        mid: theme.border
-        dark: theme.border
-        light: theme.panelAlt
+        mid: theme.separator
+        dark: theme.separator
+        light: theme.panel
+        toolTipBase: theme.panel
+        toolTipText: theme.text
     }
 
-    // Backend payloads parsed once, here, and handed down as objects.
+    // ---- backend payloads ----------------------------------------------------------------
     readonly property var status: JSON.parse(library.status)
     readonly property var pageData: JSON.parse(library.page)
     readonly property var datesData: JSON.parse(library.dates)
     readonly property var current: library.current.length ? JSON.parse(library.current) : null
     readonly property var peopleData: JSON.parse(library.people).people
     readonly property var facesData: JSON.parse(library.faces).faces
+    readonly property var albumsData: JSON.parse(library.albums).albums
+    readonly property var rootsData: JSON.parse(library.roots).roots
+    readonly property var filterData: JSON.parse(library.filter)
 
-    // Active date filter (0 = none).
-    property int filterYear: 0
-    property int filterMonth: 0
-    property int filterDay: 0
+    // ---- navigation state -----------------------------------------------------------------
+    property string source: "all"          // sidebar key
+    property string mode: "all"            // "years" | "months" | "days" | "all"
+    readonly property bool viewing: current !== null
+    property int zoom: 176
 
-    function applyFilter(y, m, d) {
-        filterYear = y; filterMonth = m; filterDay = d
-        library.loadPage(0, 120, y, m, d)
+    function pickSource(key) {
+        source = key
+        grid.clearSelection()
+        library.closePhoto()
+        if (key === "all") library.showAll()
+        else if (key === "favorites") library.filterFavorites()
+        else if (key === "imports") { const r = sidebar.importRoot; if (r) library.filterRoot(r.id) }
+        else if (key.startsWith("album:")) library.filterAlbum(parseInt(key.substring(6)))
+        else if (key === "phone") { phonePanel.open(); source = "all" }
+        else if (key === "peers") { peersPanel.open(); source = "all" }
+        else if (key === "people") library.loadPeople()
+    }
+
+    function openPerson(id) { source = "person"; library.filterPerson(id); grid.clearSelection() }
+
+    function personName(id) {
+        for (const p of peopleData) if (p.id === id) return p.name || "Unnamed Person"
+        return "Person"
+    }
+    function albumName(id) {
+        for (const a of albumsData) if (a.id === id) return a.name
+        return "Album"
+    }
+    readonly property string headerTitle: {
+        if (viewing) return "";
+        if (source === "people") return "People"
+        if (source === "person") return personName(filterData.personId)
+        if (filterData.favorites) return "Favorites"
+        if (filterData.albumId) return albumName(filterData.albumId)
+        if (filterData.rootId) return "Imports"
+        if (filterData.year) {
+            if (filterData.day) return new Date(filterData.year, filterData.month - 1, filterData.day).toLocaleDateString(Qt.locale(), "d MMMM yyyy")
+            if (filterData.month) return new Date(filterData.year, filterData.month - 1, 1).toLocaleDateString(Qt.locale(), "MMMM yyyy")
+            return String(filterData.year)
+        }
+        return "Library"
+    }
+
+    // Years / Months tiles from the dates tree (+ the active date filter).
+    readonly property var yearTiles: datesData.years.map(y => ({
+        label: String(y.year), sublabel: y.count + (y.count === 1 ? " photo" : " photos"),
+        cover: y.cover, year: y.year, month: 0 }))
+    readonly property var monthTiles: {
+        const out = []
+        for (const y of datesData.years) {
+            if (filterData.year && y.year !== filterData.year) continue
+            for (const m of y.months)
+                out.push({ label: new Date(y.year, m.month - 1, 1).toLocaleDateString(Qt.locale(), "MMMM"),
+                           sublabel: y.year + "  ·  " + m.count + (m.count === 1 ? " photo" : " photos"),
+                           cover: m.cover, year: y.year, month: m.month })
+        }
+        return out
     }
 
     FolderDialog {
@@ -62,121 +131,256 @@ ApplicationWindow {
         onAccepted: library.addRoot(selectedFolder.toString())
     }
 
+    // ---- layout -------------------------------------------------------------------------
     Item {
         id: shell
         anchors.fill: parent
 
-    ToolBar {
-        id: toolbar
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: 48
-        background: Rectangle { color: theme.panel; border.color: theme.border }
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
-            spacing: 10
-            Label {
-                text: "Photo Wagon"
-                font.pixelSize: 17
-                font.bold: true
-                color: theme.text
-            }
-            Label {
-                text: library.personFilter ? personName(library.personFilter)
-                    : filterYear === 0 ? "All photos"
-                    : (filterDay ? filterYear + "-" + pad(filterMonth) + "-" + pad(filterDay)
-                       : filterMonth ? filterYear + "-" + pad(filterMonth) : String(filterYear))
-                color: theme.muted
-                Layout.leftMargin: 8
-            }
-            Item { Layout.fillWidth: true }
-            Label {
-                text: status.text
-                color: status.connected ? theme.muted : "#ff8a80"
-                elide: Text.ElideRight
-                Layout.maximumWidth: 420
-            }
-            BusyIndicator {
-                running: status.indexing
-                visible: running
-                implicitWidth: 22
-                implicitHeight: 22
-            }
-            ToolButton {
-                text: "Add folder"
-                enabled: status.connected
-                onClicked: folderDialog.open()
-            }
-            ToolButton {
-                text: "Phone"
-                enabled: status.connected
-                onClicked: phonePanel.open()
-            }
-            ToolButton {
-                text: "Peers"
-                onClicked: peersPanel.open()
-            }
-        }
-    }
-
-    SplitView {
-        anchors.top: toolbar.bottom
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        orientation: Qt.Horizontal
-
-        ColumnLayout {
-            SplitView.preferredWidth: 240
-            SplitView.minimumWidth: 160
-            spacing: 0
-            DateTreeSidebar {
-                id: sidebar
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                theme: root.theme
-                dates: root.datesData
-                selectedYear: root.filterYear
-                selectedMonth: root.filterMonth
-                selectedDay: root.filterDay
-                onPicked: (y, m, d) => { root.filterYear = y; root.filterMonth = m; root.filterDay = d; library.loadPage(0, 120, y, m, d) }
-            }
-            PeopleList {
-                Layout.fillWidth: true
-                Layout.preferredHeight: root.peopleData.length ? Math.min(320, 40 + root.peopleData.length * 50) : 60
-                theme: root.theme
-                people: root.peopleData
-                selectedPerson: library.personFilter
-                onPicked: (id) => { root.filterYear = 0; root.filterMonth = 0; root.filterDay = 0; library.filterPerson(id) }
-                onRenamed: (id, name) => library.renamePerson(id, name)
-            }
-        }
-
-        PhotoGrid {
-            id: grid
-            SplitView.fillWidth: true
+        Sidebar {
+            id: sidebar
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.left: parent.left
+            width: 210
             theme: root.theme
-            page: root.pageData
-            onLoadMore: library.loadPage(root.pageData.offset, 120, root.filterYear, root.filterMonth, root.filterDay)
-            onOpen: (id) => library.openPhoto(id)
+            icons: root.icons
+            albums: root.albumsData
+            roots: root.rootsData
+            selected: root.source === "person" ? "people" : root.source
+            onPick: (key) => root.pickSource(key)
         }
-    }
 
-    PhotoFocusView {
-        id: focusView
-        anchors.fill: parent
-        theme: root.theme
-        photo: root.current
-        faces: root.facesData
-        people: root.peopleData
-        visible: root.current !== null
-        onClosed: library.closePhoto()
-        onNameFace: (faceId, personId, name) => library.setFacePerson(faceId, personId, name)
-    }
+        // toolbar
+        Rectangle {
+            id: toolbar
+            anchors.top: parent.top
+            anchors.left: sidebar.right
+            anchors.right: parent.right
+            height: 52
+            color: theme.toolbar
+            Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: theme.separator }
+
+            component ToolIcon: ToolButton {
+                property string icon_
+                property bool active: false
+                icon.source: icons.tint(icon_, active ? theme.accent : theme.text)
+                icon.width: 18; icon.height: 18
+                flat: true
+                implicitWidth: 34; implicitHeight: 30
+                background: Rectangle { radius: 6; color: parent.down || parent.active ? theme.hover : (parent.hovered ? theme.hover : "transparent") }
+            }
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 12
+                anchors.rightMargin: 12
+                spacing: 8
+
+                // viewer: back + counter
+                ToolIcon { visible: root.viewing; icon_: icons.chevronLeft; onClicked: library.closePhoto() }
+                Label {
+                    visible: root.viewing
+                    text: root.viewing && viewer.currentIndex >= 0 ? (viewer.currentIndex + 1) + " of " + root.pageData.total : ""
+                    color: theme.muted
+                    font.pixelSize: 12
+                }
+
+                Label {
+                    visible: !root.viewing
+                    text: root.headerTitle
+                    color: theme.text
+                    font.pixelSize: 15
+                    font.bold: true
+                    elide: Text.ElideRight
+                    Layout.maximumWidth: 260
+                }
+                Label {
+                    visible: !root.viewing && root.source !== "people" && root.pageData.total > 0
+                    text: root.pageData.total + (root.pageData.total === 1 ? " photo" : " photos")
+                    color: theme.muted
+                    font.pixelSize: 12
+                }
+
+                Item { Layout.fillWidth: true }
+
+                // Years / Months / Days / All Photos
+                Rectangle {
+                    visible: !root.viewing && root.source !== "people"
+                    height: 28
+                    width: segRow.implicitWidth + 6
+                    radius: 7
+                    color: theme.field
+                    Row {
+                        id: segRow
+                        anchors.centerIn: parent
+                        spacing: 2
+                        Repeater {
+                            model: [["years", "Years"], ["months", "Months"], ["days", "Days"], ["all", "All Photos"]]
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: segLabel.implicitWidth + 22
+                                height: 24
+                                radius: 6
+                                color: root.mode === modelData[0] ? theme.window : "transparent"
+                                border.color: root.mode === modelData[0] ? theme.separator : "transparent"
+                                Label { id: segLabel; anchors.centerIn: parent; text: modelData[1]; font.pixelSize: 12; color: theme.text }
+                                TapHandler { onTapped: root.mode = modelData[0] }
+                            }
+                        }
+                    }
+                }
+
+                Item { Layout.fillWidth: true }
+
+                // zoom
+                Image { visible: !root.viewing && root.source !== "people"; source: icons.tint(icons.zoomOut, theme.muted); sourceSize.width: 14; sourceSize.height: 14 }
+                Slider {
+                    visible: !root.viewing && root.source !== "people"
+                    from: 72; to: 320; value: root.zoom
+                    implicitWidth: 120
+                    onMoved: root.zoom = value
+                }
+                Image { visible: !root.viewing && root.source !== "people"; source: icons.tint(icons.zoomIn, theme.muted); sourceSize.width: 14; sourceSize.height: 14 }
+
+                // viewer actions
+                ToolIcon {
+                    visible: root.viewing
+                    icon_: root.current && root.current.favorite ? icons.heartFill : icons.heart
+                    active: root.current ? root.current.favorite === true : false
+                    onClicked: if (root.current) library.toggleFavorite(root.current.id)
+                }
+                ToolIcon { visible: root.viewing; icon_: icons.info; active: viewer.infoOpen; onClicked: viewer.infoOpen = !viewer.infoOpen }
+
+                // grid actions
+                ToolIcon {
+                    visible: !root.viewing && grid.selectedIds().length > 0
+                    icon_: icons.folderPlus
+                    ToolTip.text: "Add to Album"; ToolTip.visible: hovered
+                    onClicked: { albumDialog.photoIds = grid.selectedIds(); albumDialog.open() }
+                }
+                ToolIcon {
+                    visible: !root.viewing && grid.selectedIds().length > 0
+                    icon_: icons.heart
+                    ToolTip.text: "Favorite"; ToolTip.visible: hovered
+                    onClicked: { for (const id of grid.selectedIds()) library.toggleFavorite(id) }
+                }
+                ToolIcon {
+                    visible: !root.viewing
+                    icon_: icons.plus
+                    ToolTip.text: "Add folder to the library"; ToolTip.visible: hovered
+                    onClicked: folderDialog.open()
+                }
+
+                // search
+                Rectangle {
+                    visible: !root.viewing
+                    width: 190; height: 28; radius: 7
+                    color: theme.field
+                    Image { x: 8; anchors.verticalCenter: parent.verticalCenter; source: icons.tint(icons.search, theme.muted); sourceSize.width: 14; sourceSize.height: 14 }
+                    TextField {
+                        id: search
+                        anchors.fill: parent
+                        anchors.leftMargin: 26
+                        background: null
+                        placeholderText: "Search"
+                        font.pixelSize: 12
+                        color: theme.text
+                        onAccepted: root.search(text)
+                    }
+                }
+            }
+        }
+
+        // status line (indexing / faces / messages)
+        Label {
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.margins: 8
+            z: 5
+            visible: root.status.indexing || (root.status.text.length > 0 && root.status.text !== "library up to date" && !root.status.text.endsWith("photos"))
+            text: root.status.text
+            color: theme.muted
+            font.pixelSize: 11
+            padding: 6
+            background: Rectangle { color: theme.panel; radius: 6; border.color: theme.separator }
+        }
+
+        // ---- content ---------------------------------------------------------------------
+        Item {
+            id: content
+            anchors.top: toolbar.bottom
+            anchors.left: sidebar.right
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+
+            TileGrid {
+                anchors.fill: parent
+                visible: !root.viewing && root.source !== "people" && root.mode === "years"
+                theme: root.theme
+                model: root.yearTiles
+                tileWidth: 420; tileHeight: 280
+                onPick: (y, m) => { library.filterDate(y, 0, 0); root.mode = "months" }
+            }
+            TileGrid {
+                anchors.fill: parent
+                visible: !root.viewing && root.source !== "people" && root.mode === "months"
+                theme: root.theme
+                model: root.monthTiles
+                tileWidth: 300; tileHeight: 210
+                onPick: (y, m) => { library.filterDate(y, m, 0); root.mode = "days" }
+            }
+            PhotoGrid {
+                id: grid
+                anchors.fill: parent
+                visible: !root.viewing && root.source !== "people" && (root.mode === "days" || root.mode === "all")
+                theme: root.theme
+                icons: root.icons
+                page: root.pageData
+                mode: root.mode === "days" ? "days" : "all"
+                cellSize: root.zoom
+                onLoadMore: library.loadMore()
+                onOpen: (id) => library.openPhoto(id)
+                onFavorite: (id) => library.toggleFavorite(id)
+            }
+            PeopleView {
+                anchors.fill: parent
+                visible: !root.viewing && root.source === "people"
+                theme: root.theme
+                icons: root.icons
+                people: root.peopleData
+                onOpen: (id) => root.openPerson(id)
+                onRename: (id, name) => library.renamePerson(id, name)
+            }
+            PhotoViewer {
+                id: viewer
+                anchors.fill: parent
+                visible: root.viewing
+                theme: root.theme
+                icons: root.icons
+                photo: root.current
+                items: root.pageData.items
+                faces: root.facesData
+                people: root.peopleData
+                onClosed: library.closePhoto()
+                onOpenIndex: (i) => {
+                    if (i < root.pageData.items.length) library.openPhoto(root.pageData.items[i].id)
+                    if (i >= root.pageData.items.length - 8 && root.pageData.offset < root.pageData.total) library.loadMore()
+                }
+                onNameFace: (faceId, personId, name) => library.setFacePerson(faceId, personId, name)
+                onFavorite: (id) => library.toggleFavorite(id)
+            }
+        }
     } // shell
+
+    AlbumDialog {
+        id: albumDialog
+        theme: root.theme
+        albums: root.albumsData
+        anchors.centerIn: parent
+        width: 380
+        onAddTo: (albumId, ids) => library.addToAlbum(albumId, JSON.stringify(ids))
+        onCreateNew: (name, ids) => library.createAlbum(name, JSON.stringify(ids))
+    }
 
     PhonePanel {
         id: phonePanel
@@ -194,29 +398,47 @@ ApplicationWindow {
         height: Math.min(600, root.height - 80)
     }
 
-    function pad(n) { return n < 10 ? "0" + n : String(n) }
-    function personName(id) {
-        for (const p of peopleData) if (p.id === id) return p.name || "Unnamed person"
-        return "Person"
+    // Search: a person's name, or a year / "month year".
+    function search(text) {
+        const q = text.trim().toLowerCase()
+        if (!q) { pickSource("all"); return }
+        for (const p of peopleData)
+            if (p.name && p.name.toLowerCase().startsWith(q)) { openPerson(p.id); return }
+        const y = q.match(/^(\d{4})$/)
+        if (y) { source = "all"; library.filterDate(parseInt(y[1]), 0, 0); mode = "months"; return }
+        for (let m = 1; m <= 12; m++) {
+            const name = new Date(2000, m - 1, 1).toLocaleDateString(Qt.locale(), "MMMM").toLowerCase()
+            const hit = q.match(new RegExp("^" + name + "\\s+(\\d{4})$"))
+            if (hit) { source = "all"; library.filterDate(parseInt(hit[1]), m, 0); mode = "days"; return }
+        }
     }
 
-    // Headless capture: PW_SHOT=/path.png → grab the window contents and quit.
+    // Headless capture: PW_SHOT=/path.png (+ PW_SHOT_OPEN=<id>, PW_SHOT_SEND=1 for the pairing
+    // panel, PW_SHOT_VIEW=people|days|months|years).
     Timer {
         running: library.shotPath.length > 0 && library.shotOpenId > 0 && root.status.connected
         interval: 800
-        onTriggered: library.openPhoto(library.shotOpenId)
+        onTriggered: { library.openPhoto(library.shotOpenId); viewer.infoOpen = true }
     }
     Timer {
         running: library.shotPath.length > 0 && library.shotSend && root.status.connected
         interval: 600
-        onTriggered: phonePanel.open()   // PW_SHOT_SEND=1 on the desktop: photograph the pairing panel
+        onTriggered: phonePanel.open()
+    }
+    Timer {
+        running: library.shotPath.length > 0 && library.shotView.length > 0
+        interval: 400
+        onTriggered: {
+            if (library.shotView === "people") root.pickSource("people")
+            else root.mode = library.shotView
+        }
     }
     Timer {
         running: library.shotPath.length > 0
-        interval: 3000
+        interval: 3500
         onTriggered: (library.shotSend ? phonePanel.body : shell).grabToImage(function (r) {
             r.saveToFile(library.shotPath)
-            console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length)
+            console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length, "grid", grid.width, grid.columns, grid.cell, "content", content.width)
             library.quit()
         })
     }

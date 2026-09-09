@@ -88,7 +88,7 @@ final class Daemon : ServerControl
 		token = loadOrCreateToken(buildPath(cfg.dataDir, "pair.token"));
 		auto roots = new RootRepo(db);
 		auto photos = new PhotoRepo(db, store);
-		auto dates = new DateTree(db);
+		auto dates = new DateTree(db, store);
 		auto albums = new AlbumRepo(db);
 		indexer = new Indexer(cfg, photos, events);
 		auto faceRepo = new FaceRepo(db);

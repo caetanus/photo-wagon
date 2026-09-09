@@ -2,11 +2,14 @@
 <RCC version="1.0">
   <qresource prefix="/">
     <file>Main.qml</file>
+    <file>Icons.qml</file>
+    <file>Sidebar.qml</file>
     <file>PhotoGrid.qml</file>
-    <file>DateTreeSidebar.qml</file>
-    <file>PhotoFocusView.qml</file>
+    <file>TileGrid.qml</file>
+    <file>PhotoViewer.qml</file>
+    <file>PeopleView.qml</file>
+    <file>AlbumDialog.qml</file>
     <file>PeersPanel.qml</file>
     <file>PhonePanel.qml</file>
-    <file>PeopleList.qml</file>
   </qresource>
 </RCC>

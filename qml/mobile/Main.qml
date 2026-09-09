@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import "qrc:/"
 
 // Phone layout: header, the grid, a drawer with the date tree, the viewer on
 // top. Same backend payloads as the desktop Main.qml; thumbnails and photos

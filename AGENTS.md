@@ -41,6 +41,12 @@ anything that crosses the UI/core boundary.
 - Run with `QT_FORCE_STDERR_LOGGING=1`; check `engine` load status after `load`.
 - Keep QML declarative and thin: no fetching, no parsing beyond `JSON.parse` of a
   property the backend already prepared.
+- Desktop QML lives in `qml/` (Photos-style: `Main`, `Sidebar`, `PhotoGrid`,
+  `TileGrid`, `PhotoViewer`, `PeopleView`, `Icons`); the phone keeps its own
+  copies under `qml/mobile/`. Icons are inline SVG data URLs (`Icons.qml`);
+  round portraits use `Icons.ringMask` (a fat-border Rectangle does not clip).
+- Headless captures: `PW_SHOT=/path.png` plus `PW_SHOT_VIEW=people|days|months|years`,
+  `PW_SHOT_OPEN=<id>` (viewer with Info), `PW_SHOT_SEND=1` (pairing panel).
 
 ## Verifying a change
 

@@ -6,6 +6,16 @@ libp2p node for sharing albums directly between machines, all in one program.
 Everything runs on your computer. Nothing is uploaded anywhere unless you share
 an album with a peer you chose.
 
+## The desktop app
+
+A Photos-style window: a source list (Library, Favorites, People, Imports,
+albums, the phone and the peers), a toolbar with **Years / Months / Days / All
+Photos**, a zoom slider and search, the grid (click selects, ⌘/Ctrl-click
+extends, double-click opens, hover shows the heart), the viewer in place of the
+grid with a filmstrip and an **ⓘ Info** panel (camera, size, folder, the people
+in the photo with round portraits and "Name" for the unnamed ones), and a
+People page with round portraits. Light or dark follows the system.
+
 ## Requirements
 
 - `ldc2` (1.42+) or `dmd`, and `dub`

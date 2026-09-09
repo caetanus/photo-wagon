@@ -3,8 +3,8 @@
   <qresource prefix="/">
     <file>mobile/Main.qml</file>
     <file>mobile/EndpointDialog.qml</file>
-    <file>PhotoGrid.qml</file>
-    <file>DateTreeSidebar.qml</file>
-    <file>PhotoFocusView.qml</file>
+    <file>mobile/PhotoGrid.qml</file>
+    <file>mobile/DateTreeSidebar.qml</file>
+    <file>mobile/PhotoFocusView.qml</file>
   </qresource>
 </RCC>

@@ -30,6 +30,7 @@ struct Photo
 	double lon;
 	string thumbHash;
 	string originPeer;
+	bool favorite;
 }
 
 /// Restricts a page or a count. Zero means "no restriction" for every field.
@@ -41,6 +42,7 @@ struct Filter
 	int year;
 	int month;
 	int day;
+	bool favorites;
 }
 
 struct Neighbours
@@ -123,6 +125,15 @@ final class PhotoRepo
 		else
 			s.bindNull(12).bindNull(13);
 		s.bind(14, p.thumbHash).bind(15, p.originPeer);
+	}
+
+	void setFavorite(long id, bool on)
+	{
+		auto s = db.prepare("UPDATE photos SET favorite = ? WHERE id = ?");
+		s.bind(1, on ? 1L : 0L).bind(2, id);
+		s.run();
+		if (db.changes() == 0)
+			throw new ApiError("not_found", "no photo " ~ idString(id));
 	}
 
 	long deleteMissingUnder(long rootId, bool delegate(string path) stillExists)
@@ -245,6 +256,7 @@ final class PhotoRepo
 			"lon": nullable(p.lon, p.hasGps),
 			"size": JSONValue(p.size),
 			"remote": JSONValue(p.originPeer !is null),
+			"favorite": JSONValue(p.favorite),
 		];
 		return j;
 	}
@@ -261,7 +273,7 @@ final class PhotoRepo
 	// ---- internals --------------------------------------------------------------
 
 	private enum selectColumns = `SELECT p.id, p.hash, p.path, p.root_id, p.size, p.mtime_ms, p.taken_ts, p.taken_at,
-		p.width, p.height, p.orientation, p.camera, p.lat, p.lon, p.thumb_hash, p.origin_peer`;
+		p.width, p.height, p.orientation, p.camera, p.lat, p.lon, p.thumb_hash, p.origin_peer, p.favorite`;
 
 	private static Photo readRow(ref Statement s)
 	{
@@ -286,6 +298,7 @@ final class PhotoRepo
 		}
 		p.thumbHash = s.getString(14);
 		p.originPeer = s.getString(15);
+		p.favorite = s.getLong(16) != 0;
 		return p;
 	}
 
@@ -323,6 +336,8 @@ final class PhotoRepo
 			w.where ~= " AND EXISTS (SELECT 1 FROM faces fp WHERE fp.photo_id = p.id AND fp.person_id = ?)";
 			w.longs ~= f.personId;
 		}
+		if (f.favorites)
+			w.where ~= " AND p.favorite = 1";
 		if (f.year)
 		{
 			auto r = dateRange(f.year, f.month, f.day);
@@ -367,4 +382,8 @@ unittest
 	auto j = repo.toJson(pg[0]);
 	assert(j["fileUrl"].str == "file:///a.jpg");
 	assert(j["lat"].type == JSONType.null_);
+	repo.setFavorite(a.id, true);
+	Filter fav;
+	fav.favorites = true;
+	assert(repo.count(fav) == 1 && repo.page(fav, 0, 10)[0].favorite);
 }

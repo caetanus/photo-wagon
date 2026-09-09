@@ -63,6 +63,16 @@ void registerLibraryApi(Registry r, RootRepo roots, PhotoRepo photos, DateTree d
 		return photos.toJson(photo);
 	});
 
+	r.add("photo.favorite", (JSONValue p) {
+		immutable id = requireLong(p, "id");
+		bool on = true;
+		if (auto v = "on" in p)
+			on = v.type != JSONType.false_;
+		photos.setFavorite(id, on);
+		events.emit("library.changed", JSONValue.emptyObject);
+		return JSONValue(["id": JSONValue(id), "favorite": JSONValue(on)]);
+	});
+
 	r.add("photo.neighbours", (JSONValue p) {
 		auto nb = photos.neighbours(requireLong(p, "id"), filterOf(p));
 		return JSONValue([
@@ -78,6 +88,9 @@ Filter filterOf(JSONValue p)
 	f.rootId = getLong(p, "rootId");
 	f.albumId = getLong(p, "albumId");
 	f.personId = getLong(p, "personId");
+	if (p.type == JSONType.object)
+		if (auto v = "favorites" in p)
+			f.favorites = v.type == JSONType.true_;
 	f.year = cast(int) getLong(p, "year");
 	f.month = cast(int) getLong(p, "month");
 	f.day = cast(int) getLong(p, "day");

@@ -18,7 +18,7 @@ Popup {
 
     background: Rectangle {
         color: theme.panel
-        border.color: theme.border
+        border.color: theme.separator
         radius: 8
     }
 

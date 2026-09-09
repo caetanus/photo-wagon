@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 3;
+enum currentVersion = 4;
 
 void migrate(Database db)
 {
@@ -19,6 +19,8 @@ void migrate(Database db)
 			db.exec(schemaV2);
 		if (have < 3)
 			db.exec(schemaV3);
+		if (have < 4)
+			db.exec(schemaV4);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -104,6 +106,11 @@ CREATE TABLE settings (
     key    TEXT PRIMARY KEY,
     value  TEXT
 );
+`;
+
+private enum schemaV4 = `
+ALTER TABLE photos ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX photos_favorite ON photos(favorite) WHERE favorite = 1;
 `;
 
 /// Small persisted flags (e.g. which clustering rule the faces were grouped by).

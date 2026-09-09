@@ -14,7 +14,7 @@ Popup {
     modal: true
     focus: true
     padding: 24
-    background: Rectangle { color: theme.panel; border.color: theme.border; radius: 8 }
+    background: Rectangle { color: theme.panel; border.color: theme.separator; radius: 8 }
 
     onOpened: library.setPairing(true)
 

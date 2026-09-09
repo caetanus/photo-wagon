@@ -51,8 +51,9 @@ created once per library (`<data dir>/pair.token`).
 | `library.addRoot` | `{path}` | `{id}` — starts an index job; progress arrives as events |
 | `library.removeRoot` | `{id}` | `{}` |
 | `library.rescan` | `{id?}` | `{}` — all roots when `id` is omitted |
-| `library.page` | `{offset, limit, year?, month?, day?, rootId?, albumId?}` | `{total, offset, items: [Photo]}` newest first; inside an album, album order |
-| `library.dates` | `{rootId?}` | `{years: [{year, count, months: [{month, count, days: [{day, count}]}]}]}` |
+| `library.page` | `{offset, limit, year?, month?, day?, rootId?, albumId?, personId?, favorites?}` | `{total, offset, items: [Photo]}` newest first; inside an album, album order |
+| `library.dates` | `{rootId?}` | `{years: [{year, count, cover, months: [{month, count, cover, days: [{day, count}]}]}]}` — `cover` is the thumbnail URL of the newest photo of that year/month |
+| `photo.favorite` | `{id, on?}` | `{id, favorite}` (default on) |
 | `photo.get` | `{id}` | `Photo` |
 | `photo.neighbours` | `{id, year?, month?, day?, rootId?, albumId?}` | `{prev: id?, next: id?}` in the same order `library.page` uses |
 
@@ -62,7 +63,7 @@ created once per library (`<data dir>/pair.token`).
 {"id": 123, "hash": "sha256-hex", "path": "/abs/file.jpg", "fileUrl": "file:///abs/file.jpg",
  "thumbUrl": "file:///.../store/ab/cdef...", "takenAt": "2024-05-01T12:00:00Z", "takenTs": 1714564800,
  "width": 4000, "height": 3000, "orientation": 1, "camera": "Canon EOS R6",
- "lat": null, "lon": null, "size": 3456789, "remote": false}
+ "lat": null, "lon": null, "size": 3456789, "remote": false, "favorite": false}
 ```
 
 `path` and `fileUrl` are null and `remote` is true for a photo known only through a

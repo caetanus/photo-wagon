@@ -182,7 +182,7 @@ final class FaceService
 						immutable id = m.id > 0 ? m.id : -m.id;
 						faces.setFacePerson(id, 0);
 						if (m.id > 0)
-							todo ~= Pending(id, m.e);
+							todo ~= Pending(id, m.e, m.photo);
 					}
 				}
 				logInfo("faces: person %s keeps %s of %s faces", person, kept, members.length);
@@ -224,27 +224,46 @@ final class FaceService
 	}
 
 	/// Persons whose centroids are close enough are one person — unless they
-	/// were seen together in a photo, which settles that they are two.
+	/// were seen together in a photo, which settles that they are two. One
+	/// merge at a time, with the co-occurrence carried over: after X joins Y,
+	/// whoever was in a photo with X is in a photo with Y.
 	private void mergeClose()
 	{
 		import std.conv : to;
 
-		auto together = faces.coOccurringPersons();
+		bool[long][long] together; // person → persons seen with it
+		foreach (key, _; faces.coOccurringPersons())
+		{
+			import std.string : indexOf;
+
+			immutable c = key.indexOf(':');
+			immutable a = key[0 .. c].to!long, b = key[c + 1 .. $].to!long;
+			together[a][b] = true;
+			together[b][a] = true;
+		}
 		bool apart(long a, long b)
 		{
-			if (a > b)
-			{
-				auto t = a;
-				a = b;
-				b = t;
-			}
-			return (a.to!string ~ ":" ~ b.to!string) in together ? true : false;
+			auto s = a in together;
+			return s !is null && (b in *s) !is null;
 		}
 
-		foreach (pair; cluster.mergeCandidates(&apart))
+		foreach (round; 0 .. 500)
 		{
-			faces.mergePersons(pair[0], pair[1]);
-			cluster.merge(pair[0], pair[1]);
+			auto pairs = cluster.mergeCandidates(&apart);
+			if (pairs.length == 0)
+				break;
+			immutable from = pairs[0][0], into = pairs[0][1];
+			logInfo("faces: merging person %s into %s%s", from, into, apart(from, into) ? " (TOGETHER!)" : "");
+			faces.mergePersons(from, into);
+			cluster.merge(from, into);
+			if (auto s = from in together)
+				foreach (other, _; *s)
+				{
+					together[into][other] = true;
+					together[other][into] = true;
+					together[other].remove(from);
+				}
+			together.remove(from);
 		}
 	}
 

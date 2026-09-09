@@ -34,6 +34,7 @@ import photowagon.ui.transport : Bridge;
     Signal!() pairingChanged;
     Signal!() peopleChanged;
     Signal!() facesChanged;
+    Signal!() filterChanged;
 
     /// {"total":N,"offset":o,"items":[Photo…]} — accumulated across loadPage calls.
     @Property("pageChanged")    string page   = `{"total":0,"offset":0,"items":[]}`;
@@ -53,6 +54,8 @@ import photowagon.ui.transport : Bridge;
     @Property("statusChanged") int shotOpenId = 0;
     /// PW_SHOT_SEND=1 (phone) calls sendAll() before the capture.
     @Property("statusChanged") bool shotSend = false;
+    /// PW_SHOT_VIEW=people|days|months|years switches the desktop view before the capture.
+    @Property("statusChanged") string shotView = "";
     /// "host:port" of a remote core (mobile), "" when the core is in-process.
     @Property("endpointChanged") string endpoint = "";
     /// True when photos are fetched over the network (no file:// URLs).
@@ -67,6 +70,8 @@ import photowagon.ui.transport : Bridge;
     @Property("facesChanged") string faces = `{"photoId":0,"faces":[]}`;
     /// The person the grid is filtered to (0 = none).
     @Property("peopleChanged") int personFilter = 0;
+    /// {"year","month","day","personId","albumId","rootId","favorites"} — what the page shows.
+    @Property("filterChanged") string filter = `{"year":0,"month":0,"day":0,"personId":0,"albumId":0,"rootId":0,"favorites":false}`;
 
     private Bridge client;
     private string[long] thumbCache; // id → data: URL, remote only
@@ -74,6 +79,8 @@ import photowagon.ui.transport : Bridge;
     private long total;
     private int fYear, fMonth, fDay;
     private long fPerson;
+    private long fAlbum, fRoot;
+    private bool fFavorites;
     private long openId; // photo being opened/shown; faces answers for others are dropped
     private int pageLimit = 120;
     private bool indexing;
@@ -86,6 +93,7 @@ import photowagon.ui.transport : Bridge;
         shotPath = environment.get("PW_SHOT", "");
         shotOpenId = environment.get("PW_SHOT_OPEN", "0").to!int;
         shotSend = environment.get("PW_SHOT_SEND", "") == "1";
+        shotView = environment.get("PW_SHOT_VIEW", "");
         client = bridge;
         remote = client.remote();
         endpoint = client.endpoint();
@@ -119,34 +127,138 @@ import photowagon.ui.transport : Bridge;
         });
     }
 
-    /// offset 0 restarts the list; year/month/day 0 mean "no filter". A date
-    /// filter replaces a person filter and vice versa.
+    /// offset 0 restarts the list with a date filter (0 = none); other offsets load more.
     @Slot void loadPage(int offset, int limit, int year, int month, int day)
     {
         if (offset == 0)
-        {
-            fYear = year; fMonth = month; fDay = day;
-            if (year)
-                setPersonFilter(0);
-        }
-        reload(offset, limit);
+            filterDate(year, month, day);
+        else
+            reload(offset, limit);
     }
 
-    /// Grid = photos of one person (0 clears). Clears any date filter.
+    /// The next page of the current filter.
+    @Slot void loadMore()
+    {
+        reload(cast(int) items.length, pageLimit);
+    }
+
+    // ---- filters: each one is a view of the library; setting one clears the others ----
+
+    @Slot void showAll()
+    {
+        clearFilters();
+        publishFilter();
+        reload(0, pageLimit);
+    }
+
+    /// A year, a month or a day (0 = any). Keeps a person/album/root filter.
+    @Slot void filterDate(int year, int month, int day)
+    {
+        fYear = year; fMonth = year ? month : 0; fDay = month ? day : 0;
+        publishFilter();
+        reload(0, pageLimit);
+    }
+
+    /// Photos of one person (0 clears).
     @Slot void filterPerson(int personId)
     {
-        setPersonFilter(personId == fPerson ? 0 : personId);
-        fYear = fMonth = fDay = 0;
+        clearFilters();
+        fPerson = personId;
+        publishFilter();
         reload(0, pageLimit);
+    }
+
+    @Slot void filterAlbum(int albumId)
+    {
+        clearFilters();
+        fAlbum = albumId;
+        publishFilter();
+        reload(0, pageLimit);
+    }
+
+    @Slot void filterRoot(int rootId)
+    {
+        clearFilters();
+        fRoot = rootId;
+        publishFilter();
+        reload(0, pageLimit);
+    }
+
+    @Slot void filterFavorites()
+    {
+        clearFilters();
+        fFavorites = true;
+        publishFilter();
+        reload(0, pageLimit);
+    }
+
+    private void clearFilters()
+    {
+        fYear = fMonth = fDay = 0;
+        fPerson = fAlbum = fRoot = 0;
+        fFavorites = false;
+    }
+
+    private void publishFilter()
+    {
+        JSONValue f = JSONValue.emptyObject;
+        f["year"] = fYear; f["month"] = fMonth; f["day"] = fDay;
+        f["personId"] = fPerson; f["albumId"] = fAlbum; f["rootId"] = fRoot;
+        f["favorites"] = fFavorites;
+        filter = f.toString();
+        filterChanged.emit();
+        if (personFilter != cast(int) fPerson)
+        {
+            personFilter = cast(int) fPerson;
+            peopleChanged.emit();
+        }
     }
 
     private void setPersonFilter(long id)
     {
-        if (fPerson == id)
-            return;
         fPerson = id;
-        personFilter = cast(int) id;
-        peopleChanged.emit();
+        publishFilter();
+    }
+
+    @Slot void toggleFavorite(int id)
+    {
+        bool on = true;
+        foreach (ref it; items)
+            if (it["id"].integer == id && "favorite" in it)
+                on = !it["favorite"].boolean;
+        JSONValue params = ["id": JSONValue(id), "on": JSONValue(on)];
+        client.request("photo.favorite", params, (r, e) {
+            if (e.type != JSONType.null_) { report("favorite", e); return; }
+            foreach (ref it; items)
+                if (it["id"].integer == id)
+                    it["favorite"] = on;
+            publishPage();
+            if (current.length && parseJSON(current)["id"].integer == id)
+            {
+                auto cur = parseJSON(current);
+                cur["favorite"] = on;
+                current = cur.toString();
+                currentChanged.emit();
+            }
+        });
+    }
+
+    /// Adds photos (a JSON array of ids) to an existing album.
+    @Slot void addToAlbum(int albumId, string photoIdsJson)
+    {
+        JSONValue ids;
+        try
+            ids = parseJSON(photoIdsJson);
+        catch (JSONException)
+            ids = JSONValue.emptyArray;
+        JSONValue params = JSONValue.emptyObject;
+        params["id"] = albumId;
+        params["photoIds"] = ids;
+        client.request("album.addPhotos", params, (r, e) {
+            if (e.type != JSONType.null_) { report("album.addPhotos", e); return; }
+            loadAlbums();
+            setStatus(true, indexing, "added to the album");
+        });
     }
 
     private void reload(int offset, int limit)
@@ -162,6 +274,9 @@ import photowagon.ui.transport : Bridge;
         if (fMonth) params["month"] = fMonth;
         if (fDay)   params["day"]   = fDay;
         if (fPerson) params["personId"] = fPerson;
+        if (fAlbum)  params["albumId"] = fAlbum;
+        if (fRoot)   params["rootId"] = fRoot;
+        if (fFavorites) params["favorites"] = true;
         immutable off = offset;
         client.request("library.page", params, (r, e) {
             if (e.type != JSONType.null_) { report("page", e); return; }
@@ -209,6 +324,9 @@ import photowagon.ui.transport : Bridge;
             if (fMonth) nb["month"] = fMonth;
             if (fDay)   nb["day"]   = fDay;
             if (fPerson) nb["personId"] = fPerson;
+            if (fAlbum)  nb["albumId"] = fAlbum;
+            if (fRoot)   nb["rootId"] = fRoot;
+            if (fFavorites) nb["favorites"] = true;
             loadFaces(id);
             client.request("photo.neighbours", nb, (n, e2) {
                 JSONValue photo = r;

@@ -51,4 +51,6 @@ fetched album are not pulled, only thumbnails.
 - HTTP front-end from the core for a TV
 
 ## M8 — Polish
+- [x] Photos-style desktop UI (sidebar, Years/Months/Days/All, zoom, selection, in-window viewer, Info panel, People, favorites, albums from a selection) — 2026-09-09
+- [ ] Memories / Places (needs GPS clusters and a map)
 - Flatpak / AppImage, caching, startup time

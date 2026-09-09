@@ -4,7 +4,8 @@
 tests/faces.py <folder>   — the folder must hold lena.jpg, lena-flipped.jpg,
 lena-small.jpg, messi5.jpg, messi-rot.jpg (EXIF orientation 6) and both.jpg
 (lena + messi side by side): three photos of one person, two of another, one
-with both.
+with both. Faces must be at least 48 px wide (the clustering gate): the OpenCV
+sample messi5.jpg has to be scaled 2x first.
 """
 import json, os, socket, subprocess, sys, time, shutil
 

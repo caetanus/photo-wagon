@@ -79,17 +79,61 @@ final class FaceRepo
 		return db.lastInsertId();
 	}
 
-	/// Every stored embedding with its person, for rebuilding the cluster index.
-	void eachEmbedding(scope void delegate(long faceId, long personId, const(float)[] emb) dg)
+	/// What the cluster index needs about a stored face.
+	struct StoredFace
 	{
-		auto s = db.prepare("SELECT id, person_id, embedding FROM faces WHERE person_id IS NOT NULL");
+		long id;
+		long personId; // 0 = none
+		bool personNamed;
+		float score;
+		float widthPx; // of the original photo
+		const(float)[] embedding;
+	}
+
+	/// Every stored face, oldest first (the order faces were found in).
+	void eachFace(scope void delegate(ref StoredFace f) dg)
+	{
+		auto s = db.prepare(`SELECT f.id, f.person_id, pe.name IS NOT NULL, f.score, f.w * p.width, f.embedding
+			FROM faces f JOIN photos p ON p.id = f.photo_id LEFT JOIN persons pe ON pe.id = f.person_id ORDER BY f.id`);
 		while (s.step())
 		{
-			auto blob = s.getBlob(2);
+			auto blob = s.getBlob(5);
 			if (blob.length != 128 * float.sizeof)
 				continue;
-			dg(s.getLong(0), s.getLong(1), cast(const(float)[]) blob);
+			StoredFace f;
+			f.id = s.getLong(0);
+			f.personId = s.isNull(1) ? 0 : s.getLong(1);
+			f.personNamed = s.getLong(2) != 0;
+			f.score = cast(float) s.getDouble(3);
+			f.widthPx = cast(float) s.getDouble(4);
+			f.embedding = cast(const(float)[]) blob;
+			dg(f);
 		}
+	}
+
+	/// The embedding of one face.
+	float[128] embeddingOf(long faceId)
+	{
+		auto s = db.prepare("SELECT embedding FROM faces WHERE id = ?");
+		s.bind(1, faceId);
+		float[128] e = 0;
+		if (s.step())
+		{
+			auto blob = s.getBlob(0);
+			if (blob.length == 128 * float.sizeof)
+				e = (cast(const(float)[]) blob)[0 .. 128];
+		}
+		return e;
+	}
+
+	/// Forgets every automatic grouping: faces of unnamed persons become unassigned
+	/// and those persons disappear. Named persons keep their faces.
+	void clearUnnamedPersons()
+	{
+		db.transaction!void({
+			db.exec("UPDATE faces SET person_id = NULL WHERE person_id IN (SELECT id FROM persons WHERE name IS NULL)");
+			db.exec("DELETE FROM persons WHERE name IS NULL");
+		});
 	}
 
 	FaceRow[] facesOfPhoto(long photoId)
@@ -268,8 +312,9 @@ unittest
 	auto ps = repo.people();
 	assert(ps.length == 2 && ps[0].name == "Ana" && ps[0].coverThumb == "t1");
 	int seen;
-	repo.eachEmbedding((long fid, long pid, const(float)[] emb) { seen++; assert(emb[3] == 1); });
+	repo.eachFace((ref FaceRepo.StoredFace f) { seen++; assert(f.embedding[3] == 1); if (f.id == f1) assert(f.personNamed); });
 	assert(seen == 2);
+	assert(repo.embeddingOf(f1)[3] == 1);
 	repo.mergePersons(other, ana);
 	assert(repo.people().length == 1 && repo.people()[0].faces == 2);
 	assert(repo.facesOfPhoto(2)[0].personName == "Ana");
@@ -278,4 +323,8 @@ unittest
 	repo.pruneEmptyPersons();
 	assert(repo.people()[0].faces == 1);
 	assert(repo.face(f1).thumbHash == "t1");
+	immutable anon = repo.createPerson(null);
+	repo.setFacePerson(f2, anon);
+	repo.clearUnnamedPersons();
+	assert(repo.people().length == 1 && repo.face(f2).personId == 0);
 }

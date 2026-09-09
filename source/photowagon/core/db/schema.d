@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 2;
+enum currentVersion = 3;
 
 void migrate(Database db)
 {
@@ -17,6 +17,8 @@ void migrate(Database db)
 			db.exec(schemaV1);
 		if (have < 2)
 			db.exec(schemaV2);
+		if (have < 3)
+			db.exec(schemaV3);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -97,6 +99,28 @@ CREATE INDEX faces_photo  ON faces(photo_id);
 CREATE INDEX faces_person ON faces(person_id);
 `;
 
+private enum schemaV3 = `
+CREATE TABLE settings (
+    key    TEXT PRIMARY KEY,
+    value  TEXT
+);
+`;
+
+/// Small persisted flags (e.g. which clustering rule the faces were grouped by).
+string getSetting(Database db, string key)
+{
+	auto s = db.prepare("SELECT value FROM settings WHERE key = ?");
+	s.bind(1, key);
+	return s.step() ? s.getString(0) : null;
+}
+
+void setSetting(Database db, string key, string value)
+{
+	auto s = db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+	s.bind(1, key).bind(2, value);
+	s.run();
+}
+
 unittest
 {
 	auto db = new Database(":memory:");
@@ -108,4 +132,8 @@ unittest
 	v.step();
 	assert(v.getInt(0) == currentVersion);
 	db.exec("INSERT INTO roots (path, added_at) VALUES ('/x', 0)");
+	assert(getSetting(db, "k") is null);
+	setSetting(db, "k", "1");
+	setSetting(db, "k", "2");
+	assert(getSetting(db, "k") == "2");
 }

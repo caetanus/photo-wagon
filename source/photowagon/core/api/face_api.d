@@ -58,6 +58,11 @@ void registerFaceApi(Registry r, FaceRepo faces, FaceService service, ContentSto
 		return obj();
 	});
 
+	r.add("faces.recluster", (JSONValue p) {
+		service.recluster();
+		return obj();
+	});
+
 	r.add("faces.status", (JSONValue p) {
 		auto c = faces.scanCounts();
 		return JSONValue([
@@ -66,6 +71,7 @@ void registerFaceApi(Registry r, FaceRepo faces, FaceService service, ContentSto
 			"scanned": JSONValue(c[0]),
 			"total": JSONValue(c[1]),
 			"known": JSONValue(service.index.length),
+			"people": JSONValue(service.index.personCount),
 		]);
 	});
 }

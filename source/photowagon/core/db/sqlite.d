@@ -110,10 +110,23 @@ final class Database
 		return sqlite3_changes(db);
 	}
 
-	/// Runs `body_` inside a transaction; rolls back on throw.
+	private int txDepth;
+
+	/// Runs `body_` inside a transaction; rolls back on throw. Nested calls
+	/// join the outer transaction (SQLite has no nested BEGIN).
 	T transaction(T)(scope T delegate() body_)
 	{
+		if (txDepth > 0)
+		{
+			txDepth++;
+			scope (exit)
+				txDepth--;
+			return body_();
+		}
 		exec("BEGIN");
+		txDepth = 1;
+		scope (exit)
+			txDepth = 0;
 		try
 		{
 			static if (is(T == void))
@@ -296,4 +309,12 @@ unittest
 	auto c = db.prepare("SELECT count(*) FROM t");
 	c.step();
 	assert(c.getLong(0) == 2);
+	// nested: the inner one joins the outer, one COMMIT at the end
+	db.transaction!void({
+		db.exec("INSERT INTO t (name) VALUES ('c')");
+		db.transaction!void({ db.exec("INSERT INTO t (name) VALUES ('d')"); });
+	});
+	auto c2 = db.prepare("SELECT count(*) FROM t");
+	c2.step();
+	assert(c2.getLong(0) == 4);
 }

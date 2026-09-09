@@ -91,7 +91,13 @@ name until the user gives one. Face boxes are fractions of the rotated image.
 | `photo.faces` | `{id}` | `{photoId, faces: [{id, photoId, x, y, w, h, score, thumbUrl?, personId?, name?}]}` |
 | `face.setPerson` | `{faceId, personId?, name?}` | `{personId?}` — an existing person, a person by name (created when new), or nobody |
 | `faces.scan` | — | `{}` — scans what is unscanned (also runs after every index job) |
-| `faces.status` | — | `{available, running, scanned, total, known}` |
+| `faces.recluster` | — | `{}` — regroups every unnamed face with the current rule (named people keep theirs) |
+| `faces.status` | — | `{available, running, scanned, total, known, people}` |
+
+Grouping: a face joins the person whose centroid is closest when the cosine
+is ≥ 0.45; persons closer than 0.55 are merged after a scan (never two named
+ones). Faces narrower than 48 px or scored below 0.8 are kept but not grouped:
+they show in the viewer as "Who is this?" and can be named by hand.
 
 `library.page` and `photo.neighbours` accept `personId` to restrict to one person.
 

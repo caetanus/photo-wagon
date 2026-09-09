@@ -92,7 +92,7 @@ final class Daemon : ServerControl
 		auto albums = new AlbumRepo(db);
 		indexer = new Indexer(cfg, photos, events);
 		auto faceRepo = new FaceRepo(db);
-		facesService = new FaceService(cfg, faceRepo, photos, store, events);
+		facesService = new FaceService(cfg, db, faceRepo, photos, store, events);
 		indexer.onDone = () { facesService.start(); };
 
 		if (cfg.p2p)

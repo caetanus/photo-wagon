@@ -12,6 +12,8 @@ Rectangle {
     property var faces: []
     property var people: []
     property bool showFaces: true
+    /// Boxes appear only while the pointer is over the photo (desktop); false = always.
+    property bool facesOnHover: true
     /// Phone: show "Send to computer" (enabled when a computer is reachable).
     property bool canSend: false
     property bool sendEnabled: false
@@ -45,12 +47,13 @@ Rectangle {
         smooth: true
         mipmap: true
         MouseArea { anchors.fill: parent; onClicked: {} }
+        HoverHandler { id: imageHover }
     }
 
     // Face boxes over the painted image area.
     Item {
         id: overlay
-        visible: viewer.showFaces && image.status === Image.Ready
+        visible: viewer.showFaces && image.status === Image.Ready && (!viewer.facesOnHover || imageHover.hovered || namer.opened)
         readonly property real px: image.x + (image.width - image.paintedWidth) / 2
         readonly property real py: image.y + (image.height - image.paintedHeight) / 2
         Repeater {

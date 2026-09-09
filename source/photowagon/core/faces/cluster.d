@@ -21,8 +21,13 @@ enum mergeThreshold = 0.75f;
 /// `minScore` is stored but not clustered.
 enum minFaceWidth = 48;
 enum minScore = 0.8f;
+/// Detections below this confidence are not even stored (mostly not faces).
+enum keepScore = 0.75f;
+/// When the two closest persons are this close to each other, nobody is
+/// chosen: the face stays unassigned for the user rather than guessed.
+enum minMargin = 0.05f;
 /// Bump when the rule changes: libraries clustered by an older rule are redone.
-enum clusterVersion = 4;
+enum clusterVersion = 5;
 
 bool eligible(float widthPx, float score) pure nothrow @nogc
 {
@@ -163,9 +168,18 @@ final class ClusterIndex
 	/// in the same photo, since nobody appears twice in one picture.
 	long match(const ref float[128] embedding, out float best, const(long)[] taken = null) const
 	{
+		bool ambiguous;
+		return match(embedding, best, ambiguous, taken);
+	}
+
+	/// Same, reporting when the runner-up was too close to call (then 0 is
+	/// returned and `ambiguous` is true: leave the face unassigned).
+	long match(const ref float[128] embedding, out float best, out bool ambiguous, const(long)[] taken = null) const
+	{
 		import std.algorithm : canFind;
 
 		best = -1;
+		float second = -1;
 		long person;
 		auto u = unit(embedding);
 		foreach (ref c; persons)
@@ -176,10 +190,16 @@ final class ClusterIndex
 			immutable s = dot(m, u);
 			if (s > best)
 			{
+				second = best;
 				best = s;
 				person = c.personId;
 			}
+			else if (s > second)
+				second = s;
 		}
+		ambiguous = best >= joinThreshold && second >= joinThreshold && best - second < minMargin;
+		if (ambiguous)
+			return 0;
 		return best >= joinThreshold ? person : 0;
 	}
 
@@ -278,6 +298,14 @@ unittest
 	assert(idx.match(c, best) == 0);
 	assert(idx.match(b, best, [10L]) == 0); // 10 is taken in this photo
 	idx.add(11, c);
+	{
+		// halfway between two persons: too close to call
+		float[128] mid = 0;
+		mid[0] = 1;
+		mid[5] = 1;
+		bool amb;
+		assert(idx.match(mid, best, amb) == 0 && amb);
+	}
 	float[128] d = 0;
 	d[5] = 0.95;
 	d[0] = 0.3; // close to c, far from a

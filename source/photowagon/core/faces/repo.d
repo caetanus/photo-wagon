@@ -155,6 +155,15 @@ final class FaceRepo
 		return out_;
 	}
 
+	/// Drops stored detections below `score` (an older scan kept weaker ones).
+	long deleteBelowScore(float score)
+	{
+		auto s = db.prepare("DELETE FROM faces WHERE score < ?");
+		s.bind(1, cast(double) score);
+		s.run();
+		return db.changes();
+	}
+
 	/// Forgets every automatic grouping: faces of unnamed persons become unassigned
 	/// and those persons disappear. Named persons keep their faces.
 	void clearUnnamedPersons()

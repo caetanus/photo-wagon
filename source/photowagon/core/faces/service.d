@@ -15,7 +15,7 @@ import libp2p.util.fibers : FiberGroup;
 import photowagon.core.config : Config;
 import photowagon.core.db.sqlite : Database;
 import photowagon.core.db.schema : getSetting, setSetting;
-import photowagon.core.faces.cluster : ClusterIndex, SplitFace, eligible, clusterVersion, splitTowards;
+import photowagon.core.faces.cluster : ClusterIndex, SplitFace, eligible, clusterVersion, splitTowards, keepScore;
 import photowagon.core.faces.detect : FaceHit, detectFaces, initFaces;
 import photowagon.core.faces.repo : FaceRepo;
 import photowagon.core.ipc.events : Events;
@@ -95,6 +95,9 @@ final class FaceService
 		import photowagon.core.faces.cluster : unit, dot, joinThreshold;
 
 		logInfo("faces: regrouping with rule %s", clusterVersion);
+		immutable weak = faces.deleteBelowScore(keepScore);
+		if (weak)
+			logInfo("faces: dropped %s weak detections", weak);
 		faces.clearUnnamedPersons();
 		cluster = new ClusterIndex;
 		struct Pending { long id; float[128] e; long photo; }
@@ -193,17 +196,26 @@ final class FaceService
 				foreach (i, ref m; members)
 					if (m.id > 0 && faces.face(m.id).personId == person)
 						inPhoto[m.photo] ~= person;
+			long ambiguousCount;
 			foreach (ref t; todo)
 			{
 				float best;
+				bool ambiguous;
 				auto taken = t.photo in inPhoto;
-				long person = cluster.match(t.e, best, taken ? *taken : null);
+				long person = cluster.match(t.e, best, ambiguous, taken ? *taken : null);
+				if (person == 0 && ambiguous)
+				{
+					ambiguousCount++;
+					continue; // stays unassigned: the user decides
+				}
 				if (person == 0)
 					person = faces.createPerson(null);
 				faces.setFacePerson(t.id, person);
 				cluster.add(person, t.e);
 				inPhoto[t.photo] ~= person;
 			}
+			if (ambiguousCount)
+				logInfo("faces: %s faces left for the user (too close to two people)", ambiguousCount);
 			mergeClose();
 			faces.pruneEmptyPersons();
 		});
@@ -313,7 +325,7 @@ final class FaceService
 		long[] inThisPhoto; // nobody appears twice in one picture
 		foreach (ref hit; hits)
 		{
-			if (hit.w < 0.01 || hit.h < 0.01)
+			if (hit.w < 0.01 || hit.h < 0.01 || hit.score < keepScore)
 				continue;
 			string thumb;
 			try
@@ -325,10 +337,12 @@ final class FaceService
 			if (eligible(hit.w * photo.width, hit.score))
 			{
 				float best;
-				person = cluster.match(hit.embedding, best, inThisPhoto);
-				if (person == 0)
+				bool ambiguous;
+				person = cluster.match(hit.embedding, best, ambiguous, inThisPhoto);
+				if (person == 0 && !ambiguous)
 					person = faces.createPerson(null);
-				inThisPhoto ~= person;
+				if (person)
+					inThisPhoto ~= person;
 			}
 			faces.insertFace(id, hit.x, hit.y, hit.w, hit.h, hit.score, hit.embedding[], thumb, person);
 			if (person)

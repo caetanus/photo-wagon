@@ -135,6 +135,7 @@ ApplicationWindow {
             photo: root.current
             visible: root.current !== null
             canSend: true
+            facesOnHover: false
             sendEnabled: library.computerConnected
             onClosed: library.closePhoto()
             onSend: (id) => library.sendToComputer(id)

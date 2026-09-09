@@ -86,10 +86,10 @@ name until the user gives one. Face boxes are fractions of the rotated image.
 | method | params | result |
 |---|---|---|
 | `people.list` | — | `{people: [{id, name?, faces, coverUrl?}]}` most faces first |
-| `people.rename` | `{id, name}` | `{}` (empty name = unnamed again) |
+| `people.rename` | `{id, name}` | `{}` (empty name = unnamed again; the name of an existing person merges into that person) |
 | `people.merge` | `{id, into}` | `{}` — faces of `id` join `into`, `id` disappears |
 | `photo.faces` | `{id}` | `{photoId, faces: [{id, photoId, x, y, w, h, score, thumbUrl?, personId?, name?}]}` |
-| `face.setPerson` | `{faceId, personId?, name?}` | `{personId?, followed}` — an existing person, a person by name (created when new), or nobody. When the face leaves one person for another, the old person's faces that look more like the new one follow (`followed` = how many): name one face of a look-alike sibling and hers move with it |
+| `face.setPerson` | `{faceId, personId?, name?}` | `{personId?, followed}` — an existing person, a person by name (created when new), or nobody. A face in an automatic (unnamed) group names or merges that whole group (`followed` = how many others). A face taken out of a named person pulls along the faces of that person that look more like the new one: name one face of a look-alike sibling and hers move with it |
 | `faces.scan` | — | `{}` — scans what is unscanned (also runs after every index job) |
 | `faces.recluster` | — | `{}` — regroups every unnamed face with the current rule (named people keep theirs) |
 | `faces.status` | — | `{available, running, scanned, total, known, people}` |
@@ -97,7 +97,9 @@ name until the user gives one. Face boxes are fractions of the rotated image.
 Grouping: a face joins the person whose centroid is closest when the cosine
 is ≥ 0.45; persons closer than 0.75 are merged after a scan (never two named
 ones; siblings measure about 0.72). Faces narrower than 48 px or scored below 0.8 are kept but not grouped:
-they show in the viewer as "Who is this?" and can be named by hand.
+they show in the viewer as "Who is this?" and can be named by hand. Nobody is
+in a photo twice: two faces of one picture never share a person; when the user
+names one, another face of that person in the same photo becomes unassigned.
 
 `library.page` and `photo.neighbours` accept `personId` to restrict to one person.
 

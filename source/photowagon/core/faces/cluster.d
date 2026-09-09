@@ -22,7 +22,7 @@ enum mergeThreshold = 0.75f;
 enum minFaceWidth = 48;
 enum minScore = 0.8f;
 /// Bump when the rule changes: libraries clustered by an older rule are redone.
-enum clusterVersion = 3;
+enum clusterVersion = 4;
 
 bool eligible(float widthPx, float score) pure nothrow @nogc
 {
@@ -159,13 +159,19 @@ final class ClusterIndex
 	}
 
 	/// The closest person, and how close; 0 when nobody clears the threshold.
-	long match(const ref float[128] embedding, out float best) const
+	/// `taken` lists persons that cannot be the answer: the ones already found
+	/// in the same photo, since nobody appears twice in one picture.
+	long match(const ref float[128] embedding, out float best, const(long)[] taken = null) const
 	{
+		import std.algorithm : canFind;
+
 		best = -1;
 		long person;
 		auto u = unit(embedding);
 		foreach (ref c; persons)
 		{
+			if (c.count == 0 || taken.canFind(c.personId))
+				continue;
 			auto m = c.mean();
 			immutable s = dot(m, u);
 			if (s > best)
@@ -178,8 +184,9 @@ final class ClusterIndex
 	}
 
 	/// Pairs (from, into) to merge: centroids closer than `mergeThreshold`.
-	/// Never two named persons; the smaller (or the unnamed) one goes into the other.
-	long[2][] mergeCandidates() const
+	/// Never two named persons, never two persons `apart` says share a photo;
+	/// the smaller (or the unnamed) one goes into the other.
+	long[2][] mergeCandidates(scope bool delegate(long, long) apart = null) const
 	{
 		long[2][] out_;
 		bool[long] gone;
@@ -197,6 +204,8 @@ final class ClusterIndex
 				if (persons[i].named && persons[j].named)
 					continue;
 				if (dot(means[i], means[j]) < mergeThreshold)
+					continue;
+				if (apart !is null && apart(persons[i].personId, persons[j].personId))
 					continue;
 				// keep the named one; else the bigger one
 				size_t keep = i, drop = j;
@@ -267,6 +276,7 @@ unittest
 	float best;
 	assert(idx.match(b, best) == 10 && best > 0.9);
 	assert(idx.match(c, best) == 0);
+	assert(idx.match(b, best, [10L]) == 0); // 10 is taken in this photo
 	idx.add(11, c);
 	float[128] d = 0;
 	d[5] = 0.95;

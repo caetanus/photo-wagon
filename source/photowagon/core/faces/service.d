@@ -97,7 +97,7 @@ final class FaceService
 		logInfo("faces: regrouping with rule %s", clusterVersion);
 		faces.clearUnnamedPersons();
 		cluster = new ClusterIndex;
-		struct Pending { long id; float[128] e; }
+		struct Pending { long id; float[128] e; long photo; }
 		Pending[] todo;
 		Pending[][long] named; // faces of each named person, to be purified
 		faces.eachFace((ref FaceRepo.StoredFace f) {
@@ -105,13 +105,13 @@ final class FaceService
 			if (!eligible(f.widthPx, f.score))
 			{
 				if (f.personId)
-					named[f.personId] ~= Pending(-f.id, e); // negative id: drop, never a seed
+					named[f.personId] ~= Pending(-f.id, e, f.photoId); // negative id: drop, never a seed
 				return;
 			}
 			if (f.personId)
-				named[f.personId] ~= Pending(f.id, e);
+				named[f.personId] ~= Pending(f.id, e, f.photoId);
 			else
-				todo ~= Pending(f.id, e);
+				todo ~= Pending(f.id, e, f.photoId);
 		});
 		db.transaction!void({
 			foreach (person, members; named)
@@ -139,6 +139,32 @@ final class FaceService
 						auto u = unit(m.e);
 						keep[i] = m.id > 0 && dot(mean, u) >= joinThreshold;
 					}
+					// one face per photo: of two kept faces in the same picture, only the closest stays
+					float[long] bestInPhoto;
+					size_t[long] bestIdx;
+					foreach (i, ref m; members)
+					{
+						if (!keep[i])
+							continue;
+						auto u = unit(m.e);
+						immutable sim = dot(mean, u);
+						if (auto b = m.photo in bestInPhoto)
+						{
+							if (sim > *b)
+							{
+								keep[bestIdx[m.photo]] = false;
+								bestInPhoto[m.photo] = sim;
+								bestIdx[m.photo] = i;
+							}
+							else
+								keep[i] = false;
+						}
+						else
+						{
+							bestInPhoto[m.photo] = sim;
+							bestIdx[m.photo] = i;
+						}
+					}
 				}
 				long kept;
 				foreach (i, ref m; members)
@@ -161,14 +187,22 @@ final class FaceService
 			import std.algorithm : sort;
 
 			todo.sort!((a, b) => a.id < b.id);
+			// persons already present in each photo (the purified named ones)
+			long[][long] inPhoto;
+			foreach (person, members; named)
+				foreach (i, ref m; members)
+					if (m.id > 0 && faces.face(m.id).personId == person)
+						inPhoto[m.photo] ~= person;
 			foreach (ref t; todo)
 			{
 				float best;
-				long person = cluster.match(t.e, best);
+				auto taken = t.photo in inPhoto;
+				long person = cluster.match(t.e, best, taken ? *taken : null);
 				if (person == 0)
 					person = faces.createPerson(null);
 				faces.setFacePerson(t.id, person);
 				cluster.add(person, t.e);
+				inPhoto[t.photo] ~= person;
 			}
 			mergeClose();
 			faces.pruneEmptyPersons();
@@ -177,10 +211,25 @@ final class FaceService
 		events.emit("people.changed", JSONValue.emptyObject);
 	}
 
-	/// Persons whose centroids are close enough are one person.
+	/// Persons whose centroids are close enough are one person — unless they
+	/// were seen together in a photo, which settles that they are two.
 	private void mergeClose()
 	{
-		foreach (pair; cluster.mergeCandidates())
+		import std.conv : to;
+
+		auto together = faces.coOccurringPersons();
+		bool apart(long a, long b)
+		{
+			if (a > b)
+			{
+				auto t = a;
+				a = b;
+				b = t;
+			}
+			return (a.to!string ~ ":" ~ b.to!string) in together ? true : false;
+		}
+
+		foreach (pair; cluster.mergeCandidates(&apart))
 		{
 			faces.mergePersons(pair[0], pair[1]);
 			cluster.merge(pair[0], pair[1]);
@@ -261,6 +310,7 @@ final class FaceService
 		if (photo.path is null)
 			return 0;
 		auto hits = async(&detectFaces, photo.path).getResult();
+		long[] inThisPhoto; // nobody appears twice in one picture
 		foreach (ref hit; hits)
 		{
 			if (hit.w < 0.01 || hit.h < 0.01)
@@ -275,9 +325,10 @@ final class FaceService
 			if (eligible(hit.w * photo.width, hit.score))
 			{
 				float best;
-				person = cluster.match(hit.embedding, best);
+				person = cluster.match(hit.embedding, best, inThisPhoto);
 				if (person == 0)
 					person = faces.createPerson(null);
+				inThisPhoto ~= person;
 			}
 			faces.insertFace(id, hit.x, hit.y, hit.w, hit.h, hit.score, hit.embedding[], thumb, person);
 			if (person)
@@ -296,18 +347,47 @@ final class FaceService
 	long assignFace(long faceId, long personId, string name, out long followed)
 	{
 		auto before = faces.face(faceId);
+		immutable beforeNamed = before.personId && faces.person(before.personId).name !is null;
 		if (personId == 0 && name.length)
-		{
 			personId = faces.personByName(name);
+
+		// The face sits in an automatic (unnamed) group: the user is telling us
+		// who that whole group is, not correcting one face.
+		if (before.personId && !beforeNamed && (personId || name.length))
+		{
 			if (personId == 0)
-				personId = faces.createPerson(name);
+			{
+				faces.renamePerson(before.personId, name);
+				cluster.setNamed(before.personId, true);
+				followed = faces.person(before.personId).faces - 1;
+				events.emit("people.changed", JSONValue.emptyObject);
+				return before.personId;
+			}
+			if (personId != before.personId)
+			{
+				followed = mergeRespectingPhotos(before.personId, personId, faceId);
+				events.emit("people.changed", JSONValue.emptyObject);
+				return personId;
+			}
 		}
+
+		if (personId == 0 && name.length)
+			personId = faces.createPerson(name);
 		faces.setFacePerson(faceId, personId);
 		auto e = faces.embeddingOf(faceId);
 		if (before.personId)
 			cluster.remove(before.personId, e);
 		if (personId)
+		{
 			cluster.add(personId, e, faces.person(personId).name !is null);
+			// the user says this face is the person: any other face of hers in the same photo is not
+			foreach (other; faces.sameFacesInPhoto(faceId, personId))
+			{
+				faces.setFacePerson(other, 0);
+				auto oe = faces.embeddingOf(other);
+				cluster.remove(personId, oe);
+			}
+		}
 
 		if (before.personId && personId && before.personId != personId)
 			followed = splitPerson(before.personId, personId, faceId, e);
@@ -315,6 +395,47 @@ final class FaceService
 		faces.pruneEmptyPersons();
 		events.emit("people.changed", JSONValue.emptyObject);
 		return personId;
+	}
+
+	/// Every face of `from` joins `into`, except those in a photo where `into`
+	/// already has a face (they become unassigned). `keepId` always moves.
+	private long mergeRespectingPhotos(long from, long into, long keepId)
+	{
+		bool[long] photoTaken;
+		long[] fromFaces;
+		faces.eachFace((ref FaceRepo.StoredFace f) {
+			if (f.personId == into)
+				photoTaken[f.photoId] = true;
+			else if (f.personId == from)
+				fromFaces ~= f.id;
+		});
+		long moved;
+		db.transaction!void({
+			// the face the user pointed at goes first, so it wins its photo
+			foreach (id; [keepId] ~ fromFaces)
+			{
+				if (id != keepId && id == keepId)
+					continue;
+				auto f = faces.face(id);
+				if (f.personId != from)
+					continue;
+				auto e = faces.embeddingOf(id);
+				cluster.remove(from, e);
+				if (id != keepId && f.photoId in photoTaken)
+				{
+					faces.setFacePerson(id, 0);
+					continue;
+				}
+				photoTaken[f.photoId] = true;
+				faces.setFacePerson(id, into);
+				cluster.add(into, e, true);
+				if (id != keepId)
+					moved++;
+			}
+			faces.pruneEmptyPersons();
+		});
+		logInfo("faces: group %s is person %s (%s faces followed)", from, into, moved);
+		return moved;
 	}
 
 	/// Moves the faces of `from` that look more like `into` (seeded by `seedId`).
@@ -339,21 +460,41 @@ final class FaceService
 		bool[long] movedSet;
 		foreach (id; moved)
 			movedSet[id] = true;
+		// one face per photo: photos where `into` already has a face keep it
+		bool[long] photoTaken;
+		faces.eachFace((ref FaceRepo.StoredFace f) {
+			if (f.personId == into)
+				photoTaken[f.photoId] = true;
+		});
+		long count;
 		db.transaction!void({
 			foreach (ref f; ofFrom)
 				if (f.id in movedSet)
 				{
+					immutable photo = faces.face(f.id).photoId;
+					if (photo in photoTaken)
+						continue;
+					photoTaken[photo] = true;
 					faces.setFacePerson(f.id, into);
 					cluster.remove(from, f.embedding);
 					cluster.add(into, f.embedding);
+					count++;
 				}
 		});
+		moved.length = count;
 		logInfo("faces: %s faces followed the correction from person %s to %s", moved.length, from, into);
 		return moved.length;
 	}
 
+	/// Renames; giving a person the name of an existing one merges them.
 	void rename(long personId, string name)
 	{
+		immutable existing = name.length ? faces.personByName(name) : 0;
+		if (existing && existing != personId)
+		{
+			merge(personId, existing);
+			return;
+		}
 		faces.renamePerson(personId, name);
 		cluster.setNamed(personId, name.length > 0);
 		events.emit("people.changed", JSONValue.emptyObject);

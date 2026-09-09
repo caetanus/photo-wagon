@@ -83,6 +83,7 @@ final class FaceRepo
 	struct StoredFace
 	{
 		long id;
+		long photoId;
 		long personId; // 0 = none
 		bool personNamed;
 		float score;
@@ -93,7 +94,7 @@ final class FaceRepo
 	/// Every stored face, oldest first (the order faces were found in).
 	void eachFace(scope void delegate(ref StoredFace f) dg)
 	{
-		auto s = db.prepare(`SELECT f.id, f.person_id, pe.name IS NOT NULL, f.score, f.w * p.width, f.embedding
+		auto s = db.prepare(`SELECT f.id, f.person_id, pe.name IS NOT NULL, f.score, f.w * p.width, f.embedding, f.photo_id
 			FROM faces f JOIN photos p ON p.id = f.photo_id LEFT JOIN persons pe ON pe.id = f.person_id ORDER BY f.id`);
 		while (s.step())
 		{
@@ -107,6 +108,7 @@ final class FaceRepo
 			f.score = cast(float) s.getDouble(3);
 			f.widthPx = cast(float) s.getDouble(4);
 			f.embedding = cast(const(float)[]) blob;
+			f.photoId = s.getLong(6);
 			dg(f);
 		}
 	}
@@ -124,6 +126,33 @@ final class FaceRepo
 				e = (cast(const(float)[]) blob)[0 .. 128];
 		}
 		return e;
+	}
+
+	/// Other faces of `personId` in the same photo as `faceId` (nobody is in a photo twice).
+	long[] sameFacesInPhoto(long faceId, long personId)
+	{
+		auto s = db.prepare(`SELECT o.id FROM faces f JOIN faces o ON o.photo_id = f.photo_id AND o.id != f.id
+			WHERE f.id = ? AND o.person_id = ?`);
+		s.bind(1, faceId).bind(2, personId);
+		long[] out_;
+		while (s.step())
+			out_ ~= s.getLong(0);
+		return out_;
+	}
+
+	/// Pairs of persons that appear together in at least one photo (so are
+	/// different people), as "a:b" keys with a < b.
+	bool[string] coOccurringPersons()
+	{
+		import std.conv : to;
+
+		auto s = db.prepare(`SELECT DISTINCT a.person_id, b.person_id FROM faces a JOIN faces b
+			ON a.photo_id = b.photo_id AND a.person_id < b.person_id
+			WHERE a.person_id IS NOT NULL AND b.person_id IS NOT NULL`);
+		bool[string] out_;
+		while (s.step())
+			out_[s.getLong(0).to!string ~ ":" ~ s.getLong(1).to!string] = true;
+		return out_;
 	}
 
 	/// Forgets every automatic grouping: faces of unnamed persons become unassigned
@@ -322,6 +351,13 @@ unittest
 	repo.setFacePerson(f2, 0);
 	repo.pruneEmptyPersons();
 	assert(repo.people()[0].faces == 1);
+	immutable f3 = repo.insertFace(1, 0.5, 0.1, 0.2, 0.2, 0.9, e[], "t3", ana);
+	assert(repo.sameFacesInPhoto(f3, ana) == [f1]);
+	immutable bob = repo.createPerson("Bob");
+	repo.setFacePerson(f3, bob);
+	import std.conv : to;
+	assert((ana.to!string ~ ":" ~ bob.to!string) in repo.coOccurringPersons());
+	repo.setFacePerson(f3, 0);
 	assert(repo.face(f1).thumbHash == "t1");
 	immutable anon = repo.createPerson(null);
 	repo.setFacePerson(f2, anon);

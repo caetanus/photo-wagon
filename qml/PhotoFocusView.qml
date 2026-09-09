@@ -8,12 +8,17 @@ Rectangle {
     id: viewer
     required property QtObject theme
     property var photo: null
+    /// Faces of `photo` (parsed library.faces.faces) and the known people, for naming.
+    property var faces: []
+    property var people: []
+    property bool showFaces: true
     /// Phone: show "Send to computer" (enabled when a computer is reachable).
     property bool canSend: false
     property bool sendEnabled: false
 
     signal closed()
     signal send(int id)
+    signal nameFace(int faceId, int personId, string name)
 
     color: Qt.rgba(0, 0, 0, 0.94)
     focus: visible
@@ -40,6 +45,99 @@ Rectangle {
         smooth: true
         mipmap: true
         MouseArea { anchors.fill: parent; onClicked: {} }
+    }
+
+    // Face boxes over the painted image area.
+    Item {
+        id: overlay
+        visible: viewer.showFaces && image.status === Image.Ready
+        readonly property real px: image.x + (image.width - image.paintedWidth) / 2
+        readonly property real py: image.y + (image.height - image.paintedHeight) / 2
+        Repeater {
+            model: viewer.faces
+            delegate: Item {
+                required property var modelData
+                x: overlay.px + modelData.x * image.paintedWidth
+                y: overlay.py + modelData.y * image.paintedHeight
+                width: modelData.w * image.paintedWidth
+                height: modelData.h * image.paintedHeight
+                Rectangle {
+                    anchors.fill: parent
+                    color: "transparent"
+                    border.color: modelData.name ? theme.accent : "#ffd54f"
+                    border.width: 2
+                    radius: 3
+                }
+                Rectangle {
+                    anchors.top: parent.bottom
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.topMargin: 2
+                    width: tag.implicitWidth + 12
+                    height: tag.implicitHeight + 6
+                    radius: 3
+                    color: modelData.name ? theme.accent : "#ffd54f"
+                    Label {
+                        id: tag
+                        anchors.centerIn: parent
+                        text: modelData.name || "Who is this?"
+                        color: modelData.name ? "#ffffff" : "#222222"
+                        font.pixelSize: 12
+                    }
+                }
+                TapHandler {
+                    onTapped: {
+                        namer.faceId = modelData.id
+                        namer.currentName = modelData.name || ""
+                        namer.open()
+                    }
+                }
+            }
+        }
+    }
+
+    // "Who is this?": type a name or pick a known person.
+    Popup {
+        id: namer
+        property int faceId: 0
+        property string currentName: ""
+        modal: true
+        anchors.centerIn: parent
+        width: 320
+        padding: 16
+        background: Rectangle { color: theme.panel; border.color: theme.border; radius: 8 }
+        onOpened: { nameField.text = currentName; nameField.forceActiveFocus(); nameField.selectAll() }
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 10
+            Label { text: "Who is this?"; font.bold: true; color: theme.text }
+            TextField {
+                id: nameField
+                placeholderText: "Name"
+                Layout.fillWidth: true
+                onAccepted: { viewer.nameFace(namer.faceId, 0, text); namer.close() }
+            }
+            Label { visible: viewer.people.length > 0; text: "or someone already known:"; color: theme.muted; font.pixelSize: 12 }
+            ListView {
+                visible: viewer.people.length > 0
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(200, viewer.people.length * 32)
+                clip: true
+                model: viewer.people
+                delegate: ItemDelegate {
+                    required property var modelData
+                    width: ListView.view.width
+                    height: 32
+                    text: (modelData.name || "Unnamed") + "  ·  " + modelData.faces
+                    onClicked: { viewer.nameFace(namer.faceId, modelData.id, ""); namer.close() }
+                }
+            }
+            RowLayout {
+                Button { text: "Nobody"; flat: true; onClicked: { viewer.nameFace(namer.faceId, 0, ""); namer.close() } }
+                Item { Layout.fillWidth: true }
+                Button { text: "Cancel"; onClicked: namer.close() }
+                Button { text: "Save"; enabled: nameField.text.trim().length > 0; onClicked: { viewer.nameFace(namer.faceId, 0, nameField.text); namer.close() } }
+            }
+        }
     }
 
     BusyIndicator {

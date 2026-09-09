@@ -12,6 +12,11 @@ dependency "libp2p" path="../libp2p-dlang"
 
 libs "sqlite3" "gexiv2" "vips" "gobject-2.0" "glib-2.0" "qrencode"
 
+// faces: the one C++ file (see csrc/face_opencv.h for why), built before D
+preBuildCommands "sh $PACKAGE_DIR/csrc/build.sh"
+sourceFiles "csrc/libface_opencv.a"
+libs "opencv_objdetect" "opencv_dnn" "opencv_imgcodecs" "opencv_imgproc" "opencv_flann" "opencv_core" "stdc++"
+
 // The full application: UI + core. Needs the DSide binding generated at
 // ../qt-dlang-gen (see README). Build with ldc2 or dmd; the matching binding
 // archive is picked by compiler.

@@ -16,6 +16,9 @@ private extern (C) nothrow @nogc
 	int vips_thumbnail(const char* filename, void** out_, int width, ...);
 	int vips_jpegsave_buffer(void* in_, void** buf, size_t* len, ...);
 	int vips_thumbnail_buffer(void* buf, size_t len, void** out_, int width, ...);
+	int vips_autorot(void* in_, void** out_, ...);
+	int vips_extract_area(void* in_, void** out_, int left, int top, int width, int height, ...);
+	int vips_resize(void* in_, void** out_, double scale, ...);
 	const(char)* vips_error_buffer();
 	void vips_error_clear();
 	void g_object_unref(void* obj);
@@ -109,4 +112,51 @@ ubyte[] renderJpeg(string source, int maxEdge, int quality)
 	scope (exit)
 		g_free(buf);
 	return (cast(ubyte*) buf)[0 .. len].dup;
+}
+
+/// A JPEG of the face at (fx, fy, fw, fh) (fractions of the rotated image),
+/// padded by a third on each side, longest edge `size`, stored under
+/// `storeRoot`. Returns the hash. Worker-safe.
+string renderFaceCrop(string source, string storeRoot, double fx, double fy, double fw, double fh, int size)
+{
+	import std.algorithm : max, min;
+
+	auto raw = vips_image_new_from_file(source.toStringz, null);
+	if (raw is null)
+		throw new Exception("cannot open: " ~ vipsError());
+	scope (exit)
+		g_object_unref(raw);
+	void* img;
+	if (vips_autorot(raw, &img, null) != 0)
+		throw new Exception("autorot: " ~ vipsError());
+	scope (exit)
+		g_object_unref(img);
+	immutable W = vips_image_get_width(img), H = vips_image_get_height(img);
+	immutable pad = 0.35;
+	int left = cast(int)((fx - fw * pad) * W), top = cast(int)((fy - fh * pad) * H);
+	int w = cast(int)(fw * (1 + 2 * pad) * W), h = cast(int)(fh * (1 + 2 * pad) * H);
+	left = max(0, left);
+	top = max(0, top);
+	w = min(w, W - left);
+	h = min(h, H - top);
+	if (w < 2 || h < 2)
+		throw new Exception("face box outside the image");
+	void* crop;
+	if (vips_extract_area(img, &crop, left, top, w, h, null) != 0)
+		throw new Exception("crop: " ~ vipsError());
+	scope (exit)
+		g_object_unref(crop);
+	immutable scale = cast(double) size / max(w, h);
+	void* small;
+	if (vips_resize(crop, &small, scale < 1 ? scale : 1.0, null) != 0)
+		throw new Exception("resize: " ~ vipsError());
+	scope (exit)
+		g_object_unref(small);
+	void* buf;
+	size_t len;
+	if (vips_jpegsave_buffer(small, &buf, &len, "Q".ptr, 86, "strip".ptr, 1, null) != 0)
+		throw new Exception("jpegsave: " ~ vipsError());
+	scope (exit)
+		g_free(buf);
+	return storeBytes(storeRoot, (cast(ubyte*) buf)[0 .. len]);
 }

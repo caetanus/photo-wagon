@@ -37,6 +37,7 @@ struct Filter
 {
 	long rootId;
 	long albumId;
+	long personId;
 	int year;
 	int month;
 	int day;
@@ -316,6 +317,11 @@ final class PhotoRepo
 		{
 			w.where ~= " AND p.root_id = ?";
 			w.longs ~= f.rootId;
+		}
+		if (f.personId)
+		{
+			w.where ~= " AND EXISTS (SELECT 1 FROM faces fp WHERE fp.photo_id = p.id AND fp.person_id = ?)";
+			w.longs ~= f.personId;
 		}
 		if (f.year)
 		{

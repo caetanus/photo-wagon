@@ -16,7 +16,8 @@ anything that crosses the UI/core boundary.
 4. **Small files, one responsibility each.** When a module grows a second
    concern, split it. No "utils" dumping grounds, no megazord files.
 5. **D everywhere.** No C++ shims unless a library has no C API. If one is
-   unavoidable it lives in `csrc/` with a one-paragraph justification.
+   unavoidable it lives in `csrc/` with a one-paragraph justification (today:
+   `face_opencv.cpp`, because OpenCV 5's face classes have no C API).
 
 ## Core rules (vibe-core)
 

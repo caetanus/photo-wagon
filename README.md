@@ -12,7 +12,11 @@ an album with a peer you chose.
 - Qt 6.11 with the DSide binding built at `../qt-dlang-gen`
   (`generated/qt-6.11/cxx-quick` + `.build/qt-6.11-cxx-quick/libbinding_ldc2.a`)
 - `libp2p-dlang` checked out at `../libp2p-dlang` (and its sibling `d-webrtc-v3`)
-- System libraries: `sqlite3`, `gexiv2`, `vips`, `libsodium`, `openssl`, `c-ares`
+- System libraries: `sqlite3`, `gexiv2`, `vips`, `libsodium`, `openssl`, `c-ares`,
+  `qrencode`, OpenCV 5 (`opencv5.pc`; only for the face scan, see `csrc/`)
+- The face models in `models/` (`face_detection_yunet_2023mar.onnx`,
+  `face_recognition_sface_2021dec.onnx` from the OpenCV zoo); `--models DIR`
+  points elsewhere
 
 ## Build and run
 
@@ -51,13 +55,15 @@ offscreen tests: `cd mobile && dub build -c desktop --compiler=ldc2`.
 ```sh
 dub test --compiler=ldc2                 # unit tests of every core module
 tests/e2e.py /some/folder/with/nine/images   # two headless nodes: index, publish, fetch over libp2p
+tests/faces.py /folder/with/the/lena+messi/set  # face detection, clustering, naming, merging
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software PW_SHOT=/tmp/shot.png ./photo-wagon   # UI screenshot
 ```
 
 ## Layout
 
 ```
-source/photowagon/core/   indexer, store, SQLite, gexiv2, vips, libp2p node, IPC
+source/photowagon/core/   indexer, store, SQLite, gexiv2, vips, faces, libp2p node, IPC
+csrc/                     the one C++ file: OpenCV's YuNet + SFace behind a C surface
 source/photowagon/ui/     app, Library facade, bridge to the core thread
 source/photowagon/main.d  picks UI + core thread, or headless
 mobile/                   the phone client (D, TcpBridge), Android packaging and toolchain

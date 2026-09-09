@@ -43,6 +43,8 @@ ApplicationWindow {
     readonly property var pageData: JSON.parse(library.page)
     readonly property var datesData: JSON.parse(library.dates)
     readonly property var current: library.current.length ? JSON.parse(library.current) : null
+    readonly property var peopleData: JSON.parse(library.people).people
+    readonly property var facesData: JSON.parse(library.faces).faces
 
     // Active date filter (0 = none).
     property int filterYear: 0
@@ -83,7 +85,8 @@ ApplicationWindow {
                 color: theme.text
             }
             Label {
-                text: filterYear === 0 ? "All photos"
+                text: library.personFilter ? personName(library.personFilter)
+                    : filterYear === 0 ? "All photos"
                     : (filterDay ? filterYear + "-" + pad(filterMonth) + "-" + pad(filterDay)
                        : filterMonth ? filterYear + "-" + pad(filterMonth) : String(filterYear))
                 color: theme.muted
@@ -126,16 +129,30 @@ ApplicationWindow {
         anchors.bottom: parent.bottom
         orientation: Qt.Horizontal
 
-        DateTreeSidebar {
-            id: sidebar
+        ColumnLayout {
             SplitView.preferredWidth: 240
             SplitView.minimumWidth: 160
-            theme: root.theme
-            dates: root.datesData
-            selectedYear: root.filterYear
-            selectedMonth: root.filterMonth
-            selectedDay: root.filterDay
-            onPicked: (y, m, d) => root.applyFilter(y, m, d)
+            spacing: 0
+            DateTreeSidebar {
+                id: sidebar
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                theme: root.theme
+                dates: root.datesData
+                selectedYear: root.filterYear
+                selectedMonth: root.filterMonth
+                selectedDay: root.filterDay
+                onPicked: (y, m, d) => { root.filterYear = y; root.filterMonth = m; root.filterDay = d; library.loadPage(0, 120, y, m, d) }
+            }
+            PeopleList {
+                Layout.fillWidth: true
+                Layout.preferredHeight: root.peopleData.length ? Math.min(320, 40 + root.peopleData.length * 50) : 60
+                theme: root.theme
+                people: root.peopleData
+                selectedPerson: library.personFilter
+                onPicked: (id) => { root.filterYear = 0; root.filterMonth = 0; root.filterDay = 0; library.filterPerson(id) }
+                onRenamed: (id, name) => library.renamePerson(id, name)
+            }
         }
 
         PhotoGrid {
@@ -153,8 +170,11 @@ ApplicationWindow {
         anchors.fill: parent
         theme: root.theme
         photo: root.current
+        faces: root.facesData
+        people: root.peopleData
         visible: root.current !== null
         onClosed: library.closePhoto()
+        onNameFace: (faceId, personId, name) => library.setFacePerson(faceId, personId, name)
     }
     } // shell
 
@@ -175,6 +195,10 @@ ApplicationWindow {
     }
 
     function pad(n) { return n < 10 ? "0" + n : String(n) }
+    function personName(id) {
+        for (const p of peopleData) if (p.id === id) return p.name || "Unnamed person"
+        return "Person"
+    }
 
     // Headless capture: PW_SHOT=/path.png → grab the window contents and quit.
     Timer {

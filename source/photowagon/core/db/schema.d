@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 1;
+enum currentVersion = 2;
 
 void migrate(Database db)
 {
@@ -15,6 +15,8 @@ void migrate(Database db)
 	db.transaction!void({
 		if (have < 1)
 			db.exec(schemaV1);
+		if (have < 2)
+			db.exec(schemaV2);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -68,6 +70,31 @@ CREATE TABLE peers (
     agent      TEXT,
     last_seen  INTEGER NOT NULL
 );
+`;
+
+private enum schemaV2 = `
+ALTER TABLE photos ADD COLUMN faces_scanned INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE persons (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT,                      -- NULL until the user names the cluster
+    created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE faces (
+    id          INTEGER PRIMARY KEY,
+    photo_id    INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+    x           REAL NOT NULL,             -- box as fractions of the rotated image
+    y           REAL NOT NULL,
+    w           REAL NOT NULL,
+    h           REAL NOT NULL,
+    score       REAL NOT NULL,
+    embedding   BLOB NOT NULL,             -- 128 float32 (SFace)
+    thumb_hash  TEXT,                      -- face crop in the store
+    person_id   INTEGER REFERENCES persons(id) ON DELETE SET NULL
+);
+CREATE INDEX faces_photo  ON faces(photo_id);
+CREATE INDEX faces_person ON faces(person_id);
 `;
 
 unittest

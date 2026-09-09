@@ -16,6 +16,7 @@ import libp2p.util.fibers : FiberGroup;
 
 import photowagon.core.api.album_api : registerAlbumApi;
 import photowagon.core.api.daemon_api : registerDaemonApi;
+import photowagon.core.api.face_api : registerFaceApi;
 import photowagon.core.api.import_api : registerImportApi;
 import photowagon.core.api.library_api : registerLibraryApi;
 import photowagon.core.api.media_api : registerMediaApi;
@@ -24,6 +25,8 @@ import photowagon.core.api.pairing_api : registerPairingApi, ServerControl;
 import photowagon.core.config : Config;
 import photowagon.core.db.schema : migrate;
 import photowagon.core.db.sqlite : Database;
+import photowagon.core.faces.repo : FaceRepo;
+import photowagon.core.faces.service : FaceService;
 import photowagon.core.indexer.indexer : Indexer;
 import photowagon.core.ipc.events : Events;
 import photowagon.core.ipc.handler : RequestHandler;
@@ -56,6 +59,7 @@ final class Daemon : ServerControl
 	private RequestHandler inproc;
 	private FiberGroup own;
 	private Indexer indexer;
+	private FaceService facesService;
 	private Node node;
 	private Sharing sharing;
 	private bool stopped;
@@ -87,6 +91,9 @@ final class Daemon : ServerControl
 		auto dates = new DateTree(db);
 		auto albums = new AlbumRepo(db);
 		indexer = new Indexer(cfg, photos, events);
+		auto faceRepo = new FaceRepo(db);
+		facesService = new FaceService(cfg, faceRepo, photos, store, events);
+		indexer.onDone = () { facesService.start(); };
 
 		if (cfg.p2p)
 		{
@@ -110,6 +117,7 @@ final class Daemon : ServerControl
 		registerLibraryApi(registry, roots, photos, dates, indexer, events);
 		registerMediaApi(registry, photos, store);
 		registerImportApi(registry, cfg, roots, photos, indexer);
+		registerFaceApi(registry, faceRepo, facesService, store);
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerP2pApi(registry, node, sharing);
 
@@ -126,6 +134,7 @@ final class Daemon : ServerControl
 		// pick up changes since last run
 		foreach (root; roots.list())
 			indexer.start(root.id, root.path);
+		facesService.start();
 	}
 
 	// ---- ServerControl: the loopback/LAN listener, on demand ------------------------
@@ -205,6 +214,8 @@ final class Daemon : ServerControl
 			ipc.close();
 		if (indexer)
 			indexer.close();
+		if (facesService)
+			facesService.close();
 		if (sharing)
 			sharing.close();
 		if (node)

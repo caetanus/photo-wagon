@@ -17,3 +17,5 @@ legacy/build-meson/
 legacy/photowagond/photowagond
 legacy/photowagond/.dub/
 legacy/.ipynb_checkpoints/
+csrc/*.o
+csrc/*.a

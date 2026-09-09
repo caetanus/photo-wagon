@@ -27,6 +27,8 @@ extern (C) nothrow @nogc
 	int sqlite3_bind_double(sqlite3_stmt* stmt, int idx, double v);
 	int sqlite3_bind_text(sqlite3_stmt* stmt, int idx, const char* v, int n, void* destructor);
 	int sqlite3_bind_null(sqlite3_stmt* stmt, int idx);
+	int sqlite3_bind_blob(sqlite3_stmt* stmt, int idx, const void* v, int n, void* destructor);
+	const(void)* sqlite3_column_blob(sqlite3_stmt* stmt, int col);
 	int sqlite3_column_type(sqlite3_stmt* stmt, int col);
 	long sqlite3_column_int64(sqlite3_stmt* stmt, int col);
 	double sqlite3_column_double(sqlite3_stmt* stmt, int col);
@@ -184,6 +186,12 @@ struct Statement
 		return this;
 	}
 
+	ref Statement bind(int idx, const(ubyte)[] v) return
+	{
+		check(sqlite3_bind_blob(stmt, idx, v.ptr, cast(int) v.length, SQLITE_TRANSIENT));
+		return this;
+	}
+
 	ref Statement bindNull(int idx) return
 	{
 		check(sqlite3_bind_null(stmt, idx));
@@ -241,6 +249,16 @@ struct Statement
 			return null;
 		immutable n = sqlite3_column_bytes(stmt, col);
 		return (cast(const(char)*) p)[0 .. n].idup;
+	}
+
+	/// A copy of a BLOB column (empty for NULL).
+	ubyte[] getBlob(int col)
+	{
+		auto p = sqlite3_column_blob(stmt, col);
+		immutable n = sqlite3_column_bytes(stmt, col);
+		if (p is null || n <= 0)
+			return null;
+		return (cast(const(ubyte)*) p)[0 .. n].dup;
 	}
 
 	private void check(int rc)

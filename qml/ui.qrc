@@ -7,5 +7,6 @@
     <file>PhotoFocusView.qml</file>
     <file>PeersPanel.qml</file>
     <file>PhonePanel.qml</file>
+    <file>PeopleList.qml</file>
   </qresource>
 </RCC>

@@ -77,6 +77,24 @@ and `height` are already rotated by `orientation`.
 | `photo.thumb` | `{id}` | `{mime, base64}` |
 | `photo.file` | `{id, maxEdge?}` | `{mime, size, base64}` — the original, or a JPEG no larger than `maxEdge` on its longest side |
 
+### people and faces
+
+Every local photo is scanned after indexing (YuNet detector + SFace embeddings,
+OpenCV). Faces are grouped into people by embedding similarity; a person has no
+name until the user gives one. Face boxes are fractions of the rotated image.
+
+| method | params | result |
+|---|---|---|
+| `people.list` | — | `{people: [{id, name?, faces, coverUrl?}]}` most faces first |
+| `people.rename` | `{id, name}` | `{}` (empty name = unnamed again) |
+| `people.merge` | `{id, into}` | `{}` — faces of `id` join `into`, `id` disappears |
+| `photo.faces` | `{id}` | `{photoId, faces: [{id, photoId, x, y, w, h, score, thumbUrl?, personId?, name?}]}` |
+| `face.setPerson` | `{faceId, personId?, name?}` | `{personId?}` — an existing person, a person by name (created when new), or nobody |
+| `faces.scan` | — | `{}` — scans what is unscanned (also runs after every index job) |
+| `faces.status` | — | `{available, running, scanned, total, known}` |
+
+`library.page` and `photo.neighbours` accept `personId` to restrict to one person.
+
 ### albums
 
 | method | params | result |
@@ -106,4 +124,7 @@ Methods that need the node answer `{"error": {"code": "p2p_off"}}` when it is no
 | `library.changed` | `{}` — something in `library.page` / `library.dates` is stale |
 | `p2p.peer` | `{peerId, connected: bool}` |
 | `p2p.fetch` | `{albumId, done, total}` |
+| `faces.progress` | `{done, total, faces}` |
+| `faces.done` | `{photos, faces, seconds}` |
+| `people.changed` | `{}` — people or face assignments changed |
 | `log` | `{level, message}` |

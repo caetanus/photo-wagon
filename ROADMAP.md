@@ -23,9 +23,13 @@ fetched album are not pulled, only thumbnails.
 ## M2 — Metadata
 - places view (GPS clusters), moments grouping, FTS search
 
-## M3 — People
-- face detection + embeddings (OpenCV 5 through its C API or ONNX runtime)
-- clustering, naming UI (models already in `models/`)
+## M3 — People (done 2026-09-09)
+- [x] face detection + embeddings: YuNet + SFace through `csrc/face_opencv.cpp`, the one C++ file
+  (OpenCV 5 has no C API for them); scan runs on worker threads after every index job
+- [x] clustering by cosine similarity (SFace threshold 0.363), face crops in the store
+- [x] UI: People list in the sidebar (filter, rename), face boxes in the viewer with "Who is this?"
+- [ ] batch naming ("is this the same person?"), per-person cover choice
+- [ ] faces in photos fetched from peers (only local originals are scanned)
 
 ## M4 — Editor
 - non-destructive recipes: rotate, crop, exposure

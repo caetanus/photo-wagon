@@ -1,7 +1,7 @@
 /// Where the daemon keeps its data and how it was asked to run.
 module photowagon.core.config;
 
-import std.path : buildPath, expandTilde;
+import std.path : buildPath, expandTilde, absolutePath, buildNormalizedPath;
 import std.process : environment;
 
 struct Config
@@ -24,6 +24,8 @@ struct Config
 	/// longest edge of a thumbnail in pixels
 	int thumbSize = 512;
 	bool verbose = false;
+	/// where the face models live (defaults to <exe dir>/models, then ./models)
+	string modelsDir;
 
 	string dbPath() const
 	{
@@ -44,6 +46,16 @@ struct Config
 	{
 		return buildPath(runtimeDir, "daemon.port");
 	}
+
+	string yunetModel() const
+	{
+		return buildPath(modelsDir, "face_detection_yunet_2023mar.onnx");
+	}
+
+	string sfaceModel() const
+	{
+		return buildPath(modelsDir, "face_recognition_sface_2021dec.onnx");
+	}
 }
 
 Config defaultConfig()
@@ -55,7 +67,30 @@ Config defaultConfig()
 	immutable runtime = environment.get("XDG_RUNTIME_DIR", "");
 	c.runtimeDir = runtime.length ? buildPath(runtime, "photowagon") : c.dataDir;
 	c.p2pListen = ["/ip4/0.0.0.0/tcp/0"];
+	c.modelsDir = defaultModelsDir();
 	return c;
+}
+
+/// The models folder next to the executable, or in the working directory, or
+/// under the XDG data dir.
+string defaultModelsDir()
+{
+	import std.file : thisExePath, exists, isDir, getcwd;
+	import std.path : dirName;
+
+	string[] candidates;
+	try
+		candidates ~= buildPath(thisExePath.dirName, "models");
+	catch (Exception)
+	{
+	}
+	candidates ~= buildPath(getcwd(), "models");
+	immutable home = environment.get("HOME", "~".expandTilde);
+	candidates ~= buildPath(environment.get("XDG_DATA_HOME", buildPath(home, ".local", "share")), "photowagon", "models");
+	foreach (c; candidates)
+		if (c.exists && c.isDir)
+			return c;
+	return candidates[0];
 }
 
 /// `--data DIR --runtime DIR --port N --no-p2p --p2p-listen MADDR --workers N --thumb N -v`
@@ -77,12 +112,12 @@ Config parseArgs(string[] args)
 		switch (args[i])
 		{
 		case "--data":
-			c.dataDir = next().expandTilde;
+			c.dataDir = next().expandTilde.absolutePath.buildNormalizedPath;
 			if (c.runtimeDir == defaultConfig().dataDir)
 				c.runtimeDir = c.dataDir;
 			break;
 		case "--runtime":
-			c.runtimeDir = next().expandTilde;
+			c.runtimeDir = next().expandTilde.absolutePath.buildNormalizedPath;
 			break;
 		case "--ipc-address":
 			c.ipcAddress = next();
@@ -109,6 +144,9 @@ Config parseArgs(string[] args)
 		case "--workers":
 			c.workers = next().to!int;
 			break;
+		case "--models":
+			c.modelsDir = next().expandTilde.absolutePath.buildNormalizedPath;
+			break;
 		case "--thumb":
 			c.thumbSize = next().to!int;
 			break;
@@ -127,7 +165,8 @@ Config parseArgs(string[] args)
 }
 
 enum usage = `photo-wagon [--headless] [--serve] [--ipc-address ADDR] [--port N] [--data DIR]
-            [--runtime DIR] [--no-p2p] [--p2p-listen MULTIADDR]... [--workers N] [--thumb PX] [-v]
+            [--runtime DIR] [--no-p2p] [--p2p-listen MULTIADDR]... [--workers N] [--thumb PX]
+            [--models DIR] [-v]
 
 --serve exposes the protocol of docs/ipc.md on ADDR:N (default 127.0.0.1, random
 port). With --ipc-address 0.0.0.0 any device on the network can drive the

@@ -30,6 +30,8 @@ final class Indexer
 	private PhotoRepo photos;
 	private Events events;
 	private FiberGroup jobs;
+	/// Called on the main thread after each finished job (the face scan hangs here).
+	void delegate() onDone;
 	private bool[long] running; // root ids with a job in flight
 	private bool[long] again; // roots asked for again while running
 
@@ -71,6 +73,8 @@ final class Indexer
 				again.remove(rootId);
 				new Job(this, rootId, path).run();
 			}
+			if (onDone)
+				onDone();
 		});
 	}
 

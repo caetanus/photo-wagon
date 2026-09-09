@@ -32,6 +32,8 @@ import photowagon.ui.transport : Bridge;
     Signal!() currentChanged;
     Signal!() endpointChanged;
     Signal!() pairingChanged;
+    Signal!() peopleChanged;
+    Signal!() facesChanged;
 
     /// {"total":N,"offset":o,"items":[Photo…]} — accumulated across loadPage calls.
     @Property("pageChanged")    string page   = `{"total":0,"offset":0,"items":[]}`;
@@ -59,12 +61,20 @@ import photowagon.ui.transport : Bridge;
     @Property("endpointChanged") bool computerConnected = false;
     /// Desktop: {enabled, port, addrs, code, qr:{width, rows}} while a phone may pair.
     @Property("pairingChanged") string pairing = `{"enabled":false}`;
+    /// {"people":[{id,name,faces,coverUrl}]} — clusters of faces, most photos first.
+    @Property("peopleChanged") string people = `{"people":[]}`;
+    /// {"photoId":N,"faces":[{id,x,y,w,h,personId,name,thumbUrl}]} for the open photo.
+    @Property("facesChanged") string faces = `{"photoId":0,"faces":[]}`;
+    /// The person the grid is filtered to (0 = none).
+    @Property("peopleChanged") int personFilter = 0;
 
     private Bridge client;
     private string[long] thumbCache; // id → data: URL, remote only
     private JSONValue[] items;
     private long total;
     private int fYear, fMonth, fDay;
+    private long fPerson;
+    private long openId; // photo being opened/shown; faces answers for others are dropped
     private int pageLimit = 120;
     private bool indexing;
     private string progressText;
@@ -109,14 +119,40 @@ import photowagon.ui.transport : Bridge;
         });
     }
 
-    /// offset 0 restarts the list; year/month/day 0 mean "no filter".
+    /// offset 0 restarts the list; year/month/day 0 mean "no filter". A date
+    /// filter replaces a person filter and vice versa.
     @Slot void loadPage(int offset, int limit, int year, int month, int day)
     {
         if (offset == 0)
         {
-            items.length = 0;
             fYear = year; fMonth = month; fDay = day;
+            if (year)
+                setPersonFilter(0);
         }
+        reload(offset, limit);
+    }
+
+    /// Grid = photos of one person (0 clears). Clears any date filter.
+    @Slot void filterPerson(int personId)
+    {
+        setPersonFilter(personId == fPerson ? 0 : personId);
+        fYear = fMonth = fDay = 0;
+        reload(0, pageLimit);
+    }
+
+    private void setPersonFilter(long id)
+    {
+        if (fPerson == id)
+            return;
+        fPerson = id;
+        personFilter = cast(int) id;
+        peopleChanged.emit();
+    }
+
+    private void reload(int offset, int limit)
+    {
+        if (offset == 0)
+            items.length = 0;
         if (limit > 0)
             pageLimit = limit;
         JSONValue params = JSONValue.emptyObject;
@@ -125,6 +161,7 @@ import photowagon.ui.transport : Bridge;
         if (fYear)  params["year"]  = fYear;
         if (fMonth) params["month"] = fMonth;
         if (fDay)   params["day"]   = fDay;
+        if (fPerson) params["personId"] = fPerson;
         immutable off = offset;
         client.request("library.page", params, (r, e) {
             if (e.type != JSONType.null_) { report("page", e); return; }
@@ -156,11 +193,13 @@ import photowagon.ui.transport : Bridge;
         loadRoots();
         loadAlbums();
         loadPeers();
-        loadPage(0, pageLimit, fYear, fMonth, fDay);
+        loadPeople();
+        reload(0, pageLimit);
     }
 
     @Slot void openPhoto(int id)
     {
+        openId = id;
         JSONValue params = ["id": JSONValue(id)];
         client.request("photo.get", params, (r, e) {
             if (e.type != JSONType.null_) { report("photo.get", e); return; }
@@ -169,6 +208,8 @@ import photowagon.ui.transport : Bridge;
             if (fYear)  nb["year"]  = fYear;
             if (fMonth) nb["month"] = fMonth;
             if (fDay)   nb["day"]   = fDay;
+            if (fPerson) nb["personId"] = fPerson;
+            loadFaces(id);
             client.request("photo.neighbours", nb, (n, e2) {
                 JSONValue photo = r;
                 photo["prev"] = (e2.type == JSONType.null_ && "prev" in n) ? n["prev"] : JSONValue(null);
@@ -201,8 +242,74 @@ import photowagon.ui.transport : Bridge;
 
     @Slot void closePhoto()
     {
+        openId = 0;
         current = "";
         currentChanged.emit();
+        faces = `{"photoId":0,"faces":[]}`;
+        facesChanged.emit();
+    }
+
+    // ---- people ----------------------------------------------------------------
+
+    @Slot void loadPeople()
+    {
+        client.request("people.list", (r, e) {
+            if (e.type != JSONType.null_) return;
+            people = r.toString();
+            peopleChanged.emit();
+        });
+    }
+
+    @Slot void renamePerson(int id, string name)
+    {
+        JSONValue params = ["id": JSONValue(id), "name": JSONValue(name.strip())];
+        client.request("people.rename", params, (r, e) {
+            if (e.type != JSONType.null_) { report("rename", e); return; }
+            loadPeople();
+        });
+    }
+
+    @Slot void mergePeople(int id, int into)
+    {
+        JSONValue params = ["id": JSONValue(id), "into": JSONValue(into)];
+        client.request("people.merge", params, (r, e) {
+            if (e.type != JSONType.null_) { report("merge", e); return; }
+            if (fPerson == id)
+                setPersonFilter(into);
+            loadPeople();
+            reload(0, pageLimit);
+        });
+    }
+
+    /// Names a face: an existing person (personId > 0), a person by name
+    /// (created when new), or nobody (both empty).
+    @Slot void setFacePerson(int faceId, int personId, string name)
+    {
+        JSONValue params = JSONValue.emptyObject;
+        params["faceId"] = faceId;
+        if (personId > 0) params["personId"] = personId;
+        if (name.strip().length) params["name"] = name.strip();
+        client.request("face.setPerson", params, (r, e) {
+            if (e.type != JSONType.null_) { report("setFacePerson", e); return; }
+            loadPeople();
+            if (openId)
+                loadFaces(openId);
+        });
+    }
+
+    @Slot void scanFaces()
+    {
+        client.request("faces.scan", (r, e) { if (e.type != JSONType.null_) report("faces.scan", e); });
+    }
+
+    private void loadFaces(long photoId)
+    {
+        JSONValue params = ["id": JSONValue(photoId)];
+        client.request("photo.faces", params, (r, e) {
+            if (e.type != JSONType.null_ || openId != photoId) return;
+            faces = r.toString();
+            facesChanged.emit();
+        });
     }
 
     @Slot void next() { step("next"); }
@@ -317,14 +424,30 @@ import photowagon.ui.transport : Bridge;
             setStatus(true, false, progressText);
             loadDates();
             loadRoots();
-            loadPage(0, pageLimit, fYear, fMonth, fDay);
+            reload(0, pageLimit);
             break;
         case "library.changed":
             loadDates();
-            loadPage(0, pageLimit, fYear, fMonth, fDay);
+            reload(0, pageLimit);
             break;
         case "p2p.peer":
             loadPeers();
+            break;
+        case "faces.progress":
+            setStatus(true, true, "faces: " ~ data["done"].integer.to!string ~ " / " ~ data["total"].integer.to!string
+                ~ " photos, " ~ data["faces"].integer.to!string ~ " found");
+            break;
+        case "faces.done":
+            setStatus(true, indexing, data["faces"].integer.to!string ~ " face" ~ (data["faces"].integer == 1 ? "" : "s")
+                ~ " in " ~ data["photos"].integer.to!string ~ " photos");
+            loadPeople();
+            break;
+        case "people.changed":
+            loadPeople();
+            if (openId)
+                loadFaces(openId);
+            if (fPerson)
+                reload(0, pageLimit);
             break;
         case "p2p.fetch":
             setStatus(true, indexing, "fetching album " ~ data["done"].integer.to!string

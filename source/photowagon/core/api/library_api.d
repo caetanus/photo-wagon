@@ -77,6 +77,7 @@ Filter filterOf(JSONValue p)
 	Filter f;
 	f.rootId = getLong(p, "rootId");
 	f.albumId = getLong(p, "albumId");
+	f.personId = getLong(p, "personId");
 	f.year = cast(int) getLong(p, "year");
 	f.month = cast(int) getLong(p, "month");
 	f.day = cast(int) getLong(p, "day");

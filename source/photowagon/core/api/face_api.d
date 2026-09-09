@@ -47,8 +47,9 @@ void registerFaceApi(Registry r, FaceRepo faces, FaceService service, ContentSto
 	r.add("face.setPerson", (JSONValue p) {
 		import std.string : strip;
 
-		immutable person = service.assignFace(requireLong(p, "faceId"), getLong(p, "personId"), getString(p, "name", "").strip);
-		return JSONValue(["personId": person ? JSONValue(person) : JSONValue(null)]);
+		long followed;
+		immutable person = service.assignFace(requireLong(p, "faceId"), getLong(p, "personId"), getString(p, "name", "").strip, followed);
+		return JSONValue(["personId": person ? JSONValue(person) : JSONValue(null), "followed": JSONValue(followed)]);
 	});
 
 	r.add("faces.scan", (JSONValue p) {

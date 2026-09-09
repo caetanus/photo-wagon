@@ -291,9 +291,15 @@ import photowagon.ui.transport : Bridge;
         if (name.strip().length) params["name"] = name.strip();
         client.request("face.setPerson", params, (r, e) {
             if (e.type != JSONType.null_) { report("setFacePerson", e); return; }
+            immutable followed = "followed" in r ? r["followed"].integer : 0;
+            if (followed)
+                setStatus(true, indexing, followed.to!string ~ " other face" ~ (followed == 1 ? "" : "s")
+                    ~ " that looked like this one moved too");
             loadPeople();
             if (openId)
                 loadFaces(openId);
+            if (fPerson)
+                reload(0, pageLimit);
         });
     }
 

@@ -14,14 +14,15 @@ import std.math : sqrt;
 
 /// Centroid cosine needed to join an existing person.
 enum joinThreshold = 0.45f;
-/// Centroid cosine at which two persons are the same one.
-enum mergeThreshold = 0.55f;
+/// Centroid cosine at which two persons are the same one. Siblings measured
+/// at 0.72 on a real library, so this stays well above that.
+enum mergeThreshold = 0.75f;
 /// A face narrower than this (pixels of the original) or less confident than
 /// `minScore` is stored but not clustered.
 enum minFaceWidth = 48;
 enum minScore = 0.8f;
 /// Bump when the rule changes: libraries clustered by an older rule are redone.
-enum clusterVersion = 2;
+enum clusterVersion = 3;
 
 bool eligible(float widthPx, float score) pure nothrow @nogc
 {
@@ -66,6 +67,65 @@ float dot(const ref float[128] a, const ref float[128] b) pure nothrow @nogc
 	foreach (i; 0 .. 128)
 		s += a[i] * b[i];
 	return s;
+}
+
+/// A face the split works on: id, embedding, and where it ends up.
+struct SplitFace
+{
+	long id;
+	float[128] embedding;
+	bool moves;
+}
+
+/// Two persons look alike (siblings): the user just said face `seed` belongs
+/// to B, not A. Decide for every other face of A whether it follows: a face
+/// moves when it is closer to B's centroid than to A's and clears
+/// `joinThreshold` towards B. B starts as the seed (plus what B already
+/// held); a few rounds let both centroids settle. Returns the ids that move.
+long[] splitTowards(SplitFace[] facesOfA, const(float[128])[] alreadyInB, const ref float[128] seed)
+{
+	float[128] sumA = 0, sumB = unit(seed);
+	uint nB = 1;
+	foreach (ref e; alreadyInB)
+	{
+		auto u = unit(e);
+		sumB[] += u[];
+		nB++;
+	}
+	foreach (ref f; facesOfA)
+	{
+		f.moves = false;
+		auto u = unit(f.embedding);
+		sumA[] += u[];
+	}
+	foreach (round; 0 .. 4)
+	{
+		auto mA = unit(sumA);
+		auto mB = unit(sumB);
+		float[128] newA = 0, newB = sumB;
+		newB = 0;
+		// B keeps its seed and prior members
+		newB[] += unit(seed)[];
+		foreach (ref e; alreadyInB)
+			newB[] += unit(e)[];
+		foreach (ref f; facesOfA)
+		{
+			auto u = unit(f.embedding);
+			immutable a = dot(mA, u), b = dot(mB, u);
+			f.moves = b > a && b >= joinThreshold;
+			if (f.moves)
+				newB[] += u[];
+			else
+				newA[] += u[];
+		}
+		sumA = newA;
+		sumB = newB;
+	}
+	long[] out_;
+	foreach (ref f; facesOfA)
+		if (f.moves)
+			out_ ~= f.id;
+	return out_;
 }
 
 final class ClusterIndex
@@ -217,4 +277,32 @@ unittest
 	idx.merge(m[0][0], m[0][1]);
 	assert(idx.personCount == 2);
 	assert(eligible(100, 0.9) && !eligible(20, 0.9) && !eligible(100, 0.5));
+}
+
+unittest
+{
+	// two look-alikes: A around axis 0, B around axis 0 tilted towards axis 1
+	import std.random : Random, uniform;
+
+	auto rng = Random(7);
+	SplitFace[] a;
+	float[128] seed = 0;
+	foreach (i; 0 .. 40)
+	{
+		SplitFace f;
+		f.id = i + 1;
+		f.embedding = 0;
+		immutable isB = i % 2 == 1;
+		f.embedding[0] = 1;
+		f.embedding[1] = isB ? 0.7 : 0.05;
+		f.embedding[2] = uniform(-0.15f, 0.15f, rng);
+		f.embedding[3] = isB ? uniform(-0.1f, 0.1f, rng) : 0;
+		a ~= f;
+	}
+	seed[0] = 1;
+	seed[1] = 0.75;
+	auto moved = splitTowards(a, [], seed);
+	assert(moved.length == 20, "expected the 20 look-alikes to move");
+	foreach (id; moved)
+		assert(id % 2 == 0);
 }

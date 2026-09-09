@@ -89,14 +89,14 @@ name until the user gives one. Face boxes are fractions of the rotated image.
 | `people.rename` | `{id, name}` | `{}` (empty name = unnamed again) |
 | `people.merge` | `{id, into}` | `{}` — faces of `id` join `into`, `id` disappears |
 | `photo.faces` | `{id}` | `{photoId, faces: [{id, photoId, x, y, w, h, score, thumbUrl?, personId?, name?}]}` |
-| `face.setPerson` | `{faceId, personId?, name?}` | `{personId?}` — an existing person, a person by name (created when new), or nobody |
+| `face.setPerson` | `{faceId, personId?, name?}` | `{personId?, followed}` — an existing person, a person by name (created when new), or nobody. When the face leaves one person for another, the old person's faces that look more like the new one follow (`followed` = how many): name one face of a look-alike sibling and hers move with it |
 | `faces.scan` | — | `{}` — scans what is unscanned (also runs after every index job) |
 | `faces.recluster` | — | `{}` — regroups every unnamed face with the current rule (named people keep theirs) |
 | `faces.status` | — | `{available, running, scanned, total, known, people}` |
 
 Grouping: a face joins the person whose centroid is closest when the cosine
-is ≥ 0.45; persons closer than 0.55 are merged after a scan (never two named
-ones). Faces narrower than 48 px or scored below 0.8 are kept but not grouped:
+is ≥ 0.45; persons closer than 0.75 are merged after a scan (never two named
+ones; siblings measure about 0.72). Faces narrower than 48 px or scored below 0.8 are kept but not grouped:
 they show in the viewer as "Who is this?" and can be named by hand.
 
 `library.page` and `photo.neighbours` accept `personId` to restrict to one person.

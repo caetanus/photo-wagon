@@ -15,7 +15,7 @@ import libp2p.util.fibers : FiberGroup;
 import photowagon.core.config : Config;
 import photowagon.core.db.sqlite : Database;
 import photowagon.core.db.schema : getSetting, setSetting;
-import photowagon.core.faces.cluster : ClusterIndex, eligible, clusterVersion;
+import photowagon.core.faces.cluster : ClusterIndex, SplitFace, eligible, clusterVersion, splitTowards;
 import photowagon.core.faces.detect : FaceHit, detectFaces, initFaces;
 import photowagon.core.faces.repo : FaceRepo;
 import photowagon.core.ipc.events : Events;
@@ -288,8 +288,12 @@ final class FaceService
 
 	// ---- edits from the UI --------------------------------------------------------------------
 
-	/// Puts a face under `personId`, or under a person called `name` (created when new).
-	long assignFace(long faceId, long personId, string name)
+	/// Puts a face under `personId`, or under a person called `name` (created
+	/// when new). When the face leaves a person for another one, the faces of
+	/// the old person that look more like the new one follow it (this is how
+	/// a look-alike — a sibling — gets separated: name one of her faces).
+	/// Returns the person and how many other faces followed.
+	long assignFace(long faceId, long personId, string name, out long followed)
 	{
 		auto before = faces.face(faceId);
 		if (personId == 0 && name.length)
@@ -304,9 +308,48 @@ final class FaceService
 			cluster.remove(before.personId, e);
 		if (personId)
 			cluster.add(personId, e, faces.person(personId).name !is null);
+
+		if (before.personId && personId && before.personId != personId)
+			followed = splitPerson(before.personId, personId, faceId, e);
+
 		faces.pruneEmptyPersons();
 		events.emit("people.changed", JSONValue.emptyObject);
 		return personId;
+	}
+
+	/// Moves the faces of `from` that look more like `into` (seeded by `seedId`).
+	private long splitPerson(long from, long into, long seedId, const ref float[128] seed)
+	{
+		SplitFace[] ofFrom;
+		const(float[128])[] ofInto;
+		faces.eachFace((ref FaceRepo.StoredFace f) {
+			if (f.id == seedId)
+				return;
+			float[128] e = f.embedding[0 .. 128];
+			if (f.personId == from && eligible(f.widthPx, f.score))
+				ofFrom ~= SplitFace(f.id, e);
+			else if (f.personId == into)
+				ofInto ~= e;
+		});
+		if (ofFrom.length == 0)
+			return 0;
+		auto moved = splitTowards(ofFrom, ofInto, seed);
+		if (moved.length == 0)
+			return 0;
+		bool[long] movedSet;
+		foreach (id; moved)
+			movedSet[id] = true;
+		db.transaction!void({
+			foreach (ref f; ofFrom)
+				if (f.id in movedSet)
+				{
+					faces.setFacePerson(f.id, into);
+					cluster.remove(from, f.embedding);
+					cluster.add(into, f.embedding);
+				}
+		});
+		logInfo("faces: %s faces followed the correction from person %s to %s", moved.length, from, into);
+		return moved.length;
 	}
 
 	void rename(long personId, string name)

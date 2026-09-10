@@ -12,11 +12,18 @@ Item {
 
     signal open(int personId)
     signal rename(int personId, string name)
+    signal notAPerson(int personId)
+
+    /// Automatic groups this small stay behind "Show more" (mostly strangers and mistakes).
+    property int minUnnamedFaces: 3
+    property bool showAllUnnamed: false
 
     Rectangle { anchors.fill: parent; color: theme.content }
 
     readonly property var named: people.filter(p => p.name)
-    readonly property var unnamed: people.filter(p => !p.name)
+    readonly property var unnamedAll: people.filter(p => !p.name)
+    readonly property var unnamed: showAllUnnamed ? unnamedAll : unnamedAll.filter(p => p.faces >= minUnnamedFaces)
+    readonly property int hiddenUnnamed: unnamedAll.length - unnamed.length
 
     component Portrait: Item {
         id: portrait
@@ -54,6 +61,20 @@ Item {
             TapHandler {
                 onTapped: view.open(portrait.person.id)
                 onDoubleTapped: portrait.edit()
+            }
+            // "not a person" for automatic groups
+            Rectangle {
+                visible: hover.hovered && !portrait.person.name
+                anchors.top: parent.top
+                anchors.right: parent.right
+                width: 24; height: 24; radius: 12
+                color: theme.panel
+                border.color: theme.separator
+                Image { anchors.centerIn: parent; source: icons.tint(icons.close, theme.text); sourceSize.width: 12; sourceSize.height: 12 }
+                HoverHandler { id: closeHover }
+                TapHandler { onTapped: view.notAPerson(portrait.person.id) }
+                ToolTip.visible: closeHover.hovered
+                ToolTip.text: "Not a person"
             }
         }
         Label {
@@ -140,6 +161,14 @@ Item {
                     model: view.unnamed
                     delegate: Portrait { required property var modelData; person: modelData; size: 96 }
                 }
+            }
+            Label {
+                visible: view.hiddenUnnamed > 0 || view.showAllUnnamed
+                text: view.showAllUnnamed ? "Show fewer" : "Show " + view.hiddenUnnamed + " more (seen only once or twice)"
+                color: theme.accent
+                font.pixelSize: 13
+                topPadding: 8
+                TapHandler { onTapped: view.showAllUnnamed = !view.showAllUnnamed }
             }
             Label {
                 visible: view.people.length === 0

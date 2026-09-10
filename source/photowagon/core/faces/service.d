@@ -520,6 +520,27 @@ final class FaceService
 	}
 
 	/// Renames; giving a person the name of an existing one merges them.
+	/// "Not a face": the detection goes away.
+	void deleteFace(long faceId)
+	{
+		auto f = faces.face(faceId);
+		auto e = faces.embeddingOf(faceId);
+		if (f.personId)
+			cluster.remove(f.personId, e);
+		faces.deleteFace(faceId);
+		faces.pruneEmptyPersons();
+		events.emit("people.changed", JSONValue.emptyObject);
+	}
+
+	/// "Not a person": an automatic group and all its detections go away.
+	long deletePerson(long personId)
+	{
+		immutable n = faces.deletePersonWithFaces(personId);
+		loadIndex();
+		events.emit("people.changed", JSONValue.emptyObject);
+		return n;
+	}
+
 	void rename(long personId, string name)
 	{
 		immutable existing = name.length ? faces.personByName(name) : 0;

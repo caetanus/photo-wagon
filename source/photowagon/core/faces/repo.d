@@ -155,6 +155,32 @@ final class FaceRepo
 		return out_;
 	}
 
+	/// Removes one detection for good (the user said it is not a face, or not worth keeping).
+	void deleteFace(long faceId)
+	{
+		auto s = db.prepare("DELETE FROM faces WHERE id = ?");
+		s.bind(1, faceId);
+		s.run();
+		if (db.changes() == 0)
+			throw new ApiError("not_found", "no such face");
+	}
+
+	/// Removes a person and every one of its faces (an automatic group that is not a person).
+	long deletePersonWithFaces(long personId)
+	{
+		person(personId);
+		return db.transaction!long({
+			auto f = db.prepare("DELETE FROM faces WHERE person_id = ?");
+			f.bind(1, personId);
+			f.run();
+			immutable n = db.changes();
+			auto d = db.prepare("DELETE FROM persons WHERE id = ?");
+			d.bind(1, personId);
+			d.run();
+			return cast(long) n;
+		});
+	}
+
 	/// Drops stored detections below `score` (an older scan kept weaker ones).
 	long deleteBelowScore(float score)
 	{

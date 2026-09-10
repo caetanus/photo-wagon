@@ -350,6 +350,7 @@ ApplicationWindow {
                 people: root.peopleData
                 onOpen: (id) => root.openPerson(id)
                 onRename: (id, name) => library.renamePerson(id, name)
+                onNotAPerson: (id) => library.deletePerson(id)
             }
             PhotoViewer {
                 id: viewer
@@ -367,6 +368,7 @@ ApplicationWindow {
                     if (i >= root.pageData.items.length - 8 && root.pageData.offset < root.pageData.total) library.loadMore()
                 }
                 onNameFace: (faceId, personId, name) => library.setFacePerson(faceId, personId, name)
+                onNotAFace: (faceId) => library.deleteFace(faceId)
                 onFavorite: (id) => library.toggleFavorite(id)
             }
         }

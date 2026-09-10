@@ -19,6 +19,7 @@ Item {
     signal closed()
     signal openIndex(int index)
     signal nameFace(int faceId, int personId, string name)
+    signal notAFace(int faceId)
     signal favorite(int id)
 
     readonly property int currentIndex: {
@@ -67,7 +68,7 @@ Item {
         // face circles
         Item {
             id: overlay
-            visible: image.status === Image.Ready && (viewer.infoOpen || stageHover.hovered || namer.opened)
+            visible: image.status === Image.Ready && (stageHover.hovered || namer.opened)
             readonly property real px: image.x + (image.width - image.paintedWidth) / 2
             readonly property real py: image.y + (image.height - image.paintedHeight) / 2
             Repeater {
@@ -326,6 +327,7 @@ Item {
             }
             RowLayout {
                 Button { text: "Nobody"; flat: true; onClicked: { viewer.nameFace(namer.faceId, 0, ""); namer.close() } }
+                Button { text: "Not a face"; flat: true; onClicked: { viewer.notAFace(namer.faceId); namer.close() } }
                 Item { Layout.fillWidth: true }
                 Button { text: "Cancel"; onClicked: namer.close() }
                 Button { text: "Save"; enabled: nameField.text.trim().length > 0; onClicked: { viewer.nameFace(namer.faceId, 0, nameField.text); namer.close() } }

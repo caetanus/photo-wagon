@@ -421,6 +421,30 @@ import photowagon.ui.transport : Bridge;
         });
     }
 
+    /// "Not a face".
+    @Slot void deleteFace(int faceId)
+    {
+        JSONValue params = ["faceId": JSONValue(faceId)];
+        client.request("face.delete", params, (r, e) {
+            if (e.type != JSONType.null_) { report("face.delete", e); return; }
+            loadPeople();
+            if (openId)
+                loadFaces(openId);
+        });
+    }
+
+    /// "Not a person": drops an automatic group and its detections.
+    @Slot void deletePerson(int personId)
+    {
+        JSONValue params = ["id": JSONValue(personId)];
+        client.request("people.delete", params, (r, e) {
+            if (e.type != JSONType.null_) { report("people.delete", e); return; }
+            if (fPerson == personId)
+                showAll();
+            loadPeople();
+        });
+    }
+
     @Slot void scanFaces()
     {
         client.request("faces.scan", (r, e) { if (e.type != JSONType.null_) report("faces.scan", e); });

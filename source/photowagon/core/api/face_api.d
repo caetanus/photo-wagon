@@ -52,6 +52,15 @@ void registerFaceApi(Registry r, FaceRepo faces, FaceService service, ContentSto
 		return JSONValue(["personId": person ? JSONValue(person) : JSONValue(null), "followed": JSONValue(followed)]);
 	});
 
+	r.add("face.delete", (JSONValue p) {
+		service.deleteFace(requireLong(p, "faceId"));
+		return obj();
+	});
+
+	r.add("people.delete", (JSONValue p) {
+		return JSONValue(["faces": JSONValue(service.deletePerson(requireLong(p, "id")))]);
+	});
+
 	r.add("faces.scan", (JSONValue p) {
 		if (!service.available)
 			throw new ApiError("faces_off", "the face models did not load");

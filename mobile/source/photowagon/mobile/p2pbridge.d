@@ -11,7 +11,7 @@
 // host:port typed by hand; while the libp2p stream is up it has the floor.
 module photowagon.mobile.p2pbridge;
 
-import photowagon.mobile.plog : plog;
+import photowagon.mobile.plog : plog, useCrashStack;
 
 import core.sync.mutex : Mutex;
 import core.time : msecs, seconds;
@@ -67,11 +67,11 @@ final class P2pBridge : Bridge
         this.settingsDir = settingsDir;
         identityFile = buildPath(settingsDir, "identity.seed");
         lock = new Mutex;
-        link = new InProcessLink;
+        link = new InProcessLink(false);   // the session polls; no vibe event from the Qt thread
         tcp = new TcpBridge;
         tcp.onEvent = (string ev, JSONValue data) { if (!p2pUp && onEvent) onEvent(ev, data); };
         tcp.onConnected = (bool up) { if (!p2pUp && onConnected) onConnected(up); };
-        tcp.onScanned = &adoptCode;
+        tcp.onScanned = (string c) { adoptCode(c); };
     }
 
     override void start()
@@ -95,17 +95,19 @@ final class P2pBridge : Bridge
             fallback.connectTimeout(&drain);
             fallback.start();
         }
-        // the saved pairing code, if it has libp2p addresses
-        immutable saved = buildPath(settingsDir, "endpoint");
+        // the last pairing code with libp2p addresses (TcpBridge's "endpoint" file keeps
+        // only the host:port part of a code, so we keep our own copy)
+        immutable saved = buildPath(settingsDir, "p2p-code");
         if (saved.exists)
         {
             try
-                adoptCode(readText(saved).strip());
+                adoptCode(readText(saved).strip(), false);
             catch (Exception e)
-                plog("p2p: saved endpoint unusable: ", e.msg);
+                plog("p2p: saved code unusable: ", e.msg);
         }
         import core.thread : Thread;
         auto t = new Thread(&loop);
+        t.name = "libp2p";
         t.isDaemon = true;
         t.start();
         tcp.start();
@@ -125,7 +127,7 @@ final class P2pBridge : Bridge
     }
 
     /// A pairing code: the libp2p addresses, if it has any.
-    private void adoptCode(string code)
+    private void adoptCode(string code, bool save = true)
     {
         try
         {
@@ -134,6 +136,12 @@ final class P2pBridge : Bridge
             {
                 clearTarget();
                 return;
+            }
+            if (save)
+            {
+                import std.file : write, mkdirRecurse;
+                mkdirRecurse(settingsDir);
+                write(buildPath(settingsDir, "p2p-code"), code);
             }
             synchronized (lock)
             {
@@ -206,15 +214,39 @@ final class P2pBridge : Bridge
     {
         import vibe.core.core : runTask, runEventLoop;
 
+        useCrashStack();
+        {   // vibe's own diagnostics (the exit reason of the loop, for one) → stderr → logcat
+            import vibe.core.log : setLogLevel, LogLevel;
+            setLogLevel(LogLevel.debug_);
+        }
+        // If vibe's event loop ever returns or throws (it did on Android, with "May not
+        // process events within an active yieldLock()" — a per-thread counter left
+        // behind, which the same thread cannot shake off), say so and hand the job to a
+        // fresh thread. This one parks for good: ending it runs vibe's thread
+        // destructors over the dead tasks, which crashed.
+        plog("p2p: thread starting");
         runTask(() nothrow {
             try
                 client();
             catch (Exception e)
             {
-                try plog("p2p: thread died: ", e.msg); catch (Exception) {}
+                try plog("p2p: client task died: ", e.msg); catch (Exception) {}
             }
         });
-        runEventLoop();
+        try
+            runEventLoop();
+        catch (Throwable e)   // an Error too: a thread dies silently on one, the runtime tells nobody
+            plog("p2p: event loop threw: ", e.toString());
+        plog("p2p: event loop exited; a new thread takes over");
+        deliverLink(false, null, "event loop exited");
+        import core.thread : Thread;
+        Thread.sleep(2.seconds);
+        auto next = new Thread(&loop);
+        next.name = "libp2p";
+        next.isDaemon = true;
+        next.start();
+        for (;;)
+            Thread.sleep(3600.seconds);
     }
 
     private void client()
@@ -309,10 +341,11 @@ final class P2pBridge : Bridge
             }
             catch (Exception) {}
             done = true;
-            try link.submit(""); catch (Exception) {}   // wake the writer so it notices
         });
         cast(void) reader;
-        int seen = link.emitCount;
+        // Polling rather than the link's shared ManualEvent: on Android vibe's
+        // per-thread event for it comes back invalid (an assertion in
+        // threadlocalwaiter.d), and 20 ms of latency on a phone is nothing.
         while (!done)
         {
             foreach (line; link.takeInbox())
@@ -323,7 +356,7 @@ final class P2pBridge : Bridge
                 v = target.version_;
             if (v != t.version_)
                 break;                                    // a new code: drop this session
-            seen = link.waitForInput(seen);
+            sleep(20.msecs);
         }
         deliverLink(false, null, "connection closed");
     }

@@ -21,7 +21,7 @@ Item {
     /// Opens "Who is this?" on the first face with `text` typed (capture hook).
     function openNamer(text) {
         if (!faces.length) return
-        namer.faceId = faces[0].id; namer.currentName = faces[0].name || ""
+        namer.faceId = faces[0].id; namer.currentName = faces[0].name || ""; namer.personId = faces[0].personId || 0
         namer.open()
         nameField.text = text
     }
@@ -32,6 +32,23 @@ Item {
     signal notAFace(int faceId)
     signal favorite(int id)
     signal setKind(int id, string kind)
+    signal setCover(int personId, int faceId)
+    signal fullscreenToggle()
+    signal contextMenu(int id, string path, bool favorite)
+    /// parsed library.candidates, for the naming popup
+    property var candidates: ({ faceId: 0, people: [] })
+    property bool fullscreen: false
+
+    // ---- zoom: wheel, double-click, +/-/0; drag to pan when zoomed in ----------------
+    property real zoom: 1
+    property real panX: 0
+    property real panY: 0
+    function setZoom(z) {
+        zoom = Math.max(1, Math.min(8, z))
+        if (zoom === 1) { panX = 0; panY = 0 }
+    }
+    function resetZoom() { zoom = 1; panX = 0; panY = 0 }
+    onPhotoChanged: resetZoom()
 
     readonly property int currentIndex: {
         if (!photo) return -1
@@ -39,14 +56,23 @@ Item {
         return -1
     }
 
-    Rectangle { anchors.fill: parent; color: theme.viewerBg }
+    Rectangle { anchors.fill: parent; color: viewer.fullscreen ? "black" : theme.viewerBg }
 
     focus: visible
     Keys.onPressed: (event) => {
-        if (event.key === Qt.Key_Escape) { viewer.closed(); event.accepted = true }
+        if (event.key === Qt.Key_Escape) {
+            if (viewer.zoom !== 1) viewer.resetZoom()
+            else if (viewer.fullscreen) viewer.fullscreenToggle()
+            else viewer.closed()
+            event.accepted = true
+        }
         else if (event.key === Qt.Key_Left) { viewer.step(-1); event.accepted = true }
         else if (event.key === Qt.Key_Right || event.key === Qt.Key_Space) { viewer.step(1); event.accepted = true }
         else if (event.key === Qt.Key_I) { viewer.infoOpen = !viewer.infoOpen; event.accepted = true }
+        else if (event.key === Qt.Key_F || event.key === Qt.Key_F11) { viewer.fullscreenToggle(); event.accepted = true }
+        else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) { viewer.setZoom(viewer.zoom * 1.25); event.accepted = true }
+        else if (event.key === Qt.Key_Minus) { viewer.setZoom(viewer.zoom / 1.25); event.accepted = true }
+        else if (event.key === Qt.Key_0) { viewer.resetZoom(); event.accepted = true }
     }
 
     function step(delta) {
@@ -64,8 +90,12 @@ Item {
 
         Image {
             id: image
-            anchors.fill: parent
-            anchors.margins: 12
+            width: stage.width - 24
+            height: stage.height - 24
+            x: 12 + viewer.panX
+            y: 12 + viewer.panY
+            scale: viewer.zoom
+            transformOrigin: Item.Center
             source: viewer.photo ? viewer.photo.fileUrl : ""
             asynchronous: true
             fillMode: Image.PreserveAspectFit
@@ -80,11 +110,35 @@ Item {
         }
         HoverHandler { id: stageHover }
         BusyIndicator { anchors.centerIn: parent; running: image.status === Image.Loading; visible: running }
+        WheelHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            onWheel: (ev) => { viewer.setZoom(viewer.zoom * (ev.angleDelta.y > 0 ? 1.15 : 1 / 1.15)); ev.accepted = true }
+        }
+        PinchHandler {
+            target: null
+            onScaleChanged: (delta) => viewer.setZoom(viewer.zoom * delta)
+        }
+        DragHandler {
+            target: null
+            enabled: viewer.zoom > 1
+            property real startX: 0
+            property real startY: 0
+            onActiveChanged: if (active) { startX = viewer.panX; startY = viewer.panY }
+            onTranslationChanged: { viewer.panX = startX + translation.x; viewer.panY = startY + translation.y }
+        }
+        TapHandler {
+            acceptedButtons: Qt.LeftButton
+            onDoubleTapped: viewer.setZoom(viewer.zoom === 1 ? 2.5 : 1)
+        }
+        TapHandler {
+            acceptedButtons: Qt.RightButton
+            onTapped: if (viewer.photo) viewer.contextMenu(viewer.photo.id, viewer.photo.path || "", viewer.photo.favorite === true)
+        }
 
         // face circles
         Item {
             id: overlay
-            visible: image.status === Image.Ready && (stageHover.hovered || namer.opened)
+            visible: image.status === Image.Ready && viewer.zoom === 1 && (stageHover.hovered || namer.opened)
             readonly property real px: image.x + (image.width - image.paintedWidth) / 2
             readonly property real py: image.y + (image.height - image.paintedHeight) / 2
             Repeater {
@@ -122,7 +176,7 @@ Item {
                             font.pixelSize: 12
                         }
                     }
-                    TapHandler { onTapped: { namer.faceId = fbox.modelData.id; namer.currentName = fbox.modelData.name || ""; namer.open() } }
+                    TapHandler { onTapped: { namer.faceId = fbox.modelData.id; namer.currentName = fbox.modelData.name || ""; namer.personId = fbox.modelData.personId || 0; namer.open() } }
                 }
             }
         }
@@ -362,7 +416,7 @@ Item {
                                     smooth: true
                                 }
                                 Rectangle { anchors.fill: parent; radius: width / 2; color: "transparent"; border.color: theme.separator; border.width: 1 }
-                                TapHandler { onTapped: { namer.faceId = pf.modelData.id; namer.currentName = pf.modelData.name || ""; namer.open() } }
+                                TapHandler { onTapped: { namer.faceId = pf.modelData.id; namer.currentName = pf.modelData.name || ""; namer.personId = pf.modelData.personId || 0; namer.open() } }
                             }
                             Label {
                                 anchors.horizontalCenter: parent.horizontalCenter
@@ -386,10 +440,19 @@ Item {
         id: namer
         property int faceId: 0
         property string currentName: ""
-        // the named people, alphabetical, narrowed by what is typed (prefix of a word first)
+        property int personId: 0
+        // the named people, alphabetical, narrowed by what is typed (prefix of a word first);
+        // with nothing typed, the likely ones (closest to this face) come first
         readonly property var matches: {
             const q = nameField.text.trim().toLowerCase()
             const named = viewer.people.filter(p => p.name)
+            if (!q.length && viewer.candidates.faceId === namer.faceId && viewer.candidates.people.length) {
+                const likely = viewer.candidates.people.filter(p => p.name && p.similarity >= 0.3)
+                const seen = {}
+                likely.forEach(p => seen[p.id] = true)
+                const rest = named.filter(p => !seen[p.id]).sort((a, b) => a.name.localeCompare(b.name, Qt.locale().name, { sensitivity: "base" }))
+                return likely.concat(rest)
+            }
             const score = p => {
                 const n = p.name.toLowerCase()
                 if (!q.length) return 0
@@ -409,7 +472,7 @@ Item {
         width: 400
         padding: 16
         background: Rectangle { color: theme.panel; border.color: theme.separator; radius: 10 }
-        onOpened: { nameField.text = currentName; nameField.forceActiveFocus(); nameField.selectAll(); cursor = -1 }
+        onOpened: { nameField.text = currentName; nameField.forceActiveFocus(); nameField.selectAll(); cursor = -1; library.loadCandidates(faceId) }
         ColumnLayout {
             id: namerBody
             anchors.fill: parent
@@ -486,6 +549,12 @@ Item {
                             Layout.fillWidth: true
                         }
                         Label {
+                            visible: personRow.modelData.similarity !== undefined
+                            text: personRow.modelData.similarity !== undefined ? Math.round(personRow.modelData.similarity * 100) + "%" : ""
+                            color: theme.accent
+                            font.pixelSize: 11
+                        }
+                        Label {
                             text: personRow.modelData.faces + (personRow.modelData.faces === 1 ? " photo" : " photos")
                             color: theme.muted
                             font.pixelSize: 11
@@ -506,6 +575,12 @@ Item {
             RowLayout {
                 Button { text: "Nobody"; flat: true; onClicked: { viewer.nameFace(namer.faceId, 0, ""); namer.close() } }
                 Button { text: "Not a face"; flat: true; onClicked: { viewer.notAFace(namer.faceId); namer.close() } }
+                Button {
+                    visible: namer.personId > 0
+                    text: "Use as portrait"; flat: true
+                    ToolTip.text: "This face becomes " + namer.currentName + "'s picture in People"; ToolTip.visible: hovered
+                    onClicked: { viewer.setCover(namer.personId, namer.faceId); namer.close() }
+                }
                 Item { Layout.fillWidth: true }
                 Button { text: "Cancel"; onClicked: namer.close() }
                 Button {

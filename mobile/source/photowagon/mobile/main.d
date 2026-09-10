@@ -5,7 +5,7 @@
 // PW_PHONE_ROOTS=/dir[:/dir] standing in for DCIM/ and Pictures/).
 module photowagon.mobile.main;
 
-import photowagon.mobile.plog : plog, installCrashHandler, captureStdioToLogcat;
+import photowagon.mobile.plog : plog, installCrashHandler, captureStdioToLogcat, logTls;
 
 import qt.quick.qguiapplication;
 import qt.quick.qcoreapplication;
@@ -109,6 +109,13 @@ int main()
         environment["QSG_RENDER_TIMING"] = "1";  // per-frame polish / sync / render times: where a stall is spent
     }
     installCrashHandler();
+    logTls("qt thread");
+    {
+        import core.thread : Thread;
+        auto probe = new Thread({ logTls("a new thread"); });
+        probe.start();
+        probe.join();
+    }
 
     cast(void) createApp(APP_ID);
     QCoreApplication.setOrganizationName("PhotoWagon");
@@ -147,5 +154,12 @@ int main()
     if (rootObjects.length == 0 || failed)
         return 1;
 
-    return QCoreApplication.exec();
+    immutable rc = QCoreApplication.exec();
+    // Leave without returning: returning from a D main() tears the runtime down
+    // (rt_term) while the decoder, sync and libp2p threads still run, and the
+    // next allocation on any of them is a SIGSEGV — what Android's Back key did
+    // to the app for a while. exit() ends the process with them.
+    plog("phone: exiting ", rc);
+    import core.stdc.stdlib : exit;
+    exit(rc);
 }

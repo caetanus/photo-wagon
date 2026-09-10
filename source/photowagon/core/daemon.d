@@ -54,6 +54,7 @@ final class Daemon : ServerControl
 	private InProcessLink link; // null when headless
 	private Database db;
 	private IpcServer ipc;
+	private string ipcAddress;
 	private Registry registry;
 	private Events events;
 	private string token;
@@ -123,7 +124,7 @@ final class Daemon : ServerControl
 		registerLibraryApi(registry, roots, photos, dates, indexer, events, kinds, () { facesService.start(); });
 		registerMediaApi(registry, photos, store);
 		registerImportApi(registry, cfg, roots, photos, indexer);
-		registerFaceApi(registry, faceRepo, facesService, store);
+		registerFaceApi(registry, faceRepo, facesService, store, events);
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerP2pApi(registry, node, sharing);
 		if (node !is null)
@@ -149,8 +150,12 @@ final class Daemon : ServerControl
 
 	ushort startServing(string address)
 	{
+		// a loopback listener (--port for tools) does not serve a phone: reopen on the LAN
+		if (ipc !is null && address != ipcAddress && address == "0.0.0.0")
+			stopServing();
 		if (ipc !is null)
 			return ipcPortInUse;
+		ipcAddress = address;
 		mkdirRecurse(cfg.runtimeDir);
 		ipc = new IpcServer(registry, events, token);
 		ipcPortInUse = ipc.listen(address, cfg.ipcPort);

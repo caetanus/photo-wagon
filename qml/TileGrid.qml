@@ -24,6 +24,10 @@ Item {
         cellHeight: tiles.tileHeight + 12
         model: tiles.model
         ScrollBar.vertical: ScrollBar { }
+        WheelHandler {
+            acceptedDevices: PointerDevice.Mouse
+            onWheel: (ev) => { view.contentY = Math.max(0, Math.min(Math.max(0, view.contentHeight - view.height), view.contentY - ev.angleDelta.y * 3.2)); ev.accepted = true }
+        }
         delegate: Item {
             id: card
             required property var modelData

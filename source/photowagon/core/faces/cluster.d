@@ -243,6 +243,43 @@ final class ClusterIndex
 		return out_;
 	}
 
+	/// Every person ranked by how close its centroid is to `embedding`, closest first
+	/// (at most `limit`): who a face most likely is, for the naming popup.
+	long[] rankFor(const ref float[128] embedding, out float[] scores, size_t limit = 8) const
+	{
+		// centroids are unit vectors; a raw embedding is not
+		float[128] e = embedding;
+		float n = 0;
+		foreach (v; e)
+			n += v * v;
+		n = sqrt(n);
+		if (n > 1e-9)
+			e[] /= n;
+		long[] ids;
+		float[] sims;
+		foreach (ref c; persons)
+		{
+			if (c.count == 0)
+				continue;
+			auto m = c.mean();
+			immutable sim = dot(e, m);
+			size_t at = 0;
+			while (at < sims.length && sims[at] >= sim)
+				at++;
+			if (at >= limit)
+				continue;
+			ids = ids[0 .. at] ~ c.personId ~ ids[at .. $];
+			sims = sims[0 .. at] ~ sim ~ sims[at .. $];
+			if (ids.length > limit)
+			{
+				ids.length = limit;
+				sims.length = limit;
+			}
+		}
+		scores = sims;
+		return ids;
+	}
+
 	/// Persons whose centroid is at least `threshold` close to `personId`'s, closest first.
 	long[] similarTo(long personId, float threshold, out float[] scores) const
 	{

@@ -22,10 +22,18 @@ final class InProcessLink
 	private int[2] fds;
 	private shared bool signalled;
 
-	this()
+	private bool vibeWake;
+
+	/// `vibeWake`: wake the core side through vibe's shared event (the desktop core
+	/// waits on it). The phone's libp2p thread polls instead and passes false: on
+	/// Android that event ended in vibe's "May not process events within an active
+	/// yieldLock()" and took the event loop down.
+	this(bool vibeWake = true)
 	{
+		this.vibeWake = vibeWake;
 		lock = new Mutex;
-		wake = createSharedManualEvent();
+		if (vibeWake)
+			wake = createSharedManualEvent();
 		if (pipe(fds) != 0)
 			throw new Exception("cannot create wake pipe");
 		foreach (fd; fds)
@@ -39,7 +47,8 @@ final class InProcessLink
 	{
 		synchronized (lock)
 			inbox ~= line;
-		wake.emit();
+		if (vibeWake)
+			wake.emit();
 	}
 
 	/// Everything the core produced since the last call. Also clears the wake pipe.

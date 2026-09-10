@@ -88,6 +88,47 @@ What the script does, in case it has to be done by hand:
    the wrapper Qt generates.
 3. **Run.** `adb install -r`, `am start`, a screenshot and a logcat excerpt.
 
+## The emulator
+
+The app runs on the Android emulator two ways. The arm64 APK runs on the
+x86_64 image through Android's ARM translation (the API 35 Google APIs image
+has it), which is enough to see the UI come up but not to trust: the D
+garbage collector crashes under the translator within a minute. So the real
+emulator build is native x86_64:
+
+1. LDC ships no x86_64 Android runtime; `ldc-build-runtime` makes one (static
+   libraries only — the shared druntime fails to link, and against API 33 or
+   later, because x86_64 bionic offers `__tls_get_addr` only from there):
+
+   ```sh
+   ldc-build-runtime --ninja --targetSystem="Android;Linux;UNIX" \
+       --dFlags="-mtriple=x86_64-linux-android" --buildDir=/tmp/ldc-x86_64 \
+       BUILD_SHARED_LIBS=OFF CMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake \
+       ANDROID_ABI=x86_64 ANDROID_NATIVE_API_LEVEL=33 ANDROID_PLATFORM=android-33 ANDROID_STL=c++_static
+   mkdir -p ~/lab/android-d/ldc2-1.42.0-android-x86_64 && cp -r /tmp/ldc-x86_64/lib ~/lab/android-d/ldc2-1.42.0-android-x86_64/
+   ```
+   `toolchain/ldc2-android.conf` has the matching `x86_64-.*-linux-android` section.
+2. The DSide binding for x86_64 reuses the arm64 generated sources (both are
+   LP64, the Qt headers are the same): `ABI=x86_64 toolchain/build-binding.sh d`
+   then `shims`, against `~/Qt/6.11.1/android_x86_64` through
+   `toolchain/pkgconfig-x86_64`.
+3. libsodium for x86_64: `dist-build/android-x86_64.sh` (its output folder is
+   named after the CPU, `libsodium-android-westmere`) → `toolchain/android-libs/x86_64/`.
+4. `ABI=x86_64 mobile/build-android.sh` builds `build-android/x86_64/…apk`.
+
+An AVD: `avdmanager create avd -n photowagon -k "system-images;android-35;google_apis;x86_64" -d pixel_6`,
+booted headless with `emulator -avd photowagon -no-window -no-audio -gpu swiftshader_indirect`.
+Test photos go to `/sdcard/DCIM/Camera` with `adb push`. With a phone attached
+as well, `ANDROID_SERIAL=emulator-5554` picks the emulator for adb and the
+harness: `ANDROID_SERIAL=emulator-5554 APK=mobile/build-android/x86_64/photo-wagon-mobile-debug.apk mobile/adb-harness.sh --install --clear-data --exercise`.
+
+Two things the translated run taught, kept in the code: QtLoader's environment
+(`QT_PLUGIN_PATH`, QML paths) is invisible to a translated libc, so
+`MainActivity` writes it to `files/settings/qt-env` and `main.d` adopts it
+when missing; and stdout/stderr of the process go nowhere, so `plog.d`
+relays them to logcat (tag `photowagon-io`) — that is how vibe-core's
+"TaskFiber getting terminated" messages became readable.
+
 ## Testing on the phone: the adb harness
 
 `mobile/adb-harness.sh [--install] [--clear-data] [--exercise] [--seconds N] [--force]`
@@ -183,5 +224,18 @@ the phone's `127.0.0.1:47111` reach a core started with `--serve --port 47111`.
 - The photo permission is asked by the D side (`pwperm://request`) once the
   window is up; asking in `onCreate` left the window black on the SM-M625F.
 - New D modules must be added to the source list in `build-android.sh`.
+- `main()` must not return: Qt's Back key closes the window and `exec()`
+  returns; a D `main` returning runs `rt_term` while the decoder, sync and
+  libp2p threads still run, and their next allocation is a SIGSEGV. `main.d`
+  calls `exit()` instead, and the QML `onClosing` closes the viewer or the
+  drawer before letting the window go.
+- DSide's holder map (`runtime/holder/qtd_holder.cpp` in qt-dlang-gen) is
+  locked since 2026-09-10: a wrapper's GC finalizer unregisters it from
+  whichever thread collected, while the Qt thread registers new ones.
+- vibe-core's event loop on the libp2p thread ends once per session with
+  "May not process events within an active yieldLock()" (cause open); the
+  thread hands over to a fresh one and parks, the UI is told the link dropped
+  and the session redials. Ending the old thread instead crashed in vibe's
+  thread destructor.
 - The scanner needs Google Play services on the phone (the model is fetched on
   first use).

@@ -11,7 +11,7 @@
 // (or offline) everything still works on the phone alone.
 module photowagon.mobile.localbridge;
 
-import photowagon.mobile.plog : plog, timed;
+import photowagon.mobile.plog : plog, timed, useCrashStack;
 
 import std.algorithm : min;
 import std.base64 : Base64;
@@ -225,9 +225,10 @@ final class LocalBridge : Bridge
             case "album.list":      albums(cb); return;
             case "photo.faces":     faces(num(params, "id"), cb); return;
             case "people.list":     people(cb); return;
+            case "face.candidates": { auto q = params; q["inline"] = true; forward(method, q, cb); return; }
             // names, merges and corrections: the computer keeps the face database, both ways
             case "face.setPerson": case "face.delete": case "people.rename": case "people.merge":
-            case "people.delete": case "people.similar":
+            case "people.delete": case "people.similar": case "people.setCover": case "people.remove":
                 forward(method, params, cb); return;
             default:
                 timed(method, 30, { cb(handleSync(method, params), JSONValue(null)); });
@@ -793,6 +794,7 @@ final class LocalBridge : Bridge
             return;
         }
         sending = true;
+        plog("sync: photo ", id, " (", sent + sendFailed + skipped + 1, " of ", sendTotal, ") preparing");
         emit("upload.progress", JSONValue(["done": JSONValue(sent + sendFailed + skipped), "total": JSONValue(sendTotal), "id": JSONValue(id)]));
         publishSync();
         // read + hash + base64 on a thread: 15 MB files would stall the UI here
@@ -805,7 +807,8 @@ final class LocalBridge : Bridge
         immutable path = ph.path;
         immutable knownHash = ph.hash;
         import core.thread : Thread;
-        auto t = new Thread({ prepare(pr, path, knownHash); });
+        auto t = new Thread({ useCrashStack(); prepare(pr, path, knownHash); });
+        t.name = "prepare";
         t.isDaemon = true;
         t.start();
         prepPoll.start();
@@ -841,10 +844,12 @@ final class LocalBridge : Bridge
             return;
         }
         immutable hash = cast(string) pr.hash;
+        plog("sync: photo ", id, " ready, asking the computer by hash");
         JSONValue probe = ["name": JSONValue(cast(string) pr.name), "sha256": JSONValue(hash), "probe": JSONValue(true)];
         computer.request("library.import", probe, (r, e) {
             if (e.type == JSONType.null_ && r.type == JSONType.object && "existed" in r && r["existed"].type == JSONType.true_)
             {
+                plog("sync: photo ", id, " already there");
                 skipped++;
                 index.markSent(id, hash);
                 sending = false;
@@ -867,6 +872,7 @@ final class LocalBridge : Bridge
     private void finish(long id, bool ok, string error, string hash)
     {
         sending = false;
+        plog("sync: photo ", id, ok ? " sent" : " failed");
         if (ok)
         {
             sent++;

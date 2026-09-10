@@ -10,6 +10,7 @@
     <file>PeopleView.qml</file>
     <file>AlbumDialog.qml</file>
     <file>MergeSuggestion.qml</file>
+    <file>PhotoMenu.qml</file>
     <file>PeersPanel.qml</file>
     <file>PhonePanel.qml</file>
   </qresource>

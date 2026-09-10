@@ -38,6 +38,7 @@ import photowagon.ui.transport : Bridge;
     Signal!() suggestionChanged;
     Signal!() statsChanged;
     Signal!() syncChanged;
+    Signal!() candidatesChanged;
 
     /// {"total":N,"offset":o,"items":[Photo…]} — accumulated across loadPage calls.
     @Property("pageChanged")    string page   = `{"total":0,"offset":0,"items":[]}`;
@@ -77,6 +78,8 @@ import photowagon.ui.transport : Bridge;
     @Property("statsChanged") string stats = `{"total":0,"kinds":{}}`;
     /// After a naming: {"person":{…},"candidates":[{…,"similarity"}]} of people who may be the same, or "{}".
     @Property("suggestionChanged") string suggestion = "{}";
+    /// face.candidates for the face being named: {faceId, people: [{id, name, faces, coverUrl, similarity}]}
+    @Property("candidatesChanged") string candidates = `{"faceId":0,"people":[]}`;
     /// Phone: parsed library.syncStatus — {enabled, connected, active, pending, total, done, sent, skipped, failed, error}
     @Property("syncChanged") string sync = `{"enabled":false,"connected":false,"active":false,"pending":0,"total":0,"done":0,"sent":0,"skipped":0,"failed":0,"error":null}`;
     /// {"year","month","day","personId","albumId","rootId","favorites"} — what the page shows.
@@ -632,6 +635,89 @@ import photowagon.ui.transport : Bridge;
             if (current.length && parseJSON(current)["id"].integer == id)
                 openPhoto(id); // refresh the "sent" flag in the viewer
         });
+    }
+
+    /// Who a face most likely is, for the naming popup (answers land in `candidates`).
+    @Slot void loadCandidates(int faceId)
+    {
+        JSONValue params = ["id": JSONValue(faceId)];
+        if (remote) params["inline"] = true;
+        client.request("face.candidates", params, (r, e) {
+            if (e.type != JSONType.null_) return;
+            candidates = r.toString();
+            candidatesChanged.emit();
+        });
+    }
+
+    /// This face is the person's portrait from now on.
+    @Slot void setPersonCover(int personId, int faceId)
+    {
+        JSONValue params = ["id": JSONValue(personId), "faceId": JSONValue(faceId)];
+        client.request("people.setCover", params, (r, e) {
+            if (e.type != JSONType.null_) { report("setCover", e); return; }
+            loadPeople();
+        });
+    }
+
+    /// The person leaves People; the detections stay, unnamed.
+    @Slot void removePerson(int personId)
+    {
+        JSONValue params = ["id": JSONValue(personId)];
+        client.request("people.remove", params, (r, e) {
+            if (e.type != JSONType.null_) { report("removePerson", e); return; }
+            if (fPerson == personId) showAll();
+            loadPeople();
+        });
+    }
+
+    /// The same kind for many photos at once.
+    @Slot void setKinds(string idsJson, string kind)
+    {
+        foreach (v; parseJSON(idsJson).array)
+            setKind(cast(int) v.integer, kind);
+    }
+
+    /// Plain text on the clipboard (paths, a name).
+    @Slot void copyText(string text)
+    {
+        import qt.quick.qguiapplication : QGuiApplication;
+        import qt.quick.qclipboard : QClipboard;
+        QGuiApplication.clipboard().setText(text, QClipboard.Mode.Clipboard);
+    }
+
+    /// Puts the files on the clipboard: as file URLs for file managers (and the
+    /// GNOME "copy" form), and as paths as text.
+    @Slot void copyPhotos(string idsJson)
+    {
+        import qt.quick.qguiapplication : QGuiApplication;
+        import qt.quick.qmimedata : QMimeData;
+        import qt.quick.qclipboard : QClipboard;
+        import photowagon.core.library.calendar : fileUrl;
+        import std.array : join;
+
+        string[] paths;
+        foreach (v; parseJSON(idsJson).array)
+        {
+            immutable id = v.integer;
+            foreach (ref it; items)
+                if (it["id"].integer == id && "path" in it && it["path"].type == JSONType.string)
+                    paths ~= it["path"].str;
+            if (current.length)
+            {
+                auto cur = parseJSON(current);
+                if (cur["id"].integer == id && "path" in cur && cur["path"].type == JSONType.string && !paths.length)
+                    paths ~= cur["path"].str;
+            }
+        }
+        if (!paths.length) return;
+        string[] urls;
+        foreach (p; paths) urls ~= fileUrl(p);
+        auto md = new QMimeData();
+        md.setData("text/uri-list", urls.join("\r\n") ~ "\r\n");
+        md.setData("x-special/gnome-copied-files", "copy\n" ~ urls.join("\n"));
+        md.setText(paths.join("\n"));
+        QGuiApplication.clipboard().setMimeData(md, QClipboard.Mode.Clipboard);
+        setStatus(true, indexing, paths.length == 1 ? "copied 1 photo" : "copied " ~ paths.length.to!string ~ " photos");
     }
 
     /// Phone: keep the computer up to date by itself (on), or stop (off).

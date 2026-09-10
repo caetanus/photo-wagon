@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 5;
+enum currentVersion = 6;
 
 void migrate(Database db)
 {
@@ -23,6 +23,8 @@ void migrate(Database db)
 			db.exec(schemaV4);
 		if (have < 5)
 			db.exec(schemaV5);
+		if (have < 6)
+			db.exec(schemaV6);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -119,6 +121,10 @@ private enum schemaV5 = `
 ALTER TABLE photos ADD COLUMN kind TEXT;          -- photo | screenshot | meme; NULL = not classified yet
 ALTER TABLE photos ADD COLUMN kind_by TEXT;       -- 'auto' or 'user'
 CREATE INDEX photos_kind ON photos(kind);
+`;
+
+private enum schemaV6 = `
+ALTER TABLE persons ADD COLUMN cover_face INTEGER;   -- the face the user picked as the portrait, or NULL
 `;
 
 /// Small persisted flags (e.g. which clustering rule the faces were grouped by).

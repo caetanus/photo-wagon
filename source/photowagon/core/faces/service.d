@@ -543,6 +543,22 @@ final class FaceService
 		return out_;
 	}
 
+	/// Who this face most likely is: persons closest to its embedding, closest first.
+	long[] candidatesForFace(long faceId, out float[] sims)
+	{
+		auto e = faces.embeddingOf(faceId);
+		return cluster.rankFor(e, sims, 8);
+	}
+
+	/// "Remove from People": the person goes, its detections stay unnamed.
+	long removePerson(long personId)
+	{
+		immutable n = faces.unassignAndDeletePerson(personId);
+		loadIndex();
+		events.emit("people.changed", JSONValue.emptyObject);
+		return n;
+	}
+
 	/// "Not a face": the detection goes away.
 	void deleteFace(long faceId)
 	{

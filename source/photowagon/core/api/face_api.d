@@ -6,10 +6,11 @@ import std.json;
 import photowagon.core.faces.repo : FaceRepo;
 import photowagon.core.faces.service : FaceService;
 import photowagon.core.ipc.protocol;
+import photowagon.core.ipc.events : Events;
 import photowagon.core.store.store : ContentStore;
 import photowagon.core.library.calendar : fileUrl;
 
-void registerFaceApi(Registry r, FaceRepo faces, FaceService service, ContentStore store)
+void registerFaceApi(Registry r, FaceRepo faces, FaceService service, ContentStore store, Events events)
 {
 	string url(string hash)
 	{
@@ -43,6 +44,38 @@ void registerFaceApi(Registry r, FaceRepo faces, FaceService service, ContentSto
 		import std.string : strip;
 
 		service.rename(requireLong(p, "id"), requireString(p, "name").strip);
+		return obj();
+	});
+
+	// {id} → {people: [{id, name?, faces, coverUrl?, similarity}]}: who this face most likely is
+	r.add("face.candidates", (JSONValue p) {
+		immutable id = requireLong(p, "id");
+		immutable inl = inline(p);
+		float[] sims;
+		auto ids = service.candidatesForFace(id, sims);
+		JSONValue[] out_;
+		foreach (person; faces.people())
+			foreach (k, pid; ids)
+				if (person.id == pid)
+				{
+					auto j = FaceRepo.toJson(person, inl ? dataUrl(person.coverThumb) : url(person.coverThumb));
+					j["similarity"] = sims[k];
+					out_ ~= j;
+				}
+		import std.algorithm : sort;
+		out_.sort!((a, b) => a["similarity"].floating > b["similarity"].floating);
+		return JSONValue(["faceId": JSONValue(id), "people": JSONValue(out_)]);
+	});
+
+	// {id} → {faces}: the person is removed from People; its detections stay, unnamed
+	r.add("people.remove", (JSONValue p) {
+		return JSONValue(["faces": JSONValue(service.removePerson(requireLong(p, "id")))]);
+	});
+
+	// {id, faceId?}: this face is the person's portrait (no faceId = back to automatic)
+	r.add("people.setCover", (JSONValue p) {
+		faces.setCover(requireLong(p, "id"), getLong(p, "faceId"));
+		events.emit("people.changed", JSONValue.emptyObject);
 		return obj();
 	});
 

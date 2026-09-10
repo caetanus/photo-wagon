@@ -7,6 +7,11 @@ import QtQuick.Layouts
 // arrive as data: URLs because the library is on another machine.
 ApplicationWindow {
     id: root
+    // Android's Back: close what is open (viewer, dialog, drawer) before the app.
+    onClosing: (close) => {
+        if (root.current !== null) { close.accepted = false; library.closePhoto() }
+        else if (dates.opened) { close.accepted = false; dates.close() }
+    }
     width: 412
     height: 915
     visible: true

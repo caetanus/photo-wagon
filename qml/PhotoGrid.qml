@@ -21,6 +21,16 @@ Item {
     signal open(int id)
     signal favorite(int id)
     signal selectionChanged()
+    /// Right-click: the menu for the selection (the clicked photo joins it if it was outside).
+    signal contextMenu(var ids, string path, bool favorite)
+
+    /// Mouse wheel: three lines a notch is too timid for a wall of photos.
+    readonly property real wheelStep: 3.2
+    function wheel(view, ev) {
+        const max = Math.max(0, view.contentHeight - view.height)
+        view.contentY = Math.max(0, Math.min(max, view.contentY - ev.angleDelta.y * grid.wheelStep))
+        ev.accepted = true
+    }
 
     onPageChanged: requesting = false
     Rectangle { anchors.fill: parent; color: theme.content }
@@ -135,6 +145,14 @@ Item {
             acceptedModifiers: Qt.ControlModifier
             onTapped: { grid.cursor = cell.cellIndex; grid.toggle(cell.photo.id); grid.forceActiveFocus() }
         }
+        TapHandler {
+            acceptedButtons: Qt.RightButton
+            onTapped: {
+                if (!cell.isSelected) { grid.cursor = cell.cellIndex; grid.selectOnly(cell.photo.id) }
+                grid.forceActiveFocus()
+                grid.contextMenu(grid.selectedIds(), cell.photo.path || "", cell.photo.favorite === true)
+            }
+        }
     }
 
     // ---- "all": one GridView -------------------------------------------------------
@@ -156,6 +174,7 @@ Item {
         delegate: Cell { required property var modelData; required property int index; photo: modelData; cellIndex: index }
         onAtYEndChanged: if (atYEnd && count > 0) grid.requestMore()
         footer: Item { width: 1; height: 24 }
+        WheelHandler { acceptedDevices: PointerDevice.Mouse; onWheel: (ev) => grid.wheel(allView, ev) }
     }
 
     // ---- "days": sections with a date header ---------------------------------------
@@ -236,6 +255,7 @@ Item {
         }
         onAtYEndChanged: if (atYEnd && count > 0) grid.requestMore()
         footer: Item { width: 1; height: 24 }
+        WheelHandler { acceptedDevices: PointerDevice.Mouse; onWheel: (ev) => grid.wheel(daysView, ev) }
     }
 
     Label {

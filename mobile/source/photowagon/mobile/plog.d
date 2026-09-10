@@ -105,9 +105,26 @@ version (Android)
         raise(sig);
     }
 
+    /// An alternate signal stack for the calling thread, so a stack overflow can
+    /// still be reported (the handler would die on the exhausted stack otherwise).
+    /// Every thread the app creates calls this first.
+    void useCrashStack() nothrow @nogc
+    {
+        import core.stdc.stdlib : malloc;
+
+        enum size = 64 * 1024;
+        stack_t st;
+        st.ss_sp = malloc(size);
+        st.ss_size = size;
+        st.ss_flags = 0;
+        if (st.ss_sp !is null)
+            sigaltstack(&st, null);
+    }
+
     /// Call once at startup.
     void installCrashHandler() nothrow @nogc
     {
+        useCrashStack();
         sigaction_t sa;
         sa.sa_sigaction = &onCrash;
         sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
@@ -118,6 +135,7 @@ version (Android)
 else
 {
     void installCrashHandler() nothrow @nogc {}
+    void useCrashStack() nothrow @nogc {}
 }
 
 // ---- stdout / stderr → logcat -----------------------------------------------------
@@ -137,6 +155,7 @@ version (Android)
         dup2(fds[1], 1);
         dup2(fds[1], 2);
         auto t = new Thread({
+            useCrashStack();
             char[4096] buf;
             string pending;
             for (;;)
@@ -156,6 +175,7 @@ version (Android)
                 }
             }
         });
+        t.name = "stdio";
         t.isDaemon = true;
         t.start();
     }
@@ -163,4 +183,14 @@ version (Android)
 else
 {
     void captureStdioToLogcat() {}
+}
+
+// ---- TLS probe: are thread-local variables really per thread here? -------------------
+// (eventcore keeps its per-thread driver in a TLS variable; on a runtime whose TLS
+// is shared, another thread's exit disposes the libp2p connection.)
+private int tlsProbe;
+void logTls(string who)
+{
+    import core.thread : Thread;
+    plog("tls: ", who, " thread=", cast(void*) Thread.getThis(), " &tlsProbe=", cast(void*) &tlsProbe);
 }

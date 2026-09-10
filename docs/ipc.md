@@ -100,6 +100,9 @@ name until the user gives one. Face boxes are fractions of the rotated image.
 
 | method | params | result |
 |---|---|---|
+| `face.candidates` | `{id, inline?}` | `{faceId, people: [{id, name?, faces, coverUrl?, similarity}]}` — who the face most likely is, closest first |
+| `people.remove` | `{id}` | `{faces}` — the person leaves People; the detections stay, unnamed (unlike `people.delete`) |
+| `people.setCover` | `{id, faceId?}` | `{}` — this face is the person's portrait; no `faceId` returns to the automatic choice (the biggest confident face) |
 | `people.list` | `{inline?}` (`inline: true` → `coverUrl` as a data: URL) | `{people: [{id, name?, faces, coverUrl?}]}` most faces first |
 | `people.rename` | `{id, name}` | `{}` (empty name = unnamed again; the name of an existing person merges into that person) |
 | `people.merge` | `{id, into}` | `{}` — faces of `id` join `into`, `id` disappears |

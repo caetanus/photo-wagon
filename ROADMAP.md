@@ -61,6 +61,10 @@ fetched album are not pulled, only thumbnails.
 - [x] Phone: camera roll found, thumbnails on worker threads, no black window, adb harness, automatic sync surviving crashes with an Android notification — 2026-09-10
 - [x] Phone: the computer over libp2p (`/photowagon/ipc/1.0.0`, the lite libp2p build on Android, libsodium cross-built) — 2026-09-10
 - [x] Phone: the computer's faces on the phone's own photos (by hash), names and corrections both ways — 2026-09-10
+- [x] Desktop: search as you type (people, albums, dates, kinds, file names), folding sidebar sections, a chosen portrait per person and the biggest face by default, "Remove from People", likely people first when naming a face, zoom and full screen in the viewer, a context menu (copy files, copy paths, show in folder, favorite, add to album, mark as photo / screenshot / meme) for one photo or a selection, a stronger mouse wheel — 2026-09-10
+- [x] Phone: an x86_64 build for the emulator (LDC runtime built, DSide binding, libsodium), the adb harness on it; the Back key no longer tears the D runtime down; the DSide holder map is locked (GC finalizers on worker threads) — 2026-09-10
+- [ ] Phone: videos from the camera roll (index, thumbnails, playback, sync)
 - [ ] Phone: the computer found without the QR (LAN beacon / DHT), faces cached for offline
+- [ ] Phone: the libp2p event loop still ends with vibe's "May not process events within an active yieldLock()" once per session on Android; a fresh thread takes over, the cause is open
 - [ ] Memories / Places (needs GPS clusters and a map)
 - Flatpak / AppImage, caching, startup time

@@ -8,7 +8,7 @@
 // data dir; a rescan only decodes what is new or changed.
 module photowagon.mobile.phoneindex;
 
-import photowagon.mobile.plog : plog, timed;
+import photowagon.mobile.plog : plog, timed, useCrashStack;
 
 import qt.quick.qimagereader;
 import qt.quick.qimage;
@@ -157,6 +157,7 @@ final class PhoneIndex
             walking = true;
         }
         auto t = new Thread(&walk);
+        t.name = "walk";
         t.isDaemon = true;
         t.start();
         pump.start();
@@ -164,6 +165,7 @@ final class PhoneIndex
 
     private void walk()
     {
+        useCrashStack();
         Candidate[] found;
         try
         {
@@ -245,6 +247,7 @@ final class PhoneIndex
             {
                 workers++;
                 auto t = new Thread(&worker);
+                t.name = "decode";
                 t.isDaemon = true;
                 t.start();
             }
@@ -258,6 +261,7 @@ final class PhoneIndex
     /// previous pixels on the next read() and the previous file on the next setFileName().
     private void worker()
     {
+        useCrashStack();
         auto reader = make!QImageReader();
         auto img = new QImage();
         for (;;)

@@ -66,6 +66,7 @@ ApplicationWindow {
     readonly property var filterData: JSON.parse(library.filter)
     readonly property var suggestionData: JSON.parse(library.suggestion)
     readonly property var statsData: JSON.parse(library.stats)
+    readonly property var candidatesData: JSON.parse(library.candidates)
     property var notSame: ({})   // "a:b" pairs the user said are different
 
     // ---- navigation state -----------------------------------------------------------------
@@ -73,6 +74,20 @@ ApplicationWindow {
     property string mode: "all"            // "years" | "months" | "days" | "all"
     readonly property bool viewing: current !== null
     property int zoom: 176
+    // the viewer alone, over the whole screen (F / F11 / the toolbar button; Escape leaves)
+    property bool fullscreen: false
+    visibility: fullscreen ? Window.FullScreen : Window.Windowed
+    onViewingChanged: if (!viewing) fullscreen = false
+
+    function pathsOf(ids) {
+        const out = []
+        for (const id of ids) {
+            for (const it of pageData.items) if (it.id === id && it.path) { out.push(it.path); break }
+            if (current && current.id === id && current.path && !out.includes(current.path)) out.push(current.path)
+        }
+        return out
+    }
+    function folderUrl(path) { return "file://" + path.substring(0, path.lastIndexOf("/")) }
 
     function pickSource(key) {
         source = key
@@ -160,6 +175,7 @@ ApplicationWindow {
 
         Sidebar {
             id: sidebar
+            visible: !root.fullscreen
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             anchors.left: parent.left
@@ -181,6 +197,7 @@ ApplicationWindow {
         // toolbar
         Rectangle {
             id: toolbar
+            visible: !root.fullscreen
             anchors.top: parent.top
             anchors.left: sidebar.right
             anchors.right: parent.right
@@ -278,6 +295,7 @@ ApplicationWindow {
                     onClicked: if (root.current) library.toggleFavorite(root.current.id)
                 }
                 ToolIcon { visible: root.viewing; icon_: icons.info; active: viewer.infoOpen; onClicked: viewer.infoOpen = !viewer.infoOpen }
+                ToolIcon { visible: root.viewing; icon_: icons.fullscreen; ToolTip.text: "Full screen (F)"; ToolTip.visible: hovered; onClicked: root.fullscreen = true }
 
                 // grid actions
                 ToolIcon {
@@ -324,8 +342,8 @@ ApplicationWindow {
         // ---- content ---------------------------------------------------------------------
         Item {
             id: content
-            anchors.top: toolbar.bottom
-            anchors.left: sidebar.right
+            anchors.top: root.fullscreen ? parent.top : toolbar.bottom
+            anchors.left: root.fullscreen ? parent.left : sidebar.right
             anchors.right: parent.right
             anchors.bottom: parent.bottom
 
@@ -357,6 +375,7 @@ ApplicationWindow {
                 onLoadMore: library.loadMore()
                 onOpen: (id) => library.openPhoto(id)
                 onFavorite: (id) => library.toggleFavorite(id)
+                onContextMenu: (ids, path, fav) => { photoMenu.ids = ids; photoMenu.path = path; photoMenu.favorite = fav; photoMenu.popup() }
             }
             PeopleView {
                 anchors.fill: parent
@@ -367,6 +386,7 @@ ApplicationWindow {
                 onOpen: (id) => root.openPerson(id)
                 onRename: (id, name) => library.renamePerson(id, name)
                 onNotAPerson: (id) => library.deletePerson(id)
+                onRemovePerson: (id) => library.removePerson(id)
             }
             PhotoViewer {
                 id: viewer
@@ -378,6 +398,11 @@ ApplicationWindow {
                 items: root.pageData.items
                 faces: root.facesData
                 people: root.peopleData
+                candidates: root.candidatesData
+                fullscreen: root.fullscreen
+                onFullscreenToggle: root.fullscreen = !root.fullscreen
+                onSetCover: (personId, faceId) => library.setPersonCover(personId, faceId)
+                onContextMenu: (id, path, fav) => { photoMenu.ids = [id]; photoMenu.path = path; photoMenu.favorite = fav; photoMenu.popup() }
                 onClosed: library.closePhoto()
                 onOpenIndex: (i) => {
                     if (i < root.pageData.items.length) library.openPhoto(root.pageData.items[i].id)
@@ -390,6 +415,17 @@ ApplicationWindow {
             }
         }
     } // shell
+
+    PhotoMenu {
+        id: photoMenu
+        theme: root.theme
+        onCopy: (ids) => library.copyPhotos(JSON.stringify(ids))
+        onCopyPath: (ids) => library.copyText(root.pathsOf(ids).join("\n"))
+        onOpenFolder: (path) => Qt.openUrlExternally(root.folderUrl(path))
+        onToggleFavorite: (ids) => { for (const id of ids) library.toggleFavorite(id) }
+        onAddToAlbum: (ids) => { albumDialog.photoIds = ids; albumDialog.open() }
+        onSetKind: (ids, kind) => library.setKinds(JSON.stringify(ids), kind)
+    }
 
     MergeSuggestion {
         id: mergeCard
@@ -499,6 +535,8 @@ ApplicationWindow {
             else if (library.shotView.startsWith("person:")) root.pickSource(library.shotView)
             else if (library.shotView.startsWith("search:")) { searchField.text = library.shotView.substring(7); root.search(searchField.text) }
             else if (library.shotView.startsWith("name:")) {}
+            else if (library.shotView === "fullscreen") {}
+            else if (library.shotView === "menu") {}
             else root.mode = library.shotView
         }
     }
@@ -506,6 +544,16 @@ ApplicationWindow {
         running: library.shotPath.length > 0 && library.shotView.startsWith("name:") && root.viewing
         interval: 1500
         onTriggered: viewer.openNamer(library.shotView.substring(5))
+    }
+    Timer {   // PW_SHOT_VIEW=fullscreen with PW_SHOT_OPEN: the viewer over the whole window, zoomed in a bit
+        running: library.shotPath.length > 0 && library.shotView === "fullscreen" && root.viewing
+        interval: 1200
+        onTriggered: { root.fullscreen = true; viewer.setZoom(1.6) }
+    }
+    Timer {   // PW_SHOT_VIEW=menu: the context menu over the first photo
+        running: library.shotPath.length > 0 && library.shotView === "menu" && root.pageData.items.length > 0
+        interval: 1500
+        onTriggered: { const it = root.pageData.items[0]; grid.selectOnly(it.id); photoMenu.ids = [it.id]; photoMenu.path = it.path || ""; photoMenu.popup(grid, 120, 120) }
     }
     Timer {
         running: library.shotPath.length > 0

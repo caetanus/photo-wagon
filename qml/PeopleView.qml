@@ -13,6 +13,8 @@ Item {
     signal open(int personId)
     signal rename(int personId, string name)
     signal notAPerson(int personId)
+    /// A named person leaves People; the faces stay, unnamed.
+    signal removePerson(int personId)
 
     /// Automatic groups this small stay behind "Show more" (mostly strangers and mistakes).
     property int minUnnamedFaces: 3
@@ -62,9 +64,9 @@ Item {
                 onTapped: view.open(portrait.person.id)
                 onDoubleTapped: portrait.edit()
             }
-            // "not a person" for automatic groups
+            // "not a person" for automatic groups, "remove from People" for named ones
             Rectangle {
-                visible: hover.hovered && !portrait.person.name
+                visible: hover.hovered
                 anchors.top: parent.top
                 anchors.right: parent.right
                 width: 24; height: 24; radius: 12
@@ -72,9 +74,14 @@ Item {
                 border.color: theme.separator
                 Image { anchors.centerIn: parent; source: icons.tint(icons.close, theme.text); sourceSize.width: 12; sourceSize.height: 12 }
                 HoverHandler { id: closeHover }
-                TapHandler { onTapped: view.notAPerson(portrait.person.id) }
+                TapHandler {
+                    onTapped: {
+                        if (portrait.person.name) { removeAsk.person = portrait.person; removeAsk.open() }
+                        else view.notAPerson(portrait.person.id)
+                    }
+                }
                 ToolTip.visible: closeHover.hovered
-                ToolTip.text: "Not a person"
+                ToolTip.text: portrait.person.name ? "Remove from People" : "Not a person"
             }
         }
         Label {
@@ -118,11 +125,50 @@ Item {
         function edit() { editor.text = portrait.person.name || ""; editor.visible = true; editor.forceActiveFocus() }
     }
 
+    Popup {
+        id: removeAsk
+        property var person: null
+        modal: true
+        anchors.centerIn: parent
+        width: 360
+        padding: 16
+        background: Rectangle { color: theme.panel; border.color: theme.separator; radius: 10 }
+        Column {
+            width: parent.width
+            spacing: 12
+            Label {
+                width: parent.width
+                text: removeAsk.person ? "Remove " + removeAsk.person.name + " from People?" : ""
+                font.bold: true
+                color: theme.text
+                wrapMode: Text.WordWrap
+            }
+            Label {
+                width: parent.width
+                text: removeAsk.person ? "The " + removeAsk.person.faces + " faces stay in the photos, unnamed. Naming one again brings the person back." : ""
+                color: theme.muted
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+            }
+            Row {
+                anchors.right: parent.right
+                spacing: 8
+                Button { text: "Cancel"; onClicked: removeAsk.close() }
+                Button { text: "Remove"; highlighted: true; onClicked: { view.removePerson(removeAsk.person.id); removeAsk.close() } }
+            }
+        }
+    }
+
     Flickable {
+        id: peopleFlick
         anchors.fill: parent
         contentHeight: column.height + 40
         clip: true
         ScrollBar.vertical: ScrollBar { }
+        WheelHandler {
+            acceptedDevices: PointerDevice.Mouse
+            onWheel: (ev) => { peopleFlick.contentY = Math.max(0, Math.min(Math.max(0, peopleFlick.contentHeight - peopleFlick.height), peopleFlick.contentY - ev.angleDelta.y * 3.2)); ev.accepted = true }
+        }
         Column {
             id: column
             x: 24

@@ -189,6 +189,10 @@ Rectangle {
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.vertical: ScrollBar { }
+        WheelHandler {
+            acceptedDevices: PointerDevice.Mouse
+            onWheel: (ev) => { flick.contentY = Math.max(0, Math.min(Math.max(0, flick.contentHeight - flick.height), flick.contentY - ev.angleDelta.y * 2.5)); ev.accepted = true }
+        }
         Column {
             id: list
             width: flick.width

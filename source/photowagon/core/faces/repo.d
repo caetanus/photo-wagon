@@ -166,6 +166,22 @@ final class FaceRepo
 	}
 
 	/// Removes a person and every one of its faces (an automatic group that is not a person).
+	/// The person goes, the detections stay (unassigned). Returns how many faces were let go.
+	long unassignAndDeletePerson(long personId)
+	{
+		person(personId);
+		return db.transaction!long({
+			auto f = db.prepare("UPDATE faces SET person_id = NULL WHERE person_id = ?");
+			f.bind(1, personId);
+			f.run();
+			immutable n = db.changes();
+			auto d = db.prepare("DELETE FROM persons WHERE id = ?");
+			d.bind(1, personId);
+			d.run();
+			return cast(long) n;
+		});
+	}
+
 	long deletePersonWithFaces(long personId)
 	{
 		person(personId);
@@ -304,9 +320,28 @@ final class FaceRepo
 		return out_;
 	}
 
+	// the portrait: the face the user picked, else the biggest confident face (size makes a
+	// crisp crop; the first or the highest-scoring one was often a tiny or a sideways face)
 	private enum personSelect = `SELECT p.id, p.name, count(f.id),
-		(SELECT thumb_hash FROM faces WHERE person_id = p.id AND thumb_hash IS NOT NULL ORDER BY score DESC LIMIT 1)
+		COALESCE((SELECT thumb_hash FROM faces WHERE id = p.cover_face AND person_id = p.id AND thumb_hash IS NOT NULL),
+		         (SELECT thumb_hash FROM faces WHERE person_id = p.id AND thumb_hash IS NOT NULL ORDER BY w * h * score DESC LIMIT 1))
 		FROM persons p LEFT JOIN faces f ON f.person_id = p.id`;
+
+	/// The user's choice of portrait: a face of that person (0 = back to automatic).
+	void setCover(long personId, long faceId)
+	{
+		if (faceId)
+		{
+			auto c = db.prepare("SELECT person_id FROM faces WHERE id = ?");
+			c.bind(1, faceId);
+			if (!c.step() || c.getLong(0) != personId)
+				throw new Exception("that face is not this person's");
+		}
+		auto s = db.prepare("UPDATE persons SET cover_face = ? WHERE id = ?");
+		if (faceId) s.bind(1, faceId); else s.bindNull(1);
+		s.bind(2, personId);
+		s.step();
+	}
 
 	private static Person readPerson(ref Statement s)
 	{

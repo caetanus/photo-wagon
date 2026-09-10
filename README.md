@@ -17,8 +17,12 @@ Photos**, a zoom slider and search, the grid (click selects, ⌘/Ctrl-click
 extends, double-click opens, hover shows the heart), the viewer in place of the
 grid with a caption line (date, camera, size, file), a filmstrip and an **ⓘ Info** panel (camera, size, folder, the people
 in the photo with round portraits and "Name" for the unnamed ones; naming a
-face lists the known people alphabetically with their portraits, narrowed as
-you type, ↑/↓ and Return pick one), and a
+face lists the likely people first, then everyone alphabetically with their
+portraits, narrowed as you type, ↑/↓ and Return pick one; "Use as portrait"
+makes that face the person's picture), zoom (wheel, double-click, +/−/0,
+drag) and full screen (F), a right-click menu on a photo or a selection
+(copy the files, copy the paths, show in folder, favorite, add to an album,
+mark as photo / screenshot / meme), and a
 People page with round portraits. Light or dark follows the system.
 
 ## Requirements

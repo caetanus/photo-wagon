@@ -86,9 +86,23 @@ ApplicationWindow {
         else if (key === "phone") { phonePanel.open(); source = "all" }
         else if (key === "peers") { peersPanel.open(); source = "all" }
         else if (key === "people") library.loadPeople()
+        else if (key.startsWith("person:")) {
+            const id = parseInt(key.substring(7))
+            if (filterData.personId === id) pickSource("all")   // the same person again: back to the library
+            else openPerson(id)
+        }
     }
 
     function openPerson(id) { source = "person"; library.filterPerson(id); grid.clearSelection() }
+
+    // A node of the date tree: keeps the person / album / favourites view, shows the photos.
+    function pickDate(y, m, d) {
+        library.closePhoto()
+        grid.clearSelection()
+        if (source === "people") source = "all"
+        if (mode === "years" || mode === "months") mode = "days"
+        library.filterDate(y, m, d)
+    }
 
     function personName(id) {
         for (const p of peopleData) if (p.id === id) return p.name || "Unnamed Person"
@@ -148,14 +162,19 @@ ApplicationWindow {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             anchors.left: parent.left
-            width: 210
+            width: 236
             theme: root.theme
             icons: root.icons
             albums: root.albumsData
             roots: root.rootsData
             stats: root.statsData
-            selected: root.source === "person" ? "people" : root.source
+            dates: root.datesData
+            filter: root.filterData
+            people: root.peopleData
+            status: root.status
+            selected: root.source === "person" ? "person:" + root.filterData.personId : root.source
             onPick: (key) => root.pickSource(key)
+            onPickDate: (y, m, d) => root.pickDate(y, m, d)
         }
 
         // toolbar
@@ -297,20 +316,6 @@ ApplicationWindow {
                     }
                 }
             }
-        }
-
-        // status line (indexing / faces / messages)
-        Label {
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            anchors.margins: 8
-            z: 5
-            visible: root.status.indexing || (root.status.text.length > 0 && root.status.text !== "library up to date" && !root.status.text.endsWith("photos"))
-            text: root.status.text
-            color: theme.muted
-            font.pixelSize: 11
-            padding: 6
-            background: Rectangle { color: theme.panel; radius: 6; border.color: theme.separator }
         }
 
         // ---- content ---------------------------------------------------------------------
@@ -458,8 +463,17 @@ ApplicationWindow {
     Timer {
         running: library.shotPath.length > 0 && library.shotView.length > 0
         interval: 400
+        // one shot: the `running` binding re-arms the timer on every status change
+        property bool applied: false
         onTriggered: {
+            if (applied) return
+            applied = true
             if (library.shotView === "people") root.pickSource("people")
+            else if (library.shotView.startsWith("date:")) {          // date:YYYY[-M[-D]]
+                const p = library.shotView.substring(5).split("-")
+                root.pickDate(parseInt(p[0]), parseInt(p[1] || "0"), parseInt(p[2] || "0"))
+            }
+            else if (library.shotView.startsWith("person:")) root.pickSource(library.shotView)
             else root.mode = library.shotView
         }
     }
@@ -468,7 +482,7 @@ ApplicationWindow {
         interval: 3500
         onTriggered: (library.shotSend ? phonePanel.body : shell).grabToImage(function (r) {
             r.saveToFile(library.shotPath)
-            console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length, "grid", grid.width, grid.columns, grid.cell, "content", content.width)
+            console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length, "source", root.source, "filter", library.filter)
             library.quit()
         })
     }

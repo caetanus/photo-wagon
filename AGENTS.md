@@ -46,7 +46,12 @@ anything that crosses the UI/core boundary.
   copies under `qml/mobile/`. Icons are inline SVG data URLs (`Icons.qml`);
   round portraits use `Icons.ringMask` (a fat-border Rectangle does not clip).
 - Headless captures: `PW_SHOT=/path.png` plus `PW_SHOT_VIEW=people|days|months|years`,
+  `PW_SHOT_VIEW=date:YYYY[-M[-D]]` (a node of the tree), `PW_SHOT_VIEW=person:<id>`,
   `PW_SHOT_OPEN=<id>` (viewer with Info), `PW_SHOT_SEND=1` (pairing panel).
+- `Sidebar.qml` is a Column in a Flickable, not a ListView over an ObjectModel:
+  a Repeater inside an ObjectModel piles its delegates at (0, 0).
+- The date tree and the Years / Months tiles come from `library.dates`, which
+  takes the same filter as `library.page`: a person's tree is that person's years.
 
 ## Verifying a change
 

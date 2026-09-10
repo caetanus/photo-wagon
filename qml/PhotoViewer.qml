@@ -50,7 +50,7 @@ Item {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: info.visible ? info.left : parent.right
-        anchors.bottom: strip.visible ? strip.top : parent.bottom
+        anchors.bottom: caption.top
 
         Image {
             id: image
@@ -118,7 +118,9 @@ Item {
             property bool enabledArrow: true
             width: 44; height: 44; radius: 22
             color: Qt.rgba(0, 0, 0, 0.45)
-            visible: stageHover.hovered && enabledArrow
+            visible: enabledArrow
+            opacity: stageHover.hovered ? 0.95 : 0.35
+            Behavior on opacity { NumberAnimation { duration: 120 } }
             Image { anchors.centerIn: parent; source: icons.tint(icon, "white"); sourceSize.width: 22; sourceSize.height: 22 }
         }
         Arrow {
@@ -132,6 +134,61 @@ Item {
             enabledArrow: viewer.currentIndex >= 0 && viewer.currentIndex < viewer.items.length - 1
             anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
             TapHandler { onTapped: viewer.step(1) }
+        }
+    }
+
+    // ---- caption: date · camera · size · file, always in view ----------------------
+    Rectangle {
+        id: caption
+        anchors.left: parent.left
+        anchors.right: info.visible ? info.left : parent.right
+        anchors.bottom: strip.visible ? strip.top : parent.bottom
+        height: 30
+        color: theme.viewerBg
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 16
+            anchors.rightMargin: 16
+            spacing: 18
+            Label {
+                text: viewer.photo ? viewer.formatDate(viewer.photo.takenAt) : ""
+                color: theme.text
+                font.pixelSize: 12
+            }
+            Label {
+                visible: text.length > 0
+                text: viewer.photo && viewer.photo.camera ? viewer.photo.camera : ""
+                color: theme.muted
+                font.pixelSize: 12
+                elide: Text.ElideRight
+                Layout.maximumWidth: 240
+            }
+            Label {
+                text: viewer.photo ? viewer.photo.width + " × " + viewer.photo.height : ""
+                color: theme.muted
+                font.pixelSize: 12
+            }
+            Label {
+                text: viewer.photo ? viewer.formatSize(viewer.photo.size) : ""
+                color: theme.muted
+                font.pixelSize: 12
+            }
+            Label {
+                visible: viewer.photo && viewer.photo.kind && viewer.photo.kind !== "photo" ? true : false
+                text: viewer.photo && viewer.photo.kind === "screenshot" ? "Screenshot" : "Meme"
+                color: theme.muted
+                font.pixelSize: 12
+            }
+            Item { Layout.fillWidth: true }
+            Label {
+                text: viewer.photo ? viewer.photo.path : ""
+                color: theme.muted
+                font.pixelSize: 12
+                elide: Text.ElideMiddle
+                Layout.maximumWidth: 420
+                Layout.fillWidth: true
+                horizontalAlignment: Text.AlignRight
+            }
         }
     }
 

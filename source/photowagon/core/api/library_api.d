@@ -97,7 +97,8 @@ void registerLibraryApi(Registry r, RootRepo roots, PhotoRepo photos, DateTree d
 		]);
 	});
 
-	r.add("library.dates", (JSONValue p) { return dates.build(getLong(p, "rootId")); });
+	// the same filter as library.page (dates ignored): the tree of a person, an album, the favourites…
+	r.add("library.dates", (JSONValue p) { return dates.build(filterOf(p)); });
 
 	r.add("photo.get", (JSONValue p) {
 		auto photo = photos.get(requireLong(p, "id"));

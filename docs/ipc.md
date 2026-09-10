@@ -52,7 +52,7 @@ created once per library (`<data dir>/pair.token`).
 | `library.removeRoot` | `{id}` | `{}` |
 | `library.rescan` | `{id?}` | `{}` — all roots when `id` is omitted |
 | `library.page` | `{offset, limit, year?, month?, day?, rootId?, albumId?, personId?, favorites?, kind?}` | `{total, offset, items: [Photo]}` newest first; inside an album, album order |
-| `library.dates` | `{rootId?}` | `{years: [{year, count, cover, months: [{month, count, cover, days: [{day, count}]}]}]}` — `cover` is the thumbnail URL of the newest photo of that year/month |
+| `library.dates` | same filter as `library.page` (dates ignored) | `{years: [{year, count, cover, months: [{month, count, cover, days: [{day, count}]}]}]}` — `cover` is the thumbnail URL of the newest photo of that year/month |
 | `photo.favorite` | `{id, on?}` | `{id, favorite}` (default on) |
 | `library.stats` | — | `{total, kinds: {photo, screenshot, meme, unknown}}` |
 | `photo.setKind` | `{id, kind}` | `Photo` — the user's word on what a picture is (`photo`, `screenshot`, `meme`); a photograph gets its faces scanned, anything else loses them |

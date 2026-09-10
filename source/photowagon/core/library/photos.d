@@ -352,7 +352,7 @@ final class PhotoRepo
 		return p;
 	}
 
-	private struct Where
+	package struct Where
 	{
 		string joins;
 		string where = " WHERE 1=1";
@@ -371,7 +371,7 @@ final class PhotoRepo
 		}
 	}
 
-	private static Where whereClause(Filter f)
+	package static Where whereClause(Filter f)
 	{
 		Where w;
 		if (f.albumId)

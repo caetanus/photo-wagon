@@ -156,6 +156,7 @@ import photowagon.ui.transport : Bridge;
         clearFilters();
         publishFilter();
         reload(0, pageLimit);
+        loadDates();
     }
 
     /// A year, a month or a day (0 = any). Keeps a person/album/root filter.
@@ -173,6 +174,7 @@ import photowagon.ui.transport : Bridge;
         fPerson = personId;
         publishFilter();
         reload(0, pageLimit);
+        loadDates();
     }
 
     @Slot void filterAlbum(int albumId)
@@ -181,6 +183,7 @@ import photowagon.ui.transport : Bridge;
         fAlbum = albumId;
         publishFilter();
         reload(0, pageLimit);
+        loadDates();
     }
 
     @Slot void filterRoot(int rootId)
@@ -189,6 +192,7 @@ import photowagon.ui.transport : Bridge;
         fRoot = rootId;
         publishFilter();
         reload(0, pageLimit);
+        loadDates();
     }
 
     @Slot void filterFavorites()
@@ -197,6 +201,7 @@ import photowagon.ui.transport : Bridge;
         fFavorites = true;
         publishFilter();
         reload(0, pageLimit);
+        loadDates();
     }
 
     /// Photographs, screenshots or memes only ("" = everything).
@@ -206,6 +211,7 @@ import photowagon.ui.transport : Bridge;
         fKind = kind;
         publishFilter();
         reload(0, pageLimit);
+        loadDates();
     }
 
     /// The user's word on what a picture is.
@@ -343,9 +349,16 @@ import photowagon.ui.transport : Bridge;
         });
     }
 
+    /// The years → months → days tree of the current person/album/root/favourites/kind view.
     @Slot void loadDates()
     {
-        client.request("library.dates", (r, e) {
+        JSONValue params = JSONValue.emptyObject;
+        if (fPerson) params["personId"] = fPerson;
+        if (fAlbum)  params["albumId"] = fAlbum;
+        if (fRoot)   params["rootId"] = fRoot;
+        if (fFavorites) params["favorites"] = true;
+        if (fKind.length) params["kind"] = fKind;
+        client.request("library.dates", params, (r, e) {
             if (e.type != JSONType.null_) { report("dates", e); return; }
             dates = r.toString();
             datesChanged.emit();

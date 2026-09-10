@@ -57,8 +57,9 @@ Rules that shape the code:
   `@Property string` JSON, one page at a time, parsed with `JSON.parse` in QML.
   Commands are `@Slot`s.
 - `bridge.d` (`CoreBridge`) owns the request table and the wake-up from the core.
-- QML under `qml/`: `Main.qml` (ApplicationWindow, sidebar + grid + viewer),
-  `PhotoGrid.qml`, `DateTreeSidebar.qml`, `PhotoFocusView.qml`, `PeersPanel.qml`.
+- QML under `qml/`: `Main.qml` (ApplicationWindow, navigation state), `Sidebar.qml`
+  (sources, the years → months → days tree, the named people, the status footer),
+  `PhotoGrid.qml`, `TileGrid.qml`, `PhotoViewer.qml`, `PeopleView.qml`, the panels.
 
 ## P2P
 

@@ -91,6 +91,7 @@ name until the user gives one. Face boxes are fractions of the rotated image.
 | `people.merge` | `{id, into}` | `{}` — faces of `id` join `into`, `id` disappears |
 | `photo.faces` | `{id}` | `{photoId, faces: [{id, photoId, x, y, w, h, score, thumbUrl?, personId?, name?}]}` |
 | `face.setPerson` | `{faceId, personId?, name?}` | `{personId?, followed}` — an existing person, a person by name (created when new), or nobody. A face in an automatic (unnamed) group names or merges that whole group (`followed` = how many others). A face taken out of a named person pulls along the faces of that person that look more like the new one: name one face of a look-alike sibling and hers move with it |
+| `people.similar` | `{id}` | `{person, candidates: [{id, name?, faces, coverUrl?, similarity}]}` — people who may be the same one: centroids ≥ 0.42 apart and never in a photo together; the UI asks "same person?" after a naming |
 | `face.delete` | `{faceId}` | `{}` — "not a face": the detection is removed |
 | `people.delete` | `{id}` | `{faces}` — "not a person": the group and all its detections are removed |
 | `faces.scan` | — | `{}` — scans what is unscanned (also runs after every index job) |

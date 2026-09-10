@@ -9,6 +9,7 @@
     <file>PhotoViewer.qml</file>
     <file>PeopleView.qml</file>
     <file>AlbumDialog.qml</file>
+    <file>MergeSuggestion.qml</file>
     <file>PeersPanel.qml</file>
     <file>PhonePanel.qml</file>
   </qresource>

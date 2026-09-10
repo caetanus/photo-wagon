@@ -294,6 +294,13 @@ Item {
         id: namer
         property int faceId: 0
         property string currentName: ""
+        // the known people, narrowed by what is typed (named ones only once typing starts)
+        readonly property var matches: {
+            const q = nameField.text.trim().toLowerCase()
+            const all = viewer.people
+            if (!q.length) return all.slice(0, 8)
+            return all.filter(p => p.name && p.name.toLowerCase().includes(q)).slice(0, 8)
+        }
         modal: true
         anchors.centerIn: parent
         width: 320
@@ -308,15 +315,28 @@ Item {
                 id: nameField
                 placeholderText: "Name"
                 Layout.fillWidth: true
-                onAccepted: { viewer.nameFace(namer.faceId, 0, text); namer.close() }
+                // Return: the one matching person, or a new name
+                onAccepted: {
+                    const m = namer.matches
+                    if (m.length === 1 && m[0].name && m[0].name.toLowerCase() === text.trim().toLowerCase())
+                        viewer.nameFace(namer.faceId, m[0].id, "")
+                    else
+                        viewer.nameFace(namer.faceId, 0, text)
+                    namer.close()
+                }
             }
-            Label { visible: viewer.people.length > 0; text: "or someone already known:"; color: theme.muted; font.pixelSize: 12 }
+            Label {
+                visible: namer.matches.length > 0
+                text: nameField.text.trim().length ? "Already known:" : "Someone already known:"
+                color: theme.muted
+                font.pixelSize: 12
+            }
             ListView {
-                visible: viewer.people.length > 0
+                visible: namer.matches.length > 0
                 Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(200, viewer.people.length * 32)
+                Layout.preferredHeight: Math.min(200, namer.matches.length * 32)
                 clip: true
-                model: viewer.people
+                model: namer.matches
                 delegate: ItemDelegate {
                     required property var modelData
                     width: ListView.view.width

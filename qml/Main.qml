@@ -64,6 +64,8 @@ ApplicationWindow {
     readonly property var albumsData: JSON.parse(library.albums).albums
     readonly property var rootsData: JSON.parse(library.roots).roots
     readonly property var filterData: JSON.parse(library.filter)
+    readonly property var suggestionData: JSON.parse(library.suggestion)
+    property var notSame: ({})   // "a:b" pairs the user said are different
 
     // ---- navigation state -----------------------------------------------------------------
     property string source: "all"          // sidebar key
@@ -373,6 +375,25 @@ ApplicationWindow {
             }
         }
     } // shell
+
+    MergeSuggestion {
+        id: mergeCard
+        theme: root.theme
+        icons: root.icons
+        x: parent.width - width - 24
+        y: 64
+        onMerge: (from, into) => { library.mergePeople(from, into); library.dismissSuggestion() }
+        onDifferent: (a, b) => { root.notSame[Math.min(a, b) + ":" + Math.max(a, b)] = true }
+        onClosed: library.dismissSuggestion()
+    }
+    onSuggestionDataChanged: {
+        const d = root.suggestionData
+        if (!d.person || !d.candidates) { if (mergeCard.opened) mergeCard.close(); return }
+        const left = d.candidates.filter(c => !root.notSame[Math.min(c.id, d.person.id) + ":" + Math.max(c.id, d.person.id)])
+        if (!left.length) return
+        mergeCard.data = { person: d.person, candidates: left }
+        mergeCard.open()
+    }
 
     AlbumDialog {
         id: albumDialog

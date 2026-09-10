@@ -243,6 +243,34 @@ final class ClusterIndex
 		return out_;
 	}
 
+	/// Persons whose centroid is at least `threshold` close to `personId`'s, closest first.
+	long[] similarTo(long personId, float threshold, out float[] scores) const
+	{
+		auto i = personId in byId;
+		if (i is null)
+			return null;
+		auto me = persons[*i].mean();
+		long[] ids;
+		float[] sims;
+		foreach (ref c; persons)
+		{
+			if (c.personId == personId || c.count == 0)
+				continue;
+			auto m = c.mean();
+			immutable sim = dot(me, m);
+			if (sim < threshold)
+				continue;
+			// insert sorted, best first
+			size_t at = 0;
+			while (at < sims.length && sims[at] >= sim)
+				at++;
+			ids = ids[0 .. at] ~ c.personId ~ ids[at .. $];
+			sims = sims[0 .. at] ~ sim ~ sims[at .. $];
+		}
+		scores = sims;
+		return ids;
+	}
+
 	/// Applies a merge that the repo performed.
 	void merge(long from, long into)
 	{

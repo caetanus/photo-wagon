@@ -520,6 +520,29 @@ final class FaceService
 	}
 
 	/// Renames; giving a person the name of an existing one merges them.
+	/// Persons that may be the same as `personId`: close centroids, never seen
+	/// together in a photo. `sims` gets the cosine of each.
+	long[] similarPersons(long personId, out float[] sims)
+	{
+		import std.conv : to;
+
+		auto together = faces.coOccurringPersons();
+		float[] all;
+		auto ids = cluster.similarTo(personId, 0.42f, all);
+		long[] out_;
+		foreach (k, id; ids)
+		{
+			immutable a = id < personId ? id : personId, b = id < personId ? personId : id;
+			if ((a.to!string ~ ":" ~ b.to!string) in together)
+				continue;
+			out_ ~= id;
+			sims ~= all[k];
+			if (out_.length == 5)
+				break;
+		}
+		return out_;
+	}
+
 	/// "Not a face": the detection goes away.
 	void deleteFace(long faceId)
 	{

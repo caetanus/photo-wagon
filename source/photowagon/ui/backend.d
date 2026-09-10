@@ -35,6 +35,7 @@ import photowagon.ui.transport : Bridge;
     Signal!() peopleChanged;
     Signal!() facesChanged;
     Signal!() filterChanged;
+    Signal!() suggestionChanged;
 
     /// {"total":N,"offset":o,"items":[Photo…]} — accumulated across loadPage calls.
     @Property("pageChanged")    string page   = `{"total":0,"offset":0,"items":[]}`;
@@ -70,6 +71,8 @@ import photowagon.ui.transport : Bridge;
     @Property("facesChanged") string faces = `{"photoId":0,"faces":[]}`;
     /// The person the grid is filtered to (0 = none).
     @Property("peopleChanged") int personFilter = 0;
+    /// After a naming: {"person":{…},"candidates":[{…,"similarity"}]} of people who may be the same, or "{}".
+    @Property("suggestionChanged") string suggestion = "{}";
     /// {"year","month","day","personId","albumId","rootId","favorites"} — what the page shows.
     @Property("filterChanged") string filter = `{"year":0,"month":0,"day":0,"personId":0,"albumId":0,"rootId":0,"favorites":false}`;
 
@@ -384,7 +387,29 @@ import photowagon.ui.transport : Bridge;
         client.request("people.rename", params, (r, e) {
             if (e.type != JSONType.null_) { report("rename", e); return; }
             loadPeople();
+            if (name.strip().length)
+                suggestMerge(id);
         });
+    }
+
+    /// Asks whether `personId` looks like someone already known; publishes `suggestion`.
+    private void suggestMerge(long personId)
+    {
+        JSONValue params = ["id": JSONValue(personId)];
+        client.request("people.similar", params, (r, e) {
+            if (e.type != JSONType.null_) return;
+            if ("candidates" in r && r["candidates"].array.length)
+            {
+                suggestion = r.toString();
+                suggestionChanged.emit();
+            }
+        });
+    }
+
+    @Slot void dismissSuggestion()
+    {
+        suggestion = "{}";
+        suggestionChanged.emit();
     }
 
     @Slot void mergePeople(int id, int into)
@@ -409,6 +434,8 @@ import photowagon.ui.transport : Bridge;
         if (name.strip().length) params["name"] = name.strip();
         client.request("face.setPerson", params, (r, e) {
             if (e.type != JSONType.null_) { report("setFacePerson", e); return; }
+            if ("personId" in r && r["personId"].type == JSONType.integer && name.strip().length)
+                suggestMerge(r["personId"].integer);
             immutable followed = "followed" in r ? r["followed"].integer : 0;
             if (followed)
                 setStatus(true, indexing, followed.to!string ~ " other face" ~ (followed == 1 ? "" : "s")

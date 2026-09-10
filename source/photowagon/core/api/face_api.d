@@ -52,6 +52,26 @@ void registerFaceApi(Registry r, FaceRepo faces, FaceService service, ContentSto
 		return JSONValue(["personId": person ? JSONValue(person) : JSONValue(null), "followed": JSONValue(followed)]);
 	});
 
+	// {id} → people that may be the same one (close, never in a photo together), closest first
+	r.add("people.similar", (JSONValue p) {
+		immutable id = requireLong(p, "id");
+		float[] sims;
+		auto ids = service.similarPersons(id, sims);
+		JSONValue[] out_;
+		foreach (k, pid; ids)
+		{
+			auto person = faces.person(pid);
+			auto j = FaceRepo.toJson(person, url(person.coverThumb));
+			j["similarity"] = sims[k];
+			out_ ~= j;
+		}
+		auto me = faces.person(id);
+		return JSONValue([
+			"person": FaceRepo.toJson(me, url(me.coverThumb)),
+			"candidates": JSONValue(out_),
+		]);
+	});
+
 	r.add("face.delete", (JSONValue p) {
 		service.deleteFace(requireLong(p, "faceId"));
 		return obj();

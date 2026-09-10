@@ -85,6 +85,8 @@ while [ $i -lt "$SECONDS_TO_WATCH" ]; do
     # a flick up then down over the grid; a live UI renders dozens of frames for each
     adb shell input swipe 540 1600 540 700 200
     adb shell input swipe 540 700 540 1600 200
+    # every fourth round: open a photo, look at it, go back
+    if [ $((i % 12)) = 0 ]; then adb shell input tap 300 900; sleep 2; adb shell input keyevent 4; fi
   fi
   # the system permission dialog: press Allow, as the user would
   if adb shell dumpsys window 2>/dev/null | grep -qE 'mCurrentFocus=.*permissioncontroller'; then
@@ -116,7 +118,7 @@ for m in re.finditer(r"<node[^>]*text=\"([^\"]*)\"[^>]*bounds=\"\[(\d+),(\d+)\]\
   fi
 done
 
-adb logcat -d >"$OUT/logcat.txt" 2>/dev/null
+adb logcat -d -b all >"$OUT/logcat.txt" 2>/dev/null   # -b all: the crash buffer holds the native backtraces
 adb logcat -d -s photowagon:I >"$OUT/app.log" 2>/dev/null
 adb exec-out screencap -p >"$OUT/screen.png" 2>/dev/null && ok "screenshot $OUT/screen.png"
 # a black window is the failure the user sees as "trava": the app area (below the status

@@ -5,7 +5,7 @@
 // PW_PHONE_ROOTS=/dir[:/dir] standing in for DCIM/ and Pictures/).
 module photowagon.mobile.main;
 
-import photowagon.mobile.plog : plog;
+import photowagon.mobile.plog : plog, installCrashHandler;
 
 import qt.quick.qguiapplication;
 import qt.quick.qcoreapplication;
@@ -65,7 +65,11 @@ int main()
     if ("QT_QUICK_CONTROLS_STYLE" !in environment)
         environment["QT_QUICK_CONTROLS_STYLE"] = "Material";
     version (Android)
-        environment["QSG_INFO"] = "1";   // scene graph setup lines in logcat (tag qt.scenegraph.general)
+    {
+        environment["QSG_INFO"] = "1";           // scene graph setup lines in logcat (tag qt.scenegraph.general)
+        environment["QSG_RENDER_TIMING"] = "1";  // per-frame polish / sync / render times: where a stall is spent
+    }
+    installCrashHandler();
 
     cast(void) createApp(APP_ID);
     QCoreApplication.setOrganizationName("PhotoWagon");
@@ -85,7 +89,7 @@ int main()
     if (forced.length)
         computer.setEndpoint(forced, 0);
     auto index = new PhoneIndex(roots, dataDir, cacheDir);
-    lib.start(new LocalBridge(index, computer));
+    lib.start(new LocalBridge(index, computer, buildPath(dataDir, "settings")));
 
     auto engine = new QQmlApplicationEngine(cast(cppq.QObject) null);
     engine.rootContext().setContextProperty("library", cppq.QObject.wrap(qobjOf(lib)));

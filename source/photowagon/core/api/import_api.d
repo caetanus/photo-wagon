@@ -22,10 +22,21 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 	immutable importsRoot = buildPath(cfg.dataDir, "imports");
 
 	// {name, base64, takenAt?} → {id?, existed, path}
+	// {name, sha256, probe: true} → {existed, id?, path?}: is this file here already? (no bytes)
 	r.add("library.import", (JSONValue p) {
 		immutable name = requireString(p, "name").baseName;
 		if (name.length == 0 || name[0] == '.')
 			throw new ApiError("bad_params", "bad file name");
+		if (p.type == JSONType.object && "probe" in p && p["probe"].type == JSONType.true_)
+		{
+			immutable h = requireString(p, "sha256");
+			if (h.length != 64)
+				throw new ApiError("bad_params", "sha256 must be 64 hex characters");
+			auto have = photos.byHash(h);
+			if (have.isNull)
+				return JSONValue(["existed": JSONValue(false)]);
+			return JSONValue(["id": JSONValue(have.get.id), "existed": JSONValue(true), "path": JSONValue(have.get.path)]);
+		}
 		ubyte[] bytes;
 		try
 			bytes = Base64.decode(requireString(p, "base64"));

@@ -34,7 +34,7 @@ order the pieces unblock each other.
   Samsung: cold start, scan time for N photos, frames dropped while scrolling,
   APK size.
 
-## Phase 0 — foundations (performance, one week)
+## Phase 0 — foundations (performance, one week) — items 1 and 5 done 2026-09-10 (worker threads, sha256 in the index); 2–4 open
 
 1. **Thumbnails off the UI thread.** A D worker thread (`core.thread`) takes
    paths from a queue and produces 256 px JPEGs with `QImageReader` (safe off the
@@ -78,7 +78,7 @@ order the pieces unblock each other.
    computer's `library.page` filters).
    *Target: every screen usable one-handed; no mouse-only affordance left.*
 
-## Phase 2 — automatic backup (one week)
+## Phase 2 — automatic backup (one week) — done 2026-09-10 (queue in the index, hash probe, notification via SyncService; binary frames and "free up space" still open)
 
 1. **Backup service on the phone**: when connected to the computer (and on
    Wi‑Fi unless the user allows mobile data), every new *photograph* (not

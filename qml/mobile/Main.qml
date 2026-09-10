@@ -40,6 +40,7 @@ ApplicationWindow {
     }
 
     readonly property var status: JSON.parse(library.status)
+    readonly property var syncData: JSON.parse(library.sync)
 
     // UI-thread watchdog: a 250 ms timer that arrives late means the thread was busy.
     Timer {
@@ -126,8 +127,8 @@ ApplicationWindow {
                 implicitHeight: 22
             }
             ToolButton {
-                text: "Send all"
-                enabled: library.computerConnected
+                text: root.syncData.active ? "Sending…" : "Sync"
+                enabled: library.computerConnected && !root.syncData.active
                 onClicked: library.sendAll()
             }
             ToolButton { text: "⚙"; font.pixelSize: 22; onClicked: endpointDialog.open() }

@@ -88,6 +88,42 @@ What the script does, in case it has to be done by hand:
    the wrapper Qt generates.
 3. **Run.** `adb install -r`, `am start`, a screenshot and a logcat excerpt.
 
+## Testing on the phone: the adb harness
+
+`mobile/adb-harness.sh [--install] [--clear-data] [--exercise] [--seconds N] [--force]`
+installs the APK, cold-launches the app, presses Allow on the permission dialog
+(uiautomator), optionally swipes the grid and opens a photo every few seconds,
+and watches: memory (PSS) every 3 s, the D log (logcat tag `photowagon`), ANRs,
+crashes, a screenshot every 15 s with a black-window check, and the QML
+heartbeat (`ui alive #n` every 10 s, `ui stalled N ms` when a 250 ms timer came
+late — `dumpsys gfxinfo` does not count Qt's GL frames). Everything lands in
+`mobile/build-android/harness/` (`app.log`, `logcat.txt` incl. the crash buffer,
+`memory.tsv`, `screen-*.png`). It refuses to take the phone while another app is
+in front unless `--force`.
+
+Diagnostics built into the app: `slow: <op> N ms` for any bridge request or
+index step over 30 ms, `phone: decoded N/M in S s; gc …` every 100 photos with
+the D GC's pause statistics, `QSG_RENDER_TIMING` per-frame lines from Qt, and a
+SIGSEGV/SIGABRT handler that writes a libunwind backtrace to logcat — Samsung's
+shipping builds keep no tombstones for third-party apps.
+
+## Sync to the computer
+
+The phone keeps the computer up to date by itself once "Keep the computer up to
+date" is on (the Sync button turns it on). The queue is the phone index: each
+photo carries `sent`, `tries` and `hash`, saved after every step, so a crash or
+a kill loses nothing and the next launch resumes. A file is read, hashed and
+base64-encoded on a thread; the computer is asked by hash
+(`library.import {probe: true, sha256}`) and the bytes go only when it lacks
+them; after three failures a photo waits for the next press of Sync. The D side
+writes `files/settings/sync-status`; `MainActivity` reads it every 2 s and drives
+`SyncService`, a foreground service whose notification shows the progress and
+keeps the process alive (and unfrozen) in the background. Android 13 asks for
+`POST_NOTIFICATIONS` the first time a sync starts.
+`tests/phone-sync.py <dir>` runs the desktop build of the phone client against
+a headless core: nothing moves with the setting off, everything goes once, a
+second launch re-sends nothing, and a SIGKILL mid-sync resumes on restart.
+
 The app remembers the pairing in its config dir
 (`/data/data/org.photowagon.mobile/files/settings/endpoint`, the `pw://` code
 or `host:port`). For a USB-only test, `adb reverse tcp:47111 tcp:47111` makes
@@ -103,6 +139,14 @@ the phone's `127.0.0.1:47111` reach a core started with `--serve --port 47111`.
   c-ares) have no Android builds here, which is why the phone keeps a JSON index
   of its own photos and sends them to the computer instead of running the core.
 - `QImageReader::read()` returning `QImage` by value is mis-bound (sret); the
-  phone index uses the `read(QImage*)` overload.
+  phone index uses the `read(QImage*)` overload. The binding never frees a
+  `QImage` or `QImageReader` (no deleter yet): the decoders reuse one of each
+  per worker thread instead of one per photo.
+- `QStandardPaths::PicturesLocation` is the app's private
+  `Android/data/<pkg>/files/Pictures`; the camera roll lives in the shared
+  storage that folder sits in (`main.d`, `photoRoots`).
+- The photo permission is asked by the D side (`pwperm://request`) once the
+  window is up; asking in `onCreate` left the window black on the SM-M625F.
+- New D modules must be added to the source list in `build-android.sh`.
 - The scanner needs Google Play services on the phone (the model is fetched on
   first use).

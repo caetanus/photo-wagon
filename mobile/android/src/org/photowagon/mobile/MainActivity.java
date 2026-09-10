@@ -1,5 +1,6 @@
 package org.photowagon.mobile;
 
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -9,6 +10,11 @@ import android.util.Log;
 
 import java.io.File;
 import java.io.FileWriter;
+import java.nio.file.Files;
+
+import android.os.Handler;
+import android.os.Looper;
+import org.json.JSONObject;
 
 import com.google.mlkit.vision.barcode.common.Barcode;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanner;
@@ -29,6 +35,11 @@ public class MainActivity extends QtActivity
 {
     private static final String TAG = "photowagon";
     private static final int REQUEST_PHOTOS = 1;
+    private static final int REQUEST_NOTIFY = 2;
+    private static MainActivity instance;
+    private static Handler watcher;
+    private static long statusSeen;
+    private static boolean notifyAsked;
 
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] results)
@@ -41,7 +52,57 @@ public class MainActivity extends QtActivity
     public void onCreate(Bundle savedInstanceState)
     {
         super.onCreate(savedInstanceState);
+        instance = this;
+        watchSyncStatus();
         handle(getIntent());
+    }
+
+    @Override
+    protected void onDestroy()
+    {
+        if (instance == this) instance = null;
+        super.onDestroy();
+    }
+
+    /**
+     * The D side writes files/settings/sync-status whenever the sync state changes;
+     * every 2 s this reads it and keeps the notification (and the foreground service
+     * that keeps the process alive) in step. Lives on the main looper for the life of
+     * the process, so the notification follows the sync after the activity is gone.
+     */
+    private void watchSyncStatus()
+    {
+        if (watcher != null)
+            return;
+        final File file = new File(new File(getFilesDir(), "settings"), "sync-status");
+        final Context app = getApplicationContext();
+        watcher = new Handler(Looper.getMainLooper());
+        watcher.post(new Runnable() {
+            public void run()
+            {
+                try
+                {
+                    long m = file.lastModified();
+                    if (m != 0 && m != statusSeen)
+                    {
+                        statusSeen = m;
+                        JSONObject st = new JSONObject(new String(Files.readAllBytes(file.toPath()), "UTF-8"));
+                        if (st.optBoolean("active", false) && !notifyAsked && Build.VERSION.SDK_INT >= 33 && instance != null
+                                && instance.checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED)
+                        {
+                            notifyAsked = true;
+                            instance.requestPermissions(new String[] { "android.permission.POST_NOTIFICATIONS" }, REQUEST_NOTIFY);
+                        }
+                        SyncService.update(app, st);
+                    }
+                }
+                catch (Exception e)
+                {
+                    Log.w(TAG, "sync status: " + e.getMessage());
+                }
+                watcher.postDelayed(this, 2000);
+            }
+        });
     }
 
     /**

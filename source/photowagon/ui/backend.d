@@ -37,6 +37,7 @@ import photowagon.ui.transport : Bridge;
     Signal!() filterChanged;
     Signal!() suggestionChanged;
     Signal!() statsChanged;
+    Signal!() syncChanged;
 
     /// {"total":N,"offset":o,"items":[Photo…]} — accumulated across loadPage calls.
     @Property("pageChanged")    string page   = `{"total":0,"offset":0,"items":[]}`;
@@ -76,6 +77,8 @@ import photowagon.ui.transport : Bridge;
     @Property("statsChanged") string stats = `{"total":0,"kinds":{}}`;
     /// After a naming: {"person":{…},"candidates":[{…,"similarity"}]} of people who may be the same, or "{}".
     @Property("suggestionChanged") string suggestion = "{}";
+    /// Phone: parsed library.syncStatus — {enabled, connected, active, pending, total, done, sent, skipped, failed, error}
+    @Property("syncChanged") string sync = `{"enabled":false,"connected":false,"active":false,"pending":0,"total":0,"done":0,"sent":0,"skipped":0,"failed":0,"error":null}`;
     /// {"year","month","day","personId","albumId","rootId","favorites"} — what the page shows.
     @Property("filterChanged") string filter = `{"year":0,"month":0,"day":0,"personId":0,"albumId":0,"rootId":0,"favorites":false}`;
 
@@ -615,7 +618,18 @@ import photowagon.ui.transport : Bridge;
         });
     }
 
-    /// Phone: push everything not sent yet, one after another.
+    /// Phone: keep the computer up to date by itself (on), or stop (off).
+    @Slot void setAutoSync(bool on)
+    {
+        JSONValue params = ["on": JSONValue(on)];
+        client.request("library.autoSync", params, (r, e) {
+            if (e.type != JSONType.null_) { report("autoSync", e); return; }
+            sync = r.toString();
+            syncChanged.emit();
+        });
+    }
+
+    /// Phone: push everything not sent yet, one after another (and turn the automatic sync on).
     @Slot void sendAll()
     {
         client.request("library.sendAll", (r, e) {
@@ -710,6 +724,10 @@ import photowagon.ui.transport : Bridge;
         case "upload.done":
             setStatus(true, indexing, data["sent"].integer.to!string ~ " sent"
                 ~ (data["failed"].integer ? ", " ~ data["failed"].integer.to!string ~ " failed" : ""));
+            break;
+        case "sync.status":
+            sync = data.toString();
+            syncChanged.emit();
             break;
         case "log":
             writeln("daemon: ", data["message"].str);

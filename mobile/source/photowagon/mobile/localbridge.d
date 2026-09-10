@@ -16,9 +16,9 @@ import photowagon.mobile.plog : plog, timed;
 import std.algorithm : min;
 import std.base64 : Base64;
 import std.conv : to;
-import std.file : read;
+import std.file : read, exists, readText, write, mkdirRecurse;
 import std.json;
-import std.path : baseName;
+import std.path : baseName, buildPath, dirName;
 import std.stdio : writeln, stdout;
 
 import qt.quick.qtimer;
@@ -41,9 +41,32 @@ final class LocalBridge : Bridge
     private int rescanTries;
     private bool permissionAsked;
     private QTimer askPermission;
+    // ---- sync: every photo not on the computer yet goes there, in the background,
+    // whenever a computer is connected. The queue is the index itself (sent / tries
+    // per photo, saved after every step), so a crash or a kill loses nothing: the next
+    // launch resumes. Reading + hashing + base64 of a file happens on a thread; the
+    // computer is asked by hash first and the bytes go only when it lacks them.
+    private bool autoSync;             // persisted: files/settings/autosync
+    private string autoSyncFile;
+    private string syncStatusFile;     // files/settings/sync-status, read by the Java notifier
     private long[] sendQueue;
-    private long sent, sendTotal, sendFailed;
+    private long sent, sendTotal, sendFailed, skipped;
     private bool sending;
+    private QTimer prepPoll;           // watches the preparation thread
+    private shared(Prepared)* inflight;
+    private string lastSyncError;
+
+    private static struct Prepared
+    {
+        long id;
+        string name;
+        string takenAt;
+        long mtimeMs;
+        string hash;
+        string base64;
+        string error;
+        bool done;
+    }
 
     // ---- merged paging state --------------------------------------------------------
     private JSONValue pageParams;      // the filter of the current listing (no offset/limit)
@@ -58,10 +81,19 @@ final class LocalBridge : Bridge
     private long dupes;
     private string[long] thumbCache;   // remote id → data: URL
 
-    this(PhoneIndex index, TcpBridge computer)
+    this(PhoneIndex index, TcpBridge computer, string settingsDir = null)
     {
         this.index = index;
         this.computer = computer;
+        if (settingsDir.length)
+        {
+            autoSyncFile = buildPath(settingsDir, "autosync");
+            syncStatusFile = buildPath(settingsDir, "sync-status");
+            autoSync = autoSyncFile.exists;
+        }
+        prepPoll = new QTimer(cast(cppq.QObject) null);
+        prepPoll.setInterval(50);
+        prepPoll.connectTimeout(&onPrepared);
         index.onChanged = () { emit("library.changed", JSONValue.emptyObject); };
         index.onProgress = (long done, long total) {
             emit("index.progress", JSONValue([
@@ -74,10 +106,13 @@ final class LocalBridge : Bridge
                 "rootId": JSONValue(0), "imported": JSONValue(added), "skipped": JSONValue(0),
                 "removed": JSONValue(removed), "seconds": JSONValue(0)
             ]));
+            startSync();       // new photos: off they go
         };
         computer.onConnected = (bool ok) {
             emit("computer.link", JSONValue(["connected": JSONValue(ok), "endpoint": JSONValue(computer.endpoint)]));
             emit("library.changed", JSONValue.emptyObject); // the merged timeline changed shape
+            if (ok) startSync();
+            else publishSync();
         };
         computer.onEvent = (string ev, JSONValue data) {
             if (ev == "library.changed" || ev == "index.done")
@@ -225,15 +260,23 @@ final class LocalBridge : Bridge
             }
         case "p2p.status":
             return JSONValue(["peerId": JSONValue(null), "addrs": JSONValue(cast(JSONValue[]) []), "peers": JSONValue(cast(JSONValue[]) []), "off": JSONValue(true)]);
-        case "library.sendAll":
+        case "library.sendAll":       // turns the automatic sync on and starts it now
             {
-                auto ids = index.unsentIds();
-                foreach (id; ids)
-                    sendQueue ~= id;
-                sendTotal += ids.length;
-                pumpSend();
-                return JSONValue(["queued": JSONValue(ids.length)]);
+                setAutoSync(true);
+                index.resetTries();
+                immutable n = index.unsentCount();
+                startSync();
+                return JSONValue(["queued": JSONValue(n)]);
             }
+        case "library.autoSync":      // {on}
+            {
+                setAutoSync(p.type == JSONType.object && "on" in p && p["on"].type == JSONType.true_);
+                if (autoSync) startSync();
+                else { sendQueue.length = 0; publishSync(); }
+                return syncStatus();
+            }
+        case "library.syncStatus":
+            return syncStatus();
         default:
             throw new Exception("not available on the phone: " ~ method);
         }
@@ -551,8 +594,89 @@ final class LocalBridge : Bridge
         computer.request("library.import", params, (r, e) {
             if (e.type == JSONType.null_)
                 index.markSent(id);
+            else
+                index.markFailed(id);
             cb(r, e);
         });
+    }
+
+    // ---- sync engine ------------------------------------------------------------------
+
+    private void setAutoSync(bool on)
+    {
+        autoSync = on;
+        if (autoSyncFile.length)
+        {
+            try
+            {
+                if (on) write(autoSyncFile, "1");
+                else if (autoSyncFile.exists) { import std.file : remove; remove(autoSyncFile); }
+            }
+            catch (Exception e)
+                plog("sync: cannot save setting: ", e.msg);
+        }
+    }
+
+    JSONValue syncStatus()
+    {
+        immutable pending = index.unsentCount() + (sending ? 0 : 0);
+        return JSONValue([
+            "enabled": JSONValue(autoSync),
+            "connected": JSONValue(computer.connected),
+            "active": JSONValue(sending || sendQueue.length > 0),
+            "pending": JSONValue(pending),
+            "total": JSONValue(sendTotal),
+            "done": JSONValue(sent + sendFailed + skipped),
+            "sent": JSONValue(sent),
+            "skipped": JSONValue(skipped),
+            "failed": JSONValue(sendFailed),
+            "error": lastSyncError.length ? JSONValue(lastSyncError) : JSONValue(null),
+        ]);
+    }
+
+    /// Tells the UI and the Android notifier (a file the Java side watches).
+    private void publishSync()
+    {
+        auto st = syncStatus();
+        emit("sync.status", st);
+        if (syncStatusFile.length)
+        {
+            try
+            {
+                mkdirRecurse(syncStatusFile.dirName);
+                write(syncStatusFile, st.toString());
+            }
+            catch (Exception e)
+                plog("sync: cannot write status: ", e.msg);
+        }
+    }
+
+    /// Queue what is missing on the computer and start, if allowed and connected.
+    private void startSync()
+    {
+        if (!autoSync || !computer.connected)
+        {
+            publishSync();
+            return;
+        }
+        bool[long] queued;
+        foreach (id; sendQueue) queued[id] = true;
+        auto ids = index.unsentIds();
+        long added;
+        foreach (id; ids)
+            if (id !in queued && !(sending && inflight !is null && inflight.id == id))
+            {
+                sendQueue ~= id;
+                added++;
+            }
+        if (!sending && sendQueue.length && sendTotal == 0)
+        {
+            sent = sendFailed = skipped = 0;
+            lastSyncError = null;
+        }
+        sendTotal += added;
+        publishSync();
+        pumpSend();
     }
 
     private void pumpSend()
@@ -562,28 +686,117 @@ final class LocalBridge : Bridge
         if (sendQueue.length == 0)
         {
             if (sendTotal)
+            {
                 emit("upload.done", JSONValue(["sent": JSONValue(sent), "failed": JSONValue(sendFailed), "total": JSONValue(sendTotal)]));
-            sent = sendTotal = sendFailed = 0;
-            emit("library.changed", JSONValue.emptyObject);
+                plog("sync: done — ", sent, " sent, ", skipped, " already there, ", sendFailed, " failed");
+                emit("library.changed", JSONValue.emptyObject);
+            }
+            sent = sendTotal = sendFailed = skipped = 0;
+            publishSync();
+            return;
+        }
+        if (!computer.connected)
+        {
+            sendQueue.length = 0;   // resumes on the next connection (startSync)
+            publishSync();
             return;
         }
         immutable id = sendQueue[0];
         sendQueue = sendQueue[1 .. $];
-        sending = true;
-        emit("upload.progress", JSONValue(["done": JSONValue(sent + sendFailed), "total": JSONValue(sendTotal), "id": JSONValue(id)]));
-        upload(id, (r, e) {
-            sending = false;
-            if (e.type == JSONType.null_)
-                sent++;
-            else
-            {
-                sendFailed++;
-                plog("phone: send ", id, " failed: ", e.toString());
-                if (!computer.connected)
-                    sendQueue.length = 0; // stop hammering; the user can retry
-            }
+        auto ph = index.get(id);
+        if (ph is null)
+        {
             pumpSend();
+            return;
+        }
+        sending = true;
+        emit("upload.progress", JSONValue(["done": JSONValue(sent + sendFailed + skipped), "total": JSONValue(sendTotal), "id": JSONValue(id)]));
+        publishSync();
+        // read + hash + base64 on a thread: 15 MB files would stall the UI here
+        auto pr = new shared(Prepared);
+        pr.id = id;
+        pr.name = ph.path.baseName;
+        pr.takenAt = isoTime(ph.takenTs);
+        pr.mtimeMs = ph.mtimeMs;
+        inflight = pr;
+        immutable path = ph.path;
+        immutable knownHash = ph.hash;
+        import core.thread : Thread;
+        auto t = new Thread({ prepare(pr, path, knownHash); });
+        t.isDaemon = true;
+        t.start();
+        prepPoll.start();
+    }
+
+    private static void prepare(shared(Prepared)* pr, string path, string knownHash)
+    {
+        import std.digest.sha : sha256Of, toHexString, LetterCase;
+        try
+        {
+            auto bytes = cast(ubyte[]) read(path);
+            immutable h = knownHash.length ? knownHash : toHexString!(LetterCase.lower)(sha256Of(bytes)).idup;
+            pr.hash = h;
+            pr.base64 = cast(string) Base64.encode(bytes);
+        }
+        catch (Exception e)
+            pr.error = e.msg;
+        pr.done = true;
+    }
+
+    /// Qt thread: the file is ready — ask the computer by hash, then send if needed.
+    private void onPrepared()
+    {
+        auto pr = inflight;
+        if (pr is null || !pr.done)
+            return;
+        prepPoll.stop();
+        inflight = null;
+        immutable id = pr.id;
+        if (pr.error.length)
+        {
+            finish(id, false, pr.error, null);
+            return;
+        }
+        immutable hash = cast(string) pr.hash;
+        JSONValue probe = ["name": JSONValue(cast(string) pr.name), "sha256": JSONValue(hash), "probe": JSONValue(true)];
+        computer.request("library.import", probe, (r, e) {
+            if (e.type == JSONType.null_ && r.type == JSONType.object && "existed" in r && r["existed"].type == JSONType.true_)
+            {
+                skipped++;
+                index.markSent(id, hash);
+                sending = false;
+                pumpSend();
+                return;
+            }
+            JSONValue params = [
+                "name": JSONValue(cast(string) pr.name),
+                "takenAt": JSONValue(cast(string) pr.takenAt),
+                "mtimeMs": JSONValue(pr.mtimeMs),
+                "sha256": JSONValue(hash),
+                "base64": JSONValue(cast(string) pr.base64),
+            ];
+            computer.request("library.import", params, (r2, e2) {
+                finish(id, e2.type == JSONType.null_, e2.type == JSONType.null_ ? null : e2.toString(), hash);
+            });
         });
+    }
+
+    private void finish(long id, bool ok, string error, string hash)
+    {
+        sending = false;
+        if (ok)
+        {
+            sent++;
+            index.markSent(id, hash);
+        }
+        else
+        {
+            sendFailed++;
+            lastSyncError = error;
+            index.markFailed(id, hash);
+            plog("sync: photo ", id, " failed: ", error);
+        }
+        pumpSend();
     }
 }
 

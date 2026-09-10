@@ -10,7 +10,8 @@ Dialog {
 
     signal chosen(string host, int port)
 
-    title: "Computer to send photos to"
+    title: "Computer"
+    readonly property var syncData: JSON.parse(library.sync)
     modal: true
     standardButtons: Dialog.Ok | Dialog.Cancel
 
@@ -39,6 +40,22 @@ Dialog {
             Layout.fillWidth: true
             // handled by MainActivity (pwscan:// intent → ML Kit scanner → settings/scanned)
             onClicked: { Qt.openUrlExternally("pwscan://start"); dialog.close() }
+        }
+        Switch {
+            text: "Keep the computer up to date"
+            checked: dialog.syncData.enabled
+            onToggled: library.setAutoSync(checked)
+            Layout.fillWidth: true
+        }
+        Label {
+            visible: dialog.syncData.enabled
+            text: dialog.syncData.active
+                ? "Sending " + (dialog.syncData.done + 1) + " of " + dialog.syncData.total
+                : dialog.syncData.pending ? dialog.syncData.pending + " photos waiting for the computer"
+                : "Everything is on the computer"
+            color: theme.muted
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
         }
         Label { text: "or type the address by hand:"; color: theme.muted }
         TextField {

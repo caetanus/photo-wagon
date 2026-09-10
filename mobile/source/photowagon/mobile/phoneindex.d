@@ -42,12 +42,14 @@ struct PhonePhoto
     int orientation = 1;
     string thumb;   // absolute path of the cached JPEG, or null
     bool sent;      // already delivered to the computer
+    string hash;    // sha256 of the file, once computed (for the computer's dedupe)
+    int tries;      // failed sends; after `maxTries` the photo waits for a manual retry
 
     JSONValue toJson() const
     {
         return JSONValue([
             "id": JSONValue(id),
-            "hash": JSONValue(null),
+            "hash": hash.length ? JSONValue(hash) : JSONValue(null),
             "path": JSONValue(path),
             "fileUrl": JSONValue(fileUrl(path)),
             "thumbUrl": thumb is null ? JSONValue(null) : JSONValue(fileUrl(thumb)),
@@ -532,25 +534,66 @@ final class PhoneIndex
         return JSONValue(["years": JSONValue(years)]);
     }
 
+    enum maxTries = 3;
+
+    /// Not on the computer yet and not given up on, oldest first (a backup fills in order).
     long[] unsentIds() const
     {
         long[] out_;
-        foreach (ref p; photos)
-            if (!p.sent)
+        foreach_reverse (ref p; photos)
+            if (!p.sent && p.tries < maxTries)
                 out_ ~= p.id;
         return out_;
     }
 
-    void markSent(long id)
+    long unsentCount() const
+    {
+        long n;
+        foreach (ref p; photos)
+            if (!p.sent && p.tries < maxTries)
+                n++;
+        return n;
+    }
+
+    void markSent(long id, string hash = null)
     {
         foreach (ref p; photos)
             if (p.id == id)
             {
                 p.sent = true;
+                p.tries = 0;
+                if (hash.length) p.hash = hash;
                 byPath[p.path] = p;
             }
         dirty = true;
         save();
+    }
+
+    /// A send failed: remember, so a broken file does not block the queue forever.
+    void markFailed(long id, string hash = null)
+    {
+        foreach (ref p; photos)
+            if (p.id == id)
+            {
+                p.tries++;
+                if (hash.length) p.hash = hash;
+                byPath[p.path] = p;
+            }
+        dirty = true;
+        save();
+    }
+
+    /// Give the failed ones another chance (the user asked).
+    void resetTries()
+    {
+        foreach (ref p; photos)
+            if (p.tries)
+            {
+                p.tries = 0;
+                byPath[p.path] = p;
+                dirty = true;
+            }
+        if (dirty) save();
     }
 
     // ---- persistence -----------------------------------------------------------------
@@ -576,6 +619,8 @@ final class PhoneIndex
                 p.orientation = cast(int) e["o"].integer;
                 p.thumb = e["thumb"].type == JSONType.string ? e["thumb"].str : null;
                 p.sent = "sent" in e ? e["sent"].boolean : false;
+                p.hash = "hash" in e && e["hash"].type == JSONType.string ? e["hash"].str : null;
+                p.tries = "tries" in e ? cast(int) e["tries"].integer : 0;
                 photos ~= p;
                 byPath[p.path] = p;
             }
@@ -603,7 +648,7 @@ final class PhoneIndex
                 "id": JSONValue(p.id), "path": JSONValue(p.path), "size": JSONValue(p.size),
                 "mtime": JSONValue(p.mtimeMs), "takenTs": JSONValue(p.takenTs), "w": JSONValue(p.width),
                 "h": JSONValue(p.height), "o": JSONValue(p.orientation),
-                "thumb": p.thumb is null ? JSONValue(null) : JSONValue(p.thumb), "sent": JSONValue(p.sent),
+                "thumb": p.thumb is null ? JSONValue(null) : JSONValue(p.thumb), "sent": JSONValue(p.sent), "hash": p.hash.length ? JSONValue(p.hash) : JSONValue(null), "tries": JSONValue(p.tries),
             ]);
         JSONValue j = ["nextId": JSONValue(nextId), "photos": JSONValue(arr)];
         try

@@ -57,7 +57,8 @@ printf '{"id":1,"method":"daemon.hello"}\n' | nc 127.0.0.1 "$(cat "$XDG_RUNTIME_
 
 ## Phone
 
-`mobile/` is Photo Wagon on the phone: it shows the phone's own photos and
+`mobile/` is Photo Wagon on the phone: it keeps the computer up to date by itself
+(a persistent queue, progress in an Android notification), shows the phone's own photos and
 sends them to your computer's library. Click **Phone** on the computer, scan the
 QR code with the app (⚙ → Scan QR code), then **Send all** or **Send to
 computer** in the viewer. `mobile/build-android.sh` builds the arm64 APK,

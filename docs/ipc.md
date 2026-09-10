@@ -34,9 +34,11 @@ has a matching response, even on failure.
 
 | method | params | result |
 |---|---|---|
+| `library.autoSync` (phone) | `{on}` | the sync status below; the setting persists |
+| `library.syncStatus` (phone) | `{}` | `{enabled, connected, active, pending, total, done, sent, skipped, failed, error}`; also pushed as the `sync.status` event |
 | `phone.pairing` | `{enable?: bool}` | `{enabled, port, addrs, code, qr: {width, rows}, qrImage}` — turns the LAN listener (0.0.0.0) on/off; `code` is `pw://<token>@<ip>:<port>[,…]`, `qrImage` a PNG data: URL of it |
 | `daemon.auth` | `{token}` | `{ok: true}` or `unauthorized` |
-| `library.import` | `{name, base64, takenAt?}` | `{existed, path, id?}` — stores the bytes under `<data dir>/imports/<yyyy-mm>/` and indexes them; a photo already in the library (same hash) is reported with `existed: true` |
+| `library.import` | `{name, base64, takenAt?}` or `{name, sha256, probe: true}` | `{existed, path?, id?}` — the probe form only asks whether a file with that content hash is here (no bytes sent); the full form stores the bytes under `<data dir>/imports/<yyyy-mm>/` and indexes them; a photo already in the library (same hash) is reported with `existed: true` |
 
 A client that is not on the loopback interface must send `daemon.auth` with the
 token from the pairing code before anything but `daemon.hello`; every other

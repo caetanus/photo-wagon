@@ -120,6 +120,48 @@ ubyte[] renderJpeg(string source, int maxEdge, int quality)
 	return (cast(ubyte*) buf)[0 .. len].dup;
 }
 
+/// A JPEG of the region (fx, fy, fw, fh) (fractions of the rotated image) at the
+/// original's resolution, shrunk only if its longest edge exceeds `maxEdge`: what
+/// the viewer shows when zoomed in, instead of blowing up its 4096 px rendition.
+ubyte[] renderRegion(string source, double fx, double fy, double fw, double fh, int maxEdge)
+{
+	import std.algorithm : max, min;
+
+	auto raw = vips_image_new_from_file(source.toStringz, null);
+	if (raw is null)
+		throw new Exception("cannot open: " ~ vipsError());
+	scope (exit)
+		g_object_unref(raw);
+	void* img;
+	if (vips_autorot(raw, &img, null) != 0)
+		throw new Exception("autorot: " ~ vipsError());
+	scope (exit)
+		g_object_unref(img);
+	immutable W = vips_image_get_width(img), H = vips_image_get_height(img);
+	int left = max(0, cast(int)(fx * W)), top = max(0, cast(int)(fy * H));
+	int w = min(cast(int)(fw * W + 1), W - left), h = min(cast(int)(fh * H + 1), H - top);
+	if (w < 2 || h < 2)
+		throw new Exception("region outside the image");
+	void* crop;
+	if (vips_extract_area(img, &crop, left, top, w, h, null) != 0)
+		throw new Exception("crop: " ~ vipsError());
+	scope (exit)
+		g_object_unref(crop);
+	immutable scale = cast(double) maxEdge / max(w, h);
+	void* fit;
+	if (vips_resize(crop, &fit, scale < 1 ? scale : 1.0, null) != 0)
+		throw new Exception("resize: " ~ vipsError());
+	scope (exit)
+		g_object_unref(fit);
+	void* buf;
+	size_t len;
+	if (vips_jpegsave_buffer(fit, &buf, &len, "Q".ptr, 88, "strip".ptr, 1, null) != 0)
+		throw new Exception("jpegsave: " ~ vipsError());
+	scope (exit)
+		g_free(buf);
+	return (cast(ubyte*) buf)[0 .. len].dup;
+}
+
 /// A JPEG of the face at (fx, fy, fw, fh) (fractions of the rotated image),
 /// padded by a third on each side, longest edge `size`, stored under
 /// `storeRoot`. Returns the hash. Worker-safe.

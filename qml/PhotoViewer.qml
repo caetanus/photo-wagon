@@ -37,6 +37,9 @@ Item {
     signal contextMenu(int id, string path, bool favorite)
     /// parsed library.candidates, for the naming popup
     property var candidates: ({ faceId: 0, people: [] })
+    /// parsed library.region: the visible part at full resolution while zoomed
+    property var region: ({ id: 0 })
+    signal loadRegion(int id, double x, double y, double w, double h, int px)
     property bool fullscreen: false
 
     // ---- zoom: wheel, double-click, +/-/0; drag to pan when zoomed in ----------------
@@ -49,6 +52,32 @@ Item {
     }
     function resetZoom() { zoom = 1; panX = 0; panY = 0 }
     onPhotoChanged: resetZoom()
+    onZoomChanged: regionTimer.restart()
+    onPanXChanged: regionTimer.restart()
+    onPanYChanged: regionTimer.restart()
+
+    // The painted picture on screen, after scale and pan.
+    readonly property real paintedW: image.paintedWidth * zoom
+    readonly property real paintedH: image.paintedHeight * zoom
+    readonly property real paintedX: image.x + image.width / 2 - paintedW / 2
+    readonly property real paintedY: image.y + image.height / 2 - paintedH / 2
+    // The visible part of it, as fractions of the picture.
+    function visibleRegion() {
+        const x0 = Math.max(0, (0 - paintedX) / paintedW), y0 = Math.max(0, (0 - paintedY) / paintedH)
+        const x1 = Math.min(1, (stage.width - paintedX) / paintedW), y1 = Math.min(1, (stage.height - paintedY) / paintedH)
+        return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) }
+    }
+    Timer {   // a pause after zooming or panning: ask for that part at full resolution
+        id: regionTimer
+        interval: 250
+        onTriggered: {
+            if (!viewer.photo || viewer.zoom <= 1.05 || image.paintedWidth <= 0) return
+            const r = viewer.visibleRegion()
+            if (r.w <= 0 || r.h <= 0) return
+            const px = Math.ceil(Math.max(r.w * viewer.paintedW, r.h * viewer.paintedH) * Screen.devicePixelRatio)
+            viewer.loadRegion(viewer.photo.id, r.x, r.y, r.w, r.h, Math.min(8192, px))
+        }
+    }
 
     readonly property int currentIndex: {
         if (!photo) return -1
@@ -107,6 +136,21 @@ Item {
             // while decoding, so this is also faster and lighter.
             sourceSize.width: 4096
             sourceSize.height: 4096
+        }
+        // the zoomed-in region at the original's resolution, laid over the scaled picture
+        Image {
+            id: regionImage
+            readonly property var r: viewer.region
+            visible: viewer.zoom > 1.05 && viewer.photo && r.id === viewer.photo.id && status === Image.Ready
+            x: viewer.paintedX + (r.x || 0) * viewer.paintedW
+            y: viewer.paintedY + (r.y || 0) * viewer.paintedH
+            width: (r.w || 0) * viewer.paintedW
+            height: (r.h || 0) * viewer.paintedH
+            source: r.url || ""
+            asynchronous: true
+            cache: false
+            fillMode: Image.Stretch
+            smooth: true
         }
         HoverHandler { id: stageHover }
         BusyIndicator { anchors.centerIn: parent; running: image.status === Image.Loading; visible: running }

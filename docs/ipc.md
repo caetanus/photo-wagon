@@ -36,6 +36,7 @@ has a matching response, even on failure.
 |---|---|---|
 | `daemon.auth` over libp2p | the phone opens `/photowagon/ipc/1.0.0` on the computer's node and sends every line of this protocol as a length-prefixed frame; the first must be `daemon.auth {token}` (libp2p says who the peer is, the pairing token says it is allowed in) | as over TCP |
 | (filter) `q` | any `library.page` / `library.dates` filter may add `q`: a piece of the file path (name or folder), case-insensitive for ASCII |
+| `photo.region` | `{id, x, y, w, h, maxEdge?}` | `{mime, base64}` — the region (fractions of the rotated image) at the original's resolution, shrunk only past `maxEdge` (default 2048): the zoomed viewer |
 | `library.byHash` | `{sha256}` | `{id, path}` or `not_found` |
 | `library.autoSync` (phone) | `{on}` | the sync status below; the setting persists |
 | `library.syncStatus` (phone) | `{}` | `{enabled, connected, active, pending, total, done, sent, skipped, failed, error}`; also pushed as the `sync.status` event |

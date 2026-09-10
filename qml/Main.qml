@@ -399,6 +399,8 @@ ApplicationWindow {
                 faces: root.facesData
                 people: root.peopleData
                 candidates: root.candidatesData
+                region: JSON.parse(library.region)
+                onLoadRegion: (id, x, y, w, h, px) => library.loadRegion(id, x, y, w, h, px)
                 fullscreen: root.fullscreen
                 onFullscreenToggle: root.fullscreen = !root.fullscreen
                 onSetCover: (personId, faceId) => library.setPersonCover(personId, faceId)

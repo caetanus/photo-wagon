@@ -47,6 +47,28 @@ void registerMediaApi(Registry r, PhotoRepo photos, ContentStore store)
 
 	// {id, maxEdge?}: the original's bytes, or a JPEG no larger than maxEdge
 	// on its longest side (rendered on a worker thread).
+	// {id, x, y, w, h, maxEdge} → {mime, base64}: a region (fractions of the rotated
+	// image) at the original's resolution, for the zoomed viewer
+	r.add("photo.region", (JSONValue p) {
+		import std.file : exists;
+		import photowagon.core.thumbs.vips : renderRegion;
+
+		auto photo = photos.get(requireLong(p, "id"));
+		if (photo.path is null || !photo.path.exists)
+			throw new ApiError("not_found", "the original is not on this machine");
+		double frac(string k, double def)
+		{
+			if (p.type != JSONType.object) return def;
+			auto v = k in p;
+			if (v is null) return def;
+			return v.type == JSONType.float_ ? v.floating : v.type == JSONType.integer ? cast(double) v.integer : def;
+		}
+		immutable maxEdge = cast(int) getLong(p, "maxEdge", 2048);
+		auto bytes = async(&renderRegion, photo.path, frac("x", 0), frac("y", 0), frac("w", 1), frac("h", 1),
+			maxEdge < 64 ? 64 : (maxEdge > 8192 ? 8192 : maxEdge)).getResult();
+		return JSONValue(["mime": JSONValue("image/jpeg"), "base64": JSONValue(cast(string) Base64.encode(bytes))]);
+	});
+
 	r.add("photo.file", (JSONValue p) {
 		import std.file : read, exists;
 

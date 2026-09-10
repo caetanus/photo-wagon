@@ -22,6 +22,24 @@ void plog(T...)(T args)
     }
 }
 
+/// SIGTERM / SIGINT end the process. vibe-core installs handlers for both on the
+/// thread that runs its event loop (the libp2p one), which only stop that loop —
+/// a `kill` would leave the Qt app running. Ours wins because it is installed later.
+void installQuitHandler() nothrow @nogc
+{
+    version (Posix)
+    {
+        import core.sys.posix.signal : sigaction, sigaction_t, SIGTERM, SIGINT;
+        import core.sys.posix.unistd : _exit;
+
+        extern (C) static void quit(int) nothrow @nogc { _exit(0); }
+        sigaction_t sa;
+        sa.sa_handler = &quit;
+        sigaction(SIGTERM, &sa, null);
+        sigaction(SIGINT, &sa, null);
+    }
+}
+
 /// Runs `dg` and logs it when it took longer than `limitMs` on this thread.
 void timed(string what, long limitMs, scope void delegate() dg)
 {

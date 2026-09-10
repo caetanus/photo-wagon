@@ -39,6 +39,7 @@ import photowagon.ui.transport : Bridge;
     Signal!() statsChanged;
     Signal!() syncChanged;
     Signal!() candidatesChanged;
+    Signal!() regionChanged;
 
     /// {"total":N,"offset":o,"items":[Photo…]} — accumulated across loadPage calls.
     @Property("pageChanged")    string page   = `{"total":0,"offset":0,"items":[]}`;
@@ -78,6 +79,8 @@ import photowagon.ui.transport : Bridge;
     @Property("statsChanged") string stats = `{"total":0,"kinds":{}}`;
     /// After a naming: {"person":{…},"candidates":[{…,"similarity"}]} of people who may be the same, or "{}".
     @Property("suggestionChanged") string suggestion = "{}";
+    /// photo.region for the zoomed viewer: {id, x, y, w, h, url}
+    @Property("regionChanged") string region = `{"id":0}`;
     /// face.candidates for the face being named: {faceId, people: [{id, name, faces, coverUrl, similarity}]}
     @Property("candidatesChanged") string candidates = `{"faceId":0,"people":[]}`;
     /// Phone: parsed library.syncStatus — {enabled, connected, active, pending, total, done, sent, skipped, failed, error}
@@ -634,6 +637,22 @@ import photowagon.ui.transport : Bridge;
             setStatus(true, indexing, "sent to the computer");
             if (current.length && parseJSON(current)["id"].integer == id)
                 openPhoto(id); // refresh the "sent" flag in the viewer
+        });
+    }
+
+    /// The visible part of a zoomed photo at the original's resolution.
+    @Slot void loadRegion(int id, double x, double y, double w, double h, int px)
+    {
+        JSONValue params = JSONValue.emptyObject;
+        params["id"] = id; params["x"] = x; params["y"] = y; params["w"] = w; params["h"] = h; params["maxEdge"] = px;
+        client.request("photo.region", params, (r, e) {
+            if (e.type != JSONType.null_) return;
+            if (openId != id) return;   // moved on
+            JSONValue out_ = JSONValue.emptyObject;
+            out_["id"] = id; out_["x"] = x; out_["y"] = y; out_["w"] = w; out_["h"] = h;
+            out_["url"] = "data:" ~ r["mime"].str ~ ";base64," ~ r["base64"].str;
+            region = out_.toString();
+            regionChanged.emit();
         });
     }
 

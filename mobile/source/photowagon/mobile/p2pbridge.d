@@ -225,7 +225,9 @@ final class P2pBridge : Bridge
         // fresh thread. This one parks for good: ending it runs vibe's thread
         // destructors over the dead tasks, which crashed.
         plog("p2p: thread starting");
+        import photowagon.mobile.plog : installQuitHandler;
         runTask(() nothrow {
+            installQuitHandler();   // after vibe's runEventLoop installed its own (below)
             try
                 client();
             catch (Exception e)

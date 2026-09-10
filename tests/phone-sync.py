@@ -63,6 +63,13 @@ def phone(seconds, shot, extra=None):
     p = subprocess.Popen([PHONE], env=e, stdout=open(os.path.join(tmp, shot + ".log"), "w"), stderr=subprocess.STDOUT)
     return p
 
+def stop(p):
+    p.terminate()
+    try:
+        p.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        p.kill(); p.wait()
+
 def phone_log(shot):
     return open(os.path.join(tmp, shot + ".log")).read()
 
@@ -78,7 +85,7 @@ if os.path.isdir(sub):
     n_images += len([f for f in os.listdir(sub) if f.lower().endswith((".jpg", ".jpeg", ".png"))])
 
 # 1. auto sync off: nothing moves by itself
-p = phone(8, "off.png"); time.sleep(8); p.terminate(); p.wait()
+p = phone(8, "off.png"); time.sleep(8); stop(p)
 check(call(port, "library.stats")["total"] == 0, "sync off: nothing sent by itself")
 
 # 2. PW_SHOT_SEND=1 presses "Sync": everything goes, once
@@ -87,7 +94,7 @@ for _ in range(60):
     time.sleep(0.5)
     if "sync: done" in phone_log("on.png"):
         break
-p.terminate(); p.wait()
+stop(p)
 log = phone_log("on.png")
 total = call(port, "library.stats")["total"]
 check("sync: done" in log, "sync ran to the end: " + [l for l in log.splitlines() if "sync: done" in l][-1:][0].split("sync: ")[-1] if "sync: done" in log else "sync never finished")
@@ -98,7 +105,7 @@ check(idx is not None and all(ph["sent"] for ph in idx["photos"]), "every phone 
 
 # 3. the setting survives: a new launch with a new computer asks by hash and sends nothing twice
 before = [l for l in open(os.path.join(tmp, "core.log")).read().splitlines() if "import:" in l]
-p = phone(10, "again.png"); time.sleep(10); p.terminate(); p.wait()
+p = phone(10, "again.png"); time.sleep(10); stop(p)
 after = [l for l in open(os.path.join(tmp, "core.log")).read().splitlines() if "import:" in l]
 check(len(after) == len(before), "second launch: nothing re-sent (%d imports before, %d after)" % (len(before), len(after)))
 
@@ -125,7 +132,7 @@ for _ in range(60):
     i3 = index()
     if i3 and all(ph["sent"] for ph in i3["photos"]):
         break
-p.terminate(); p.wait()
+stop(p)
 i3 = index()
 check(all(ph["sent"] for ph in i3["photos"]), "after the restart the rest went (%d of %d)" % (sum(1 for ph in i3["photos"] if ph["sent"]), len(i3["photos"])))
 after2 = [l for l in open(os.path.join(tmp, "core.log")).read().splitlines() if "import:" in l]
@@ -155,7 +162,7 @@ for _ in range(80):
     time.sleep(0.5)
     if "sync: done" in phone_log("p2p.png"):
         break
-p.terminate(); p.wait()
+stop(p)
 log = phone_log("p2p.png")
 check("p2p: connected to" in log, "phone connected over libp2p: " + ([l for l in log.splitlines() if "p2p: connected" in l] or ["no"])[0].split("p2p: ")[-1])
 check("sync: done" in log, "sync over libp2p ran to the end")
@@ -173,7 +180,7 @@ if faces_dir:
         time.sleep(0.5)
         if "sync: done" in phone_log("faces-sync.png"):
             break
-    p.terminate(); p.wait()
+    stop(p)
     people = []
     for _ in range(120):
         time.sleep(1)
@@ -190,7 +197,7 @@ if faces_dir:
         time.sleep(0.5)
         if "faces: " in phone_log("faces-open.png"):
             break
-    p.terminate(); p.wait()
+    stop(p)
     line = ([l for l in phone_log("faces-open.png").splitlines() if "faces: " in l] or ["faces: none"])[0]
     check("faces: 1 for photo %s" % lena in line, "the phone got the computer's faces for its own photo: " + line.split("faces: ")[-1])
     lena_hash = next((ph.get("hash") for ph in idx["photos"] if ph["id"] == lena), None)

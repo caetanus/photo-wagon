@@ -5,7 +5,7 @@
 // PW_PHONE_ROOTS=/dir[:/dir] standing in for DCIM/ and Pictures/).
 module photowagon.mobile.main;
 
-import photowagon.mobile.plog : plog, installCrashHandler, captureStdioToLogcat, logTls;
+import photowagon.mobile.plog : plog, installCrashHandler, captureStdioToLogcat, logTls, installQuitHandler;
 
 import qt.quick.qguiapplication;
 import qt.quick.qcoreapplication;
@@ -110,6 +110,7 @@ int main()
         environment["QT_LOGGING_RULES"] = "qt.qpa.window=true;qt.qpa.android=true;qt.scenegraph.general=true";   // window expose / hide
     }
     installCrashHandler();
+    installQuitHandler();
     logTls("qt thread");
     {
         import core.thread : Thread;

@@ -21,3 +21,15 @@ void plog(T...)(T args)
         __android_log_write(4 /* INFO */, "photowagon", s.toStringz);
     }
 }
+
+/// Runs `dg` and logs it when it took longer than `limitMs` on this thread.
+void timed(string what, long limitMs, scope void delegate() dg)
+{
+    import core.time : MonoTime;
+
+    immutable t0 = MonoTime.currTime;
+    dg();
+    immutable ms = (MonoTime.currTime - t0).total!"msecs";
+    if (ms >= limitMs)
+        plog("slow: ", what, " ", ms, " ms");
+}

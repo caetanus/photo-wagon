@@ -8,7 +8,7 @@
 // data dir; a rescan only decodes what is new or changed.
 module photowagon.mobile.phoneindex;
 
-import photowagon.mobile.plog : plog;
+import photowagon.mobile.plog : plog, timed;
 
 import qt.quick.qimagereader;
 import qt.quick.qimage;
@@ -24,6 +24,7 @@ import std.file : exists, mkdirRecurse, readText, write, isDir;
 import std.json;
 import std.path : buildPath, baseName;
 import core.sync.mutex : Mutex;
+import core.time : MonoTime, seconds;
 
 import photowagon.core.indexer.scan : Candidate, scanImages;
 import photowagon.core.library.calendar : dateRange, fileUrl, isoTime, localDate;
@@ -77,6 +78,7 @@ final class PhoneIndex
     void delegate() onChanged;                          /// pages/dates are stale
     void delegate(long done, long total) onProgress;   /// decoding progress
     void delegate(long added, long removed) onDone;
+    void delegate(size_t found) onScanned;             /// a walk finished
 
     private string[] roots;
     private string indexFile;
@@ -127,23 +129,61 @@ final class PhoneIndex
     private Decoded[] results;      // under lock: decoded, not yet merged
     private uint generation;
     private int workers;            // under lock: threads alive
+    private bool walking;           // under lock: a walk thread is running
+    private bool walkDone;          // under lock: `walked` is ready
+    private Candidate[] walked;     // under lock
+    private long lastProgress;
+    private MonoTime started;
     private long queued, processed, added;
     private long lastSaved;
+    private MonoTime lastChange;    // the last library.changed while decoding
 
     enum maxWorkers = 3;
 
-    /// Walks the roots now (fast) and starts decoding what is new on worker
-    /// threads. Returns how many files were found; 0 with no readable root
-    /// usually means the permission is not granted yet.
-    size_t scan()
+    /// Walks the roots on a thread (2,900 files take 2–3 s on the phone) and,
+    /// back on the Qt thread, starts decoding what is new on the workers.
+    /// `onScanned(found)` follows; 0 with no readable root usually means the
+    /// permission is not granted yet.
+    void scan()
+    {
+        import core.thread : Thread;
+
+        synchronized (lock)
+        {
+            if (walking)
+                return;
+            walking = true;
+        }
+        auto t = new Thread(&walk);
+        t.isDaemon = true;
+        t.start();
+        pump.start();
+    }
+
+    private void walk()
     {
         Candidate[] found;
-        foreach (r; roots)
+        try
         {
-            if (!r.exists || !r.isDir)
-                continue;
-            found ~= scanImages(r);
+            foreach (r; roots)
+            {
+                if (!r.exists || !r.isDir)
+                    continue;
+                found ~= scanImages(r);
+            }
         }
+        catch (Exception e)
+            plog("phone: walk: ", e.msg);
+        synchronized (lock)
+        {
+            walked = found;
+            walkDone = true;
+        }
+    }
+
+    /// Qt thread: what the walk found against what we know.
+    private void afterWalk(Candidate[] found)
+    {
         bool[string] seen;
         Candidate[] todo;
         foreach (ref c; found)
@@ -176,20 +216,19 @@ final class PhoneIndex
         processed = 0;
         added = 0;
         lastSaved = 0;
+        lastProgress = 0;
+        started = MonoTime.currTime;
         plog("phone: ", found.length, " files, ", queued, " to decode, ", removed, " gone");
         if (onProgress) onProgress(0, queued);
         if (queued)
-        {
             startWorkers();
-            pump.start();
-        }
         else
         {
             if (dirty) save();
             if (removed && onChanged) onChanged();
             if (onDone) onDone(0, removed);
         }
-        return found.length;
+        if (onScanned) onScanned(found.length);
     }
 
     private void startWorkers()
@@ -211,8 +250,14 @@ final class PhoneIndex
     }
 
     /// One worker: takes candidates until there are none, decodes each, posts the result.
+    /// One reader and one image for the whole run: the binding never frees a QImage or
+    /// a QImageReader (no deleter yet), so one per photo leaked the decoded pixels and an
+    /// open file each — 2,000 photos were a gigabyte and a half. Reused, Qt releases the
+    /// previous pixels on the next read() and the previous file on the next setFileName().
     private void worker()
     {
+        auto reader = make!QImageReader();
+        auto img = new QImage();
         for (;;)
         {
             Candidate c;
@@ -232,7 +277,7 @@ final class PhoneIndex
             d.c = c;
             d.gen = gen;
             try
-                d.p = decode(c, thumbDir);
+                d.p = decode(c, thumbDir, reader, img);
             catch (Exception e)
                 d.error = e.msg;
             synchronized (lock)
@@ -241,14 +286,29 @@ final class PhoneIndex
     }
 
     /// Qt thread, every few ms while decoding: merges what the workers produced.
-    private void step()
+    private void step() { timed("index.step", 30, { stepTimed(); }); }
+
+    private void stepTimed()
     {
         Decoded[] batch;
+        Candidate[] found;
+        bool haveWalk, stillWalking;
         synchronized (lock)
         {
             batch = results;
             results = null;
+            if (walkDone)
+            {
+                found = walked;
+                walked = null;
+                walkDone = false;
+                walking = false;
+                haveWalk = true;
+            }
+            stillWalking = walking;
         }
+        if (haveWalk)
+            afterWalk(found);
         foreach (ref d; batch)
         {
             if (d.gen != generation)
@@ -261,8 +321,19 @@ final class PhoneIndex
         }
         if (batch.length && onProgress)
             onProgress(processed, queued);
+        if (processed - lastProgress >= 100 || (batch.length && processed >= queued))
+        {
+            lastProgress = processed;
+            import core.memory : GC;
+            auto gs = GC.profileStats();
+            plog("phone: decoded ", processed, "/", queued, " in ", (MonoTime.currTime - started).total!"msecs" / 1000.0,
+                " s; gc ", gs.numCollections, " collections, paused ", gs.totalPauseTime.total!"msecs", " ms, max ",
+                gs.maxPauseTime.total!"msecs", " ms; heap ", GC.stats().usedSize / 1048576, " MB");
+        }
         if (processed >= queued)
         {
+            if (stillWalking)
+                return;
             pump.stop();
             sortPhotos();
             save();
@@ -270,9 +341,11 @@ final class PhoneIndex
             if (onDone) onDone(added, 0);
             return;
         }
-        if (processed - lastSaved >= 25)
+        // Tell the UI at most every 3 s: each library.changed rebuilds the whole page.
+        if (processed - lastSaved >= 25 && MonoTime.currTime - lastChange >= 3.seconds)
         {
             lastSaved = processed;
+            lastChange = MonoTime.currTime;
             sortPhotos();
             save();
             if (onChanged) onChanged();
@@ -310,7 +383,7 @@ final class PhoneIndex
     }
 
     /// Worker thread: EXIF and the thumbnail of one file. Touches no shared state.
-    private static PhonePhoto decode(Candidate c, string thumbDir)
+    private static PhonePhoto decode(Candidate c, string thumbDir, QImageReader reader, QImage img)
     {
         PhonePhoto p;
         auto exif = readExifCore(c.path);
@@ -320,7 +393,7 @@ final class PhoneIndex
             p.takenTs = c.mtimeMs / 1000;
         immutable thumbPath = buildPath(thumbDir, toHexString!(LetterCase.lower)(sha1Of(c.path ~ "@" ~ c.mtimeMs.to!string)).idup ~ ".jpg");
         int w, h;
-        makeThumb(c.path, thumbPath, p.orientation, w, h);
+        makeThumb(reader, img, c.path, thumbPath, p.orientation, w, h);
         p.width = w;
         p.height = h;
         p.thumb = thumbPath;
@@ -329,9 +402,8 @@ final class PhoneIndex
 
     /// Decodes `src` scaled so its longest edge is `thumbEdge`, rotated by EXIF,
     /// and writes a JPEG at `dst`. Reports the rotated full-size dimensions.
-    private static void makeThumb(string src, string dst, int orientation, out int width, out int height)
+    private static void makeThumb(QImageReader reader, QImage img, string src, string dst, int orientation, out int width, out int height)
     {
-        auto reader = make!QImageReader();
         reader.setFileName(src);
         reader.setAutoTransform(true);
         auto raw = reader.size();
@@ -350,7 +422,6 @@ final class PhoneIndex
         auto target = QSize.__make(tw < 1 ? 1 : tw, th < 1 ? 1 : th);
         reader.setScaledSize(target);
         // read() returning QImage by value is mis-bound (sret); the pointer overload is safe
-        auto img = new QImage();
         if (!reader.read(cast(QImage*) img.ptr()) || img.isNull())
             throw new Exception("decode failed");
         if (!img.save(dst, "JPEG".ptr, 84))
@@ -519,7 +590,9 @@ final class PhoneIndex
         }
     }
 
-    private void save()
+    private void save() { timed("index.save", 30, { saveTimed(); }); }
+
+    private void saveTimed()
     {
         if (!dirty)
             return;

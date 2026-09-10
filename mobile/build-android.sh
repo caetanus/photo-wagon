@@ -40,7 +40,7 @@ link() {
     ldc2 -conf="$LDC_CONF" -mtriple=aarch64-linux-android -shared -relocation-model=pic -O \
         -d-version=PhotoWagonMobile \
         -of="$OUT/lib${APP}_${ABI}.so" \
-        source/photowagon/mobile/main.d source/photowagon/mobile/tcpbridge.d \
+        source/photowagon/mobile/main.d source/photowagon/mobile/plog.d source/photowagon/mobile/tcpbridge.d \
         source/photowagon/mobile/localbridge.d source/photowagon/mobile/phoneindex.d \
         ../source/photowagon/ui/backend.d ../source/photowagon/ui/transport.d \
         ../source/photowagon/core/indexer/scan.d ../source/photowagon/core/library/calendar.d \

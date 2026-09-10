@@ -11,7 +11,7 @@
 // (or offline) everything still works on the phone alone.
 module photowagon.mobile.localbridge;
 
-import photowagon.mobile.plog : plog;
+import photowagon.mobile.plog : plog, timed;
 
 import std.algorithm : min;
 import std.base64 : Base64;
@@ -39,6 +39,8 @@ final class LocalBridge : Bridge
     private bool up;
     private QTimer rescan;        // until the permission lands, keep trying
     private int rescanTries;
+    private bool permissionAsked;
+    private QTimer askPermission;
     private long[] sendQueue;
     private long sent, sendTotal, sendFailed;
     private bool sending;
@@ -92,15 +94,39 @@ final class LocalBridge : Bridge
         rescan = new QTimer(cast(cppq.QObject) null);
         rescan.setInterval(2000);
         rescan.connectTimeout(&retryScan);
-        if (index.scan() == 0)
-            rescan.start();   // permission dialog probably still open
+        index.onScanned = (size_t found) {
+            if (found > 0 || rescanTries > 60)
+            {
+                rescan.stop();
+                return;
+            }
+            // nothing readable: the permission is missing. Ask once the window has had
+            // its first frames (asking during Qt's startup left the window black), then
+            // keep looking for a while.
+            if (!permissionAsked)
+            {
+                permissionAsked = true;
+                askPermission = new QTimer(cast(cppq.QObject) null);
+                askPermission.setSingleShot(true);
+                askPermission.setInterval(900);
+                askPermission.connectTimeout({
+                    import qt.quick.qdesktopservices : QDesktopServices;
+                    import qt.quick.qurl : QUrl;
+                    auto u = QUrl("pwperm://request", QUrl.ParsingMode.TolerantMode);
+                    QDesktopServices.openUrl(u);
+                });
+                askPermission.start();
+            }
+            rescan.start();
+        };
+        index.scan();
     }
 
-    /// The first scan finds nothing while the permission dialog is up; poll a while.
+    /// While the permission dialog is up, look again every 2 s.
     private void retryScan()
     {
-        if (++rescanTries > 60 || index.scan() > 0)
-            rescan.stop();
+        rescanTries++;
+        index.scan();
     }
 
     override bool connected() const { return up; }
@@ -150,13 +176,13 @@ final class LocalBridge : Bridge
         {
             switch (method)
             {
-            case "library.page":    page(params, cb); return;
-            case "library.dates":   dates(cb); return;
+            case "library.page":    timed("library.page", 30, { page(params, cb); }); return;
+            case "library.dates":   timed("library.dates", 30, { dates(cb); }); return;
             case "photo.get":       get(num(params, "id"), cb); return;
             case "photo.upload":    upload(num(params, "id"), cb); return;
             case "album.list":      albums(cb); return;
             default:
-                cb(handleSync(method, params), JSONValue(null));
+                timed(method, 30, { cb(handleSync(method, params), JSONValue(null)); });
             }
         }
         catch (Exception e)

@@ -40,6 +40,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="pwscan" />
+                <data android:scheme="pwperm" />
             </intent-filter>
             <meta-data
                 android:name="android.app.lib_name"

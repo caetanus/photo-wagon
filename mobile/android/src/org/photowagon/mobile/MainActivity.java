@@ -31,15 +31,31 @@ public class MainActivity extends QtActivity
     private static final int REQUEST_PHOTOS = 1;
 
     @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] results)
+    {
+        super.onRequestPermissionsResult(code, perms, results);
+        Log.i(TAG, "photo permission " + (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED ? "granted" : "denied"));
+    }
+
+    @Override
     public void onCreate(Bundle savedInstanceState)
     {
         super.onCreate(savedInstanceState);
+        handle(getIntent());
+    }
+
+    /**
+     * Asked by the D side (pwperm://request) once the window is up. Asking in
+     * onCreate put the system dialog over Qt's very first frame, and the window
+     * came back black: Qt never got exposed again until the app was restarted.
+     */
+    private void requestPhotos()
+    {
         String permission = Build.VERSION.SDK_INT >= 33
             ? "android.permission.READ_MEDIA_IMAGES"
             : "android.permission.READ_EXTERNAL_STORAGE";
         if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[] { permission }, REQUEST_PHOTOS);
-        handle(getIntent());
     }
 
     @Override
@@ -54,8 +70,12 @@ public class MainActivity extends QtActivity
         if (intent == null)
             return;
         Uri uri = intent.getData();
-        if (uri != null && "pwscan".equals(uri.getScheme()))
+        if (uri == null)
+            return;
+        if ("pwscan".equals(uri.getScheme()))
             startScan();
+        else if ("pwperm".equals(uri.getScheme()))
+            requestPhotos();
     }
 
     private void startScan()

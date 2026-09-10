@@ -29,6 +29,10 @@ import photowagon.mobile.localbridge : LocalBridge;
 import photowagon.mobile.phoneindex : PhoneIndex;
 import photowagon.mobile.tcpbridge : TcpBridge;
 
+// GC statistics on (read back every 100 photos in phoneindex): a stop-the-world
+// collection pauses the Qt thread too, and that is what a stall looks like.
+extern (C) __gshared string[] rt_options = ["gcopt=profile:1"];
+
 enum APP_ID      = "photo-wagon-mobile";
 enum APP_NAME    = "Photo Wagon";
 enum APP_VERSION = "0.4.0";
@@ -60,6 +64,8 @@ int main()
 {
     if ("QT_QUICK_CONTROLS_STYLE" !in environment)
         environment["QT_QUICK_CONTROLS_STYLE"] = "Material";
+    version (Android)
+        environment["QSG_INFO"] = "1";   // scene graph setup lines in logcat (tag qt.scenegraph.general)
 
     cast(void) createApp(APP_ID);
     QCoreApplication.setOrganizationName("PhotoWagon");

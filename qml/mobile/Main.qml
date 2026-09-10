@@ -40,6 +40,19 @@ ApplicationWindow {
     }
 
     readonly property var status: JSON.parse(library.status)
+
+    // UI-thread watchdog: a 250 ms timer that arrives late means the thread was busy.
+    Timer {
+        property double last: 0
+        property int ticks: 0
+        interval: 250; repeat: true; running: true
+        onTriggered: {
+            const now = Date.now()
+            if (last > 0 && now - last > 700) console.log("ui stalled " + (now - last) + " ms")
+            last = now
+            if (++ticks % 40 === 0) console.log("ui alive #" + (ticks / 40) + ", page items " + root.pageData.items.length + " window " + root.width + "x" + root.height)
+        }
+    }
     readonly property var pageData: JSON.parse(library.page)
     readonly property var datesData: JSON.parse(library.dates)
     readonly property var current: library.current.length ? JSON.parse(library.current) : null

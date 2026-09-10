@@ -574,12 +574,14 @@ ApplicationWindow {
     Timer {   // PW_SHOT_VIEW=fullscreen with PW_SHOT_OPEN: the viewer over the whole window, zoomed in a bit
         running: library.shotPath.length > 0 && (library.shotView === "fullscreen" || library.shotView === "fullscreen-exit") && root.viewing
         interval: 1200
-        onTriggered: { root.fullscreen = true; viewer.setZoom(1.6) }
+        property bool applied: false   // the running binding re-arms this timer on every status change
+        onTriggered: { if (applied) return; applied = true; root.fullscreen = true; viewer.setZoom(1.6) }
     }
     Timer {   // PW_SHOT_VIEW=fullscreen-exit: …and out again, the way Escape does it
         running: library.shotPath.length > 0 && library.shotView === "fullscreen-exit" && root.fullscreen
         interval: 1000
-        onTriggered: { viewer.resetZoom(); root.fullscreen = false; console.log("shot: left full screen, visibility", root.visibility, "sidebar", sidebar.visible) }
+        property bool applied: false
+        onTriggered: { if (applied) return; applied = true; viewer.resetZoom(); root.fullscreen = false; console.log("shot: left full screen, visibility", root.visibility, "sidebar", sidebar.visible) }
     }
     Timer {   // PW_SHOT_VIEW=menu: the context menu over the first photo
         running: library.shotPath.length > 0 && library.shotView === "menu" && root.pageData.items.length > 0

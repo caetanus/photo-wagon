@@ -21,6 +21,9 @@ fetched album are not pulled, only thumbnails.
 - incremental rescan (mtime + size)
 
 ## M2 — Metadata
+- [x] media types: every picture is a photograph, a screenshot or a meme (camera EXIF, screen sizes,
+  folder names, and a small logistic model over pixel statistics fitted on a real library; the user can
+  override in Info); faces are only looked for in photographs — 2026-09-09
 - places view (GPS clusters), moments grouping, FTS search
 
 ## M3 — People (done 2026-09-09)

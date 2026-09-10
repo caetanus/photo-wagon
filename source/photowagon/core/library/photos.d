@@ -31,6 +31,8 @@ struct Photo
 	string thumbHash;
 	string originPeer;
 	bool favorite;
+	string kind; // photo | screenshot | meme; null until classified
+	string kindBy; // auto | user
 }
 
 /// Restricts a page or a count. Zero means "no restriction" for every field.
@@ -43,6 +45,7 @@ struct Filter
 	int month;
 	int day;
 	bool favorites;
+	string kind; // restrict to one kind; null = any
 }
 
 struct Neighbours
@@ -92,8 +95,8 @@ final class PhotoRepo
 	long insert(ref Photo p)
 	{
 		auto s = db.prepare(`INSERT INTO photos (hash, path, root_id, size, mtime_ms, taken_ts, taken_at,
-			width, height, orientation, camera, lat, lon, thumb_hash, origin_peer)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+			width, height, orientation, camera, lat, lon, thumb_hash, origin_peer, kind, kind_by)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 		bindPhoto(s, p);
 		s.run();
 		p.id = db.lastInsertId();
@@ -105,9 +108,9 @@ final class PhotoRepo
 	{
 		auto s = db.prepare(`UPDATE photos SET hash = ?, path = ?, root_id = ?, size = ?, mtime_ms = ?,
 			taken_ts = ?, taken_at = ?, width = ?, height = ?, orientation = ?, camera = ?, lat = ?, lon = ?,
-			thumb_hash = ?, origin_peer = ? WHERE id = ?`);
+			thumb_hash = ?, origin_peer = ?, kind = ?, kind_by = ? WHERE id = ?`);
 		bindPhoto(s, p);
-		s.bind(16, p.id);
+		s.bind(18, p.id);
 		s.run();
 	}
 
@@ -124,7 +127,50 @@ final class PhotoRepo
 			s.bind(12, p.lat).bind(13, p.lon);
 		else
 			s.bindNull(12).bindNull(13);
-		s.bind(14, p.thumbHash).bind(15, p.originPeer);
+		s.bind(14, p.thumbHash).bind(15, p.originPeer).bind(16, p.kind).bind(17, p.kindBy);
+	}
+
+	/// Where a stored thumbnail lives.
+	string thumbPath(string hash) const
+	{
+		return store.pathFor(hash);
+	}
+
+	/// Sets the kind; `by` is "auto" or "user" (a user's choice is never overwritten automatically).
+	void setKind(long id, string kind, string by)
+	{
+		auto s = db.prepare("UPDATE photos SET kind = ?, kind_by = ? WHERE id = ?");
+		s.bind(1, kind).bind(2, by).bind(3, id);
+		s.run();
+		if (db.changes() == 0)
+			throw new ApiError("not_found", "no photo " ~ idString(id));
+	}
+
+	/// Forgets every automatic classification (the rules changed); the user's choices stay.
+	void resetAutoKinds()
+	{
+		db.exec("UPDATE photos SET kind = NULL, kind_by = NULL WHERE kind_by IS NULL OR kind_by = 'auto'");
+	}
+
+	/// Local photos with a thumbnail and no kind yet.
+	long[] unclassified(long limit = 100_000)
+	{
+		auto s = db.prepare("SELECT id FROM photos WHERE kind IS NULL AND thumb_hash IS NOT NULL ORDER BY id LIMIT ?");
+		s.bind(1, limit);
+		long[] out_;
+		while (s.step())
+			out_ ~= s.getLong(0);
+		return out_;
+	}
+
+	/// How many photos of each kind (NULL counted as "unknown").
+	long[string] kindCounts()
+	{
+		auto s = db.prepare("SELECT coalesce(kind, 'unknown'), count(*) FROM photos GROUP BY 1");
+		long[string] out_;
+		while (s.step())
+			out_[s.getString(0)] = s.getLong(1);
+		return out_;
 	}
 
 	void setFavorite(long id, bool on)
@@ -257,6 +303,8 @@ final class PhotoRepo
 			"size": JSONValue(p.size),
 			"remote": JSONValue(p.originPeer !is null),
 			"favorite": JSONValue(p.favorite),
+			"kind": p.kind is null ? JSONValue(null) : JSONValue(p.kind),
+			"kindBy": p.kindBy is null ? JSONValue(null) : JSONValue(p.kindBy),
 		];
 		return j;
 	}
@@ -273,7 +321,7 @@ final class PhotoRepo
 	// ---- internals --------------------------------------------------------------
 
 	private enum selectColumns = `SELECT p.id, p.hash, p.path, p.root_id, p.size, p.mtime_ms, p.taken_ts, p.taken_at,
-		p.width, p.height, p.orientation, p.camera, p.lat, p.lon, p.thumb_hash, p.origin_peer, p.favorite`;
+		p.width, p.height, p.orientation, p.camera, p.lat, p.lon, p.thumb_hash, p.origin_peer, p.favorite, p.kind, p.kind_by`;
 
 	private static Photo readRow(ref Statement s)
 	{
@@ -299,6 +347,8 @@ final class PhotoRepo
 		p.thumbHash = s.getString(14);
 		p.originPeer = s.getString(15);
 		p.favorite = s.getLong(16) != 0;
+		p.kind = s.getString(17);
+		p.kindBy = s.getString(18);
 		return p;
 	}
 
@@ -307,12 +357,15 @@ final class PhotoRepo
 		string joins;
 		string where = " WHERE 1=1";
 		long[] longs;
+		string[] strings; // bound after the longs (they appear after them in `where`)
 
 		/// Binds the collected values starting at 1; returns how many were bound.
 		int bind(ref Statement s)
 		{
 			int i = 0;
 			foreach (v; longs)
+				s.bind(++i, v);
+			foreach (v; strings)
 				s.bind(++i, v);
 			return i;
 		}
@@ -338,6 +391,11 @@ final class PhotoRepo
 		}
 		if (f.favorites)
 			w.where ~= " AND p.favorite = 1";
+		if (f.kind.length)
+		{
+			w.where ~= " AND p.kind = ?";
+			w.strings ~= f.kind;
+		}
 		if (f.year)
 		{
 			auto r = dateRange(f.year, f.month, f.day);
@@ -386,4 +444,8 @@ unittest
 	Filter fav;
 	fav.favorites = true;
 	assert(repo.count(fav) == 1 && repo.page(fav, 0, 10)[0].favorite);
+	repo.setKind(a.id, "meme", "auto");
+	Filter memes;
+	memes.kind = "meme";
+	assert(repo.count(memes) == 1 && repo.kindCounts()["meme"] == 1 && repo.kindCounts()["unknown"] == 1);
 }

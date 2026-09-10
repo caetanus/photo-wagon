@@ -9,9 +9,50 @@ import photowagon.core.ipc.protocol;
 import photowagon.core.library.dates : DateTree;
 import photowagon.core.library.photos : Filter, PhotoRepo;
 import photowagon.core.library.roots : RootRepo;
+import photowagon.core.library.kindjob : KindService;
 
-void registerLibraryApi(Registry r, RootRepo roots, PhotoRepo photos, DateTree dates, Indexer indexer, Events events)
+void registerLibraryApi(Registry r, RootRepo roots, PhotoRepo photos, DateTree dates, Indexer indexer, Events events,
+		KindService kinds = null, void delegate() scanFaces = null)
 {
+	r.add("library.stats", (JSONValue p) {
+		JSONValue k = JSONValue.emptyObject;
+		foreach (name, n; photos.kindCounts())
+			k[name] = n;
+		return JSONValue(["kinds": k, "total": JSONValue(photos.count(Filter.init))]);
+	});
+
+	// {id} → the pixel statistics the kind rules use (for tuning and curiosity)
+	r.add("photo.stats", (JSONValue p) {
+		import vibe.core.concurrency : async;
+		import photowagon.core.thumbs.vips : imageStats;
+
+		auto photo = photos.get(requireLong(p, "id"));
+		if (photo.thumbHash is null)
+			throw new ApiError("not_found", "no thumbnail");
+		import std.file : exists;
+
+		// the original when we have it: a re-compressed thumbnail flattens noise into plateaus
+		immutable src = photo.path !is null && photo.path.exists ? photo.path : photos.thumbPath(photo.thumbHash);
+		auto st = async(&imageStats, src).getResult();
+		return JSONValue([
+			"dominant": JSONValue(st.dominantFraction), "unique": JSONValue(st.uniqueFraction),
+			"saturation": JSONValue(st.meanSaturation), "edges": JSONValue(st.edgeDensity),
+			"light": JSONValue(st.lightFraction), "dark": JSONValue(st.darkFraction), "flat": JSONValue(st.flatFraction),
+			"camera": JSONValue(photo.camera !is null), "width": JSONValue(photo.width), "height": JSONValue(photo.height),
+			"path": JSONValue(photo.path), "kind": photo.kind is null ? JSONValue(null) : JSONValue(photo.kind),
+		]);
+	});
+
+	r.add("photo.setKind", (JSONValue p) {
+		if (kinds is null)
+			throw new ApiError("unsupported", "kinds are not available here");
+		immutable id = requireLong(p, "id");
+		void nothing() {}
+		kinds.setKind(id, requireString(p, "kind"), scanFaces ? scanFaces : &nothing);
+		auto photo = photos.get(id);
+		return photos.toJson(photo);
+	});
+
 	r.add("library.roots", (JSONValue p) {
 		JSONValue[] out_;
 		foreach (root; roots.list())
@@ -88,6 +129,9 @@ Filter filterOf(JSONValue p)
 	f.rootId = getLong(p, "rootId");
 	f.albumId = getLong(p, "albumId");
 	f.personId = getLong(p, "personId");
+	f.kind = getString(p, "kind");
+	if (f.kind.length && f.kind != "photo" && f.kind != "screenshot" && f.kind != "meme")
+		throw new ApiError("bad_params", "kind must be photo, screenshot or meme");
 	if (p.type == JSONType.object)
 		if (auto v = "favorites" in p)
 			f.favorites = v.type == JSONType.true_;

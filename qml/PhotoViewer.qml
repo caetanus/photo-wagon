@@ -21,6 +21,7 @@ Item {
     signal nameFace(int faceId, int personId, string name)
     signal notAFace(int faceId)
     signal favorite(int id)
+    signal setKind(int id, string kind)
 
     readonly property int currentIndex: {
         if (!photo) return -1
@@ -231,6 +232,25 @@ Item {
                     Layout.fillWidth: true
                     Label { text: label; color: theme.muted; font.pixelSize: 12; Layout.preferredWidth: 80 }
                     Label { text: value; color: theme.text; font.pixelSize: 12; elide: Text.ElideMiddle; Layout.fillWidth: true }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label { text: "Type"; color: theme.muted; font.pixelSize: 12; Layout.preferredWidth: 80 }
+                    ComboBox {
+                        id: kindBox
+                        Layout.fillWidth: true
+                        font.pixelSize: 12
+                        model: ["Photo", "Screenshot", "Meme"]
+                        readonly property var kinds: ["photo", "screenshot", "meme"]
+                        currentIndex: viewer.photo && viewer.photo.kind ? Math.max(0, kinds.indexOf(viewer.photo.kind)) : 0
+                        onActivated: (i) => { if (viewer.photo && kinds[i] !== viewer.photo.kind) viewer.setKind(viewer.photo.id, kinds[i]) }
+                    }
+                    Label {
+                        visible: viewer.photo && viewer.photo.kindBy === "user"
+                        text: "chosen by you"
+                        color: theme.muted
+                        font.pixelSize: 10
+                    }
                 }
                 InfoRow { label: "Camera"; value: viewer.photo && viewer.photo.camera ? viewer.photo.camera : "" }
                 InfoRow {

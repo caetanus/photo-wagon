@@ -39,7 +39,7 @@ final class FaceRepo
 	/// Local photos not yet scanned, oldest first.
 	long[] unscannedPhotos(long limit = 100_000)
 	{
-		auto s = db.prepare("SELECT id FROM photos WHERE faces_scanned = 0 AND path IS NOT NULL ORDER BY id LIMIT ?");
+		auto s = db.prepare("SELECT id FROM photos WHERE faces_scanned = 0 AND path IS NOT NULL AND coalesce(kind, 'photo') = 'photo' ORDER BY id LIMIT ?");
 		s.bind(1, limit);
 		long[] out_;
 		while (s.step())
@@ -179,6 +179,21 @@ final class FaceRepo
 			d.run();
 			return cast(long) n;
 		});
+	}
+
+	/// Faces found in pictures that turned out not to be photographs (memes, screenshots).
+	long deleteFacesOfNonPhotos()
+	{
+		db.exec("DELETE FROM faces WHERE photo_id IN (SELECT id FROM photos WHERE kind IS NOT NULL AND kind != 'photo')");
+		return db.changes();
+	}
+
+	/// Forgets the scan of one photo so it is looked at again.
+	void unmarkScanned(long photoId)
+	{
+		auto s = db.prepare("UPDATE photos SET faces_scanned = 0 WHERE id = ?");
+		s.bind(1, photoId);
+		s.run();
 	}
 
 	/// Drops stored detections below `score` (an older scan kept weaker ones).

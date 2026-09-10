@@ -22,7 +22,8 @@ import photowagon.core.library.calendar : isoTime;
 import photowagon.core.ipc.events : Events;
 import photowagon.core.library.photos : Photo, PhotoRepo;
 import photowagon.core.metadata.exif : ExifInfo, readExif;
-import photowagon.core.thumbs.vips : ThumbResult, makeThumbnail;
+import photowagon.core.library.kind : Signals, classify;
+import photowagon.core.thumbs.vips : ThumbResult, makeThumbnail, imageStats;
 
 final class Indexer
 {
@@ -213,6 +214,22 @@ private final class Job
 		p.lat = exif.lat;
 		p.lon = exif.lon;
 		p.thumbHash = thumb.hash;
+
+		// what kind of picture it is (a user's choice on a re-import stays)
+		if (p.kindBy != "user")
+		{
+			Signals sig;
+			sig.path = c.path;
+			sig.width = p.width;
+			sig.height = p.height;
+			sig.hasCamera = exif.camera !is null;
+			try
+				sig.stats = async(&imageStats, c.path).getResult(); // the original, not the thumbnail
+			catch (Exception e)
+				logDiagnostic("indexer: stats failed for %s: %s", c.path, e.msg);
+			p.kind = classify(sig);
+			p.kindBy = "auto";
+		}
 
 		if (p.id)
 			owner.photos.update(p);

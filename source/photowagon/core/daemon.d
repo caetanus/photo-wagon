@@ -35,6 +35,7 @@ import photowagon.core.ipc.protocol : Registry;
 import photowagon.core.ipc.server : IpcServer;
 import photowagon.core.library.albums : AlbumRepo;
 import photowagon.core.library.dates : DateTree;
+import photowagon.core.library.kindjob : KindService;
 import photowagon.core.library.photos : PhotoRepo;
 import photowagon.core.library.roots : RootRepo;
 import photowagon.core.p2p.identity : loadOrCreateIdentity;
@@ -60,6 +61,7 @@ final class Daemon : ServerControl
 	private FiberGroup own;
 	private Indexer indexer;
 	private FaceService facesService;
+	private KindService kinds;
 	private Node node;
 	private Sharing sharing;
 	private bool stopped;
@@ -93,7 +95,10 @@ final class Daemon : ServerControl
 		indexer = new Indexer(cfg, photos, events);
 		auto faceRepo = new FaceRepo(db);
 		facesService = new FaceService(cfg, db, faceRepo, photos, store, events);
-		indexer.onDone = () { facesService.start(); };
+		kinds = new KindService(db, photos, faceRepo, store, events);
+		// index → kinds → faces: faces are only looked for in photographs
+		indexer.onDone = () { kinds.start(); };
+		kinds.onDone = () { facesService.start(); };
 
 		if (cfg.p2p)
 		{
@@ -114,7 +119,7 @@ final class Daemon : ServerControl
 		registry = new Registry;
 		registerDaemonApi(registry, cfg, node, &requestStop);
 		registerPairingApi(registry, this);
-		registerLibraryApi(registry, roots, photos, dates, indexer, events);
+		registerLibraryApi(registry, roots, photos, dates, indexer, events, kinds, () { facesService.start(); });
 		registerMediaApi(registry, photos, store);
 		registerImportApi(registry, cfg, roots, photos, indexer);
 		registerFaceApi(registry, faceRepo, facesService, store);
@@ -134,7 +139,7 @@ final class Daemon : ServerControl
 		// pick up changes since last run
 		foreach (root; roots.list())
 			indexer.start(root.id, root.path);
-		facesService.start();
+		kinds.start();
 	}
 
 	// ---- ServerControl: the loopback/LAN listener, on demand ------------------------
@@ -214,6 +219,8 @@ final class Daemon : ServerControl
 			ipc.close();
 		if (indexer)
 			indexer.close();
+		if (kinds)
+			kinds.close();
 		if (facesService)
 			facesService.close();
 		if (sharing)

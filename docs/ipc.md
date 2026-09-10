@@ -51,9 +51,11 @@ created once per library (`<data dir>/pair.token`).
 | `library.addRoot` | `{path}` | `{id}` — starts an index job; progress arrives as events |
 | `library.removeRoot` | `{id}` | `{}` |
 | `library.rescan` | `{id?}` | `{}` — all roots when `id` is omitted |
-| `library.page` | `{offset, limit, year?, month?, day?, rootId?, albumId?, personId?, favorites?}` | `{total, offset, items: [Photo]}` newest first; inside an album, album order |
+| `library.page` | `{offset, limit, year?, month?, day?, rootId?, albumId?, personId?, favorites?, kind?}` | `{total, offset, items: [Photo]}` newest first; inside an album, album order |
 | `library.dates` | `{rootId?}` | `{years: [{year, count, cover, months: [{month, count, cover, days: [{day, count}]}]}]}` — `cover` is the thumbnail URL of the newest photo of that year/month |
 | `photo.favorite` | `{id, on?}` | `{id, favorite}` (default on) |
+| `library.stats` | — | `{total, kinds: {photo, screenshot, meme, unknown}}` |
+| `photo.setKind` | `{id, kind}` | `Photo` — the user's word on what a picture is (`photo`, `screenshot`, `meme`); a photograph gets its faces scanned, anything else loses them |
 | `photo.get` | `{id}` | `Photo` |
 | `photo.neighbours` | `{id, year?, month?, day?, rootId?, albumId?}` | `{prev: id?, next: id?}` in the same order `library.page` uses |
 
@@ -63,8 +65,15 @@ created once per library (`<data dir>/pair.token`).
 {"id": 123, "hash": "sha256-hex", "path": "/abs/file.jpg", "fileUrl": "file:///abs/file.jpg",
  "thumbUrl": "file:///.../store/ab/cdef...", "takenAt": "2024-05-01T12:00:00Z", "takenTs": 1714564800,
  "width": 4000, "height": 3000, "orientation": 1, "camera": "Canon EOS R6",
- "lat": null, "lon": null, "size": 3456789, "remote": false, "favorite": false}
+ "lat": null, "lon": null, "size": 3456789, "remote": false, "favorite": false,
+ "kind": "photo", "kindBy": "auto"}
 ```
+
+`kind` is `photo`, `screenshot` or `meme` (null until classified): a camera in
+the EXIF makes a photograph; a screen-sized image, a "Screenshots" folder or a
+"Screenshot_" name a screenshot; otherwise the look of the pixels (flat areas,
+few colours, mostly white, dense hard edges) marks a meme. `kindBy` says whether
+the user chose it. Faces are only looked for in photographs.
 
 `path` and `fileUrl` are null and `remote` is true for a photo known only through a
 peer (its thumbnail is in the store; the original has not been fetched). `width`
@@ -137,6 +146,8 @@ Methods that need the node answer `{"error": {"code": "p2p_off"}}` when it is no
 | `library.changed` | `{}` — something in `library.page` / `library.dates` is stale |
 | `p2p.peer` | `{peerId, connected: bool}` |
 | `p2p.fetch` | `{albumId, done, total}` |
+| `kinds.progress` | `{done, total}` |
+| `kinds.done` | `{photos, counts, seconds}` |
 | `faces.progress` | `{done, total, faces}` |
 | `faces.done` | `{photos, faces, seconds}` |
 | `people.changed` | `{}` — people or face assignments changed |

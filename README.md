@@ -9,7 +9,7 @@ an album with a peer you chose.
 ## The desktop app
 
 A Photos-style window: a source list (Library, Favorites, People, Imports,
-albums, the phone and the peers), a toolbar with **Years / Months / Days / All
+Media Types — Photos, Screenshots, Memes — albums, the phone and the peers), a toolbar with **Years / Months / Days / All
 Photos**, a zoom slider and search, the grid (click selects, ⌘/Ctrl-click
 extends, double-click opens, hover shows the heart), the viewer in place of the
 grid with a filmstrip and an **ⓘ Info** panel (camera, size, folder, the people

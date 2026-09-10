@@ -10,6 +10,7 @@ Rectangle {
     required property QtObject icons
     property var albums: []
     property var roots: []
+    property var stats: ({ total: 0, kinds: {} })
     /// "all" | "favorites" | "people" | "imports" | "album:<id>" | "phone" | "peers"
     property string selected: "all"
 
@@ -97,6 +98,10 @@ Rectangle {
                 height: visible ? 30 : 0
                 detail: sidebar.importRoot ? String(sidebar.importRoot.photos) : ""
             }
+            SectionHeader { title: "Media Types" }
+            Row { key: "kind:photo"; title: "Photos"; icon: icons.photos; detail: String(sidebar.stats.kinds.photo || 0) }
+            Row { key: "kind:screenshot"; title: "Screenshots"; icon: icons.screenshot; detail: String(sidebar.stats.kinds.screenshot || 0) }
+            Row { key: "kind:meme"; title: "Memes"; icon: icons.meme; detail: String(sidebar.stats.kinds.meme || 0) }
             SectionHeader { title: "Albums"; visible: sidebar.albums.length > 0; height: visible ? implicitHeight : 0 }
             Repeater {
                 model: sidebar.albums

@@ -36,6 +36,7 @@ import photowagon.ui.transport : Bridge;
     Signal!() facesChanged;
     Signal!() filterChanged;
     Signal!() suggestionChanged;
+    Signal!() statsChanged;
 
     /// {"total":N,"offset":o,"items":[Photo…]} — accumulated across loadPage calls.
     @Property("pageChanged")    string page   = `{"total":0,"offset":0,"items":[]}`;
@@ -71,6 +72,8 @@ import photowagon.ui.transport : Bridge;
     @Property("facesChanged") string faces = `{"photoId":0,"faces":[]}`;
     /// The person the grid is filtered to (0 = none).
     @Property("peopleChanged") int personFilter = 0;
+    /// {"total":N,"kinds":{"photo":n,"screenshot":n,"meme":n}} — what the library holds.
+    @Property("statsChanged") string stats = `{"total":0,"kinds":{}}`;
     /// After a naming: {"person":{…},"candidates":[{…,"similarity"}]} of people who may be the same, or "{}".
     @Property("suggestionChanged") string suggestion = "{}";
     /// {"year","month","day","personId","albumId","rootId","favorites"} — what the page shows.
@@ -84,6 +87,7 @@ import photowagon.ui.transport : Bridge;
     private long fPerson;
     private long fAlbum, fRoot;
     private bool fFavorites;
+    private string fKind;
     private long openId; // photo being opened/shown; faces answers for others are dropped
     private int pageLimit = 120;
     private bool indexing;
@@ -195,11 +199,52 @@ import photowagon.ui.transport : Bridge;
         reload(0, pageLimit);
     }
 
+    /// Photographs, screenshots or memes only ("" = everything).
+    @Slot void filterKind(string kind)
+    {
+        clearFilters();
+        fKind = kind;
+        publishFilter();
+        reload(0, pageLimit);
+    }
+
+    /// The user's word on what a picture is.
+    @Slot void setKind(int id, string kind)
+    {
+        JSONValue params = ["id": JSONValue(id), "kind": JSONValue(kind)];
+        client.request("photo.setKind", params, (r, e) {
+            if (e.type != JSONType.null_) { report("setKind", e); return; }
+            foreach (ref it; items)
+                if (it["id"].integer == id)
+                    it = r;
+            publishPage();
+            if (current.length && parseJSON(current)["id"].integer == id)
+            {
+                auto cur = parseJSON(current);
+                cur["kind"] = r["kind"];
+                cur["kindBy"] = r["kindBy"];
+                current = cur.toString();
+                currentChanged.emit();
+            }
+            loadStats();
+        });
+    }
+
+    @Slot void loadStats()
+    {
+        client.request("library.stats", (r, e) {
+            if (e.type != JSONType.null_) return;
+            stats = r.toString();
+            statsChanged.emit();
+        });
+    }
+
     private void clearFilters()
     {
         fYear = fMonth = fDay = 0;
         fPerson = fAlbum = fRoot = 0;
         fFavorites = false;
+        fKind = null;
     }
 
     private void publishFilter()
@@ -208,6 +253,7 @@ import photowagon.ui.transport : Bridge;
         f["year"] = fYear; f["month"] = fMonth; f["day"] = fDay;
         f["personId"] = fPerson; f["albumId"] = fAlbum; f["rootId"] = fRoot;
         f["favorites"] = fFavorites;
+        f["kind"] = fKind is null ? "" : fKind;
         filter = f.toString();
         filterChanged.emit();
         if (personFilter != cast(int) fPerson)
@@ -280,6 +326,7 @@ import photowagon.ui.transport : Bridge;
         if (fAlbum)  params["albumId"] = fAlbum;
         if (fRoot)   params["rootId"] = fRoot;
         if (fFavorites) params["favorites"] = true;
+        if (fKind.length) params["kind"] = fKind;
         immutable off = offset;
         client.request("library.page", params, (r, e) {
             if (e.type != JSONType.null_) { report("page", e); return; }
@@ -312,6 +359,7 @@ import photowagon.ui.transport : Bridge;
         loadAlbums();
         loadPeers();
         loadPeople();
+        loadStats();
         reload(0, pageLimit);
     }
 
@@ -330,6 +378,7 @@ import photowagon.ui.transport : Bridge;
             if (fAlbum)  nb["albumId"] = fAlbum;
             if (fRoot)   nb["rootId"] = fRoot;
             if (fFavorites) nb["favorites"] = true;
+            if (fKind.length) nb["kind"] = fKind;
             loadFaces(id);
             client.request("photo.neighbours", nb, (n, e2) {
                 JSONValue photo = r;
@@ -603,6 +652,7 @@ import photowagon.ui.transport : Bridge;
             break;
         case "library.changed":
             loadDates();
+            loadStats();
             reload(0, pageLimit);
             break;
         case "p2p.peer":
@@ -616,6 +666,14 @@ import photowagon.ui.transport : Bridge;
             setStatus(true, indexing, data["faces"].integer.to!string ~ " face" ~ (data["faces"].integer == 1 ? "" : "s")
                 ~ " in " ~ data["photos"].integer.to!string ~ " photos");
             loadPeople();
+            break;
+        case "kinds.progress":
+            setStatus(true, true, "sorting photos, screenshots and memes: " ~ data["done"].integer.to!string
+                ~ " / " ~ data["total"].integer.to!string);
+            break;
+        case "kinds.done":
+            loadStats();
+            reload(0, pageLimit);
             break;
         case "people.changed":
             loadPeople();

@@ -65,6 +65,7 @@ ApplicationWindow {
     readonly property var rootsData: JSON.parse(library.roots).roots
     readonly property var filterData: JSON.parse(library.filter)
     readonly property var suggestionData: JSON.parse(library.suggestion)
+    readonly property var statsData: JSON.parse(library.stats)
     property var notSame: ({})   // "a:b" pairs the user said are different
 
     // ---- navigation state -----------------------------------------------------------------
@@ -81,6 +82,7 @@ ApplicationWindow {
         else if (key === "favorites") library.filterFavorites()
         else if (key === "imports") { const r = sidebar.importRoot; if (r) library.filterRoot(r.id) }
         else if (key.startsWith("album:")) library.filterAlbum(parseInt(key.substring(6)))
+        else if (key.startsWith("kind:")) library.filterKind(key.substring(5))
         else if (key === "phone") { phonePanel.open(); source = "all" }
         else if (key === "peers") { peersPanel.open(); source = "all" }
         else if (key === "people") library.loadPeople()
@@ -101,6 +103,9 @@ ApplicationWindow {
         if (source === "people") return "People"
         if (source === "person") return personName(filterData.personId)
         if (filterData.favorites) return "Favorites"
+        if (filterData.kind === "photo") return "Photos"
+        if (filterData.kind === "screenshot") return "Screenshots"
+        if (filterData.kind === "meme") return "Memes"
         if (filterData.albumId) return albumName(filterData.albumId)
         if (filterData.rootId) return "Imports"
         if (filterData.year) {
@@ -148,6 +153,7 @@ ApplicationWindow {
             icons: root.icons
             albums: root.albumsData
             roots: root.rootsData
+            stats: root.statsData
             selected: root.source === "person" ? "people" : root.source
             onPick: (key) => root.pickSource(key)
         }
@@ -371,6 +377,7 @@ ApplicationWindow {
                 }
                 onNameFace: (faceId, personId, name) => library.setFacePerson(faceId, personId, name)
                 onNotAFace: (faceId) => library.deleteFace(faceId)
+                onSetKind: (id, kind) => library.setKind(id, kind)
                 onFavorite: (id) => library.toggleFavorite(id)
             }
         }

@@ -66,7 +66,7 @@ Popup {
             Portrait { p: card.candidate }
         }
         Label {
-            visible: card.data.candidates && card.data.candidates.length > 1
+            visible: !!(card.data.candidates && card.data.candidates.length > 1)
             text: card.data.candidates ? (card.which + 1) + " of " + card.data.candidates.length + " look-alikes" : ""
             color: theme.muted
             font.pixelSize: 11

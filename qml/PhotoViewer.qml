@@ -15,6 +15,16 @@ Item {
     property var people: []
     property bool infoOpen: false
     property bool showStrip: true
+    /// The naming popup's body (a plain Item: headless captures can grab it).
+    property alias namerBody: namerBody
+
+    /// Opens "Who is this?" on the first face with `text` typed (capture hook).
+    function openNamer(text) {
+        if (!faces.length) return
+        namer.faceId = faces[0].id; namer.currentName = faces[0].name || ""
+        namer.open()
+        nameField.text = text
+    }
 
     signal closed()
     signal openIndex(int index)
@@ -371,63 +381,133 @@ Item {
         id: namer
         property int faceId: 0
         property string currentName: ""
-        // the known people, narrowed by what is typed (named ones only once typing starts)
+        // the named people, alphabetical, narrowed by what is typed (prefix of a word first)
         readonly property var matches: {
             const q = nameField.text.trim().toLowerCase()
-            const all = viewer.people
-            if (!q.length) return all.slice(0, 8)
-            return all.filter(p => p.name && p.name.toLowerCase().includes(q)).slice(0, 8)
+            const named = viewer.people.filter(p => p.name)
+            const score = p => {
+                const n = p.name.toLowerCase()
+                if (!q.length) return 0
+                if (n.startsWith(q)) return 0
+                if (n.split(/\s+/).some(w => w.startsWith(q))) return 1
+                if (n.includes(q)) return 2
+                return -1
+            }
+            return named.filter(p => score(p) >= 0)
+                        .sort((a, b) => score(a) - score(b) || a.name.localeCompare(b.name, Qt.locale().name, { sensitivity: "base" }))
         }
+        readonly property var exact: matches.find(p => p.name.toLowerCase() === nameField.text.trim().toLowerCase()) || null
+        /// keyboard cursor in the list (-1 = none); ListView.currentIndex would jump to 0 on its own
+        property int cursor: -1
         modal: true
         anchors.centerIn: parent
-        width: 320
+        width: 400
         padding: 16
         background: Rectangle { color: theme.panel; border.color: theme.separator; radius: 10 }
-        onOpened: { nameField.text = currentName; nameField.forceActiveFocus(); nameField.selectAll() }
+        onOpened: { nameField.text = currentName; nameField.forceActiveFocus(); nameField.selectAll(); cursor = -1 }
         ColumnLayout {
+            id: namerBody
             anchors.fill: parent
             spacing: 10
             Label { text: "Who is this?"; font.bold: true; color: theme.text }
             TextField {
                 id: nameField
-                placeholderText: "Name"
+                placeholderText: "Type a name"
                 Layout.fillWidth: true
-                // Return: the one matching person, or a new name
+                // Return: the highlighted person, the exact name, or a new name
                 onAccepted: {
-                    const m = namer.matches
-                    if (m.length === 1 && m[0].name && m[0].name.toLowerCase() === text.trim().toLowerCase())
-                        viewer.nameFace(namer.faceId, m[0].id, "")
+                    if (namer.cursor >= 0 && namer.cursor < namer.matches.length)
+                        viewer.nameFace(namer.faceId, namer.matches[namer.cursor].id, "")
+                    else if (namer.exact)
+                        viewer.nameFace(namer.faceId, namer.exact.id, "")
+                    else if (text.trim().length)
+                        viewer.nameFace(namer.faceId, 0, text.trim())
                     else
-                        viewer.nameFace(namer.faceId, 0, text)
+                        return
                     namer.close()
                 }
+                Keys.onDownPressed: { if (namer.cursor < namer.matches.length - 1) namer.cursor++; peopleList.positionViewAtIndex(namer.cursor, ListView.Contain) }
+                Keys.onUpPressed: if (namer.cursor > -1) namer.cursor--
+                onTextChanged: namer.cursor = -1
             }
             Label {
                 visible: namer.matches.length > 0
-                text: nameField.text.trim().length ? "Already known:" : "Someone already known:"
+                text: nameField.text.trim().length && !namer.exact ? "Already known, matching:" : "Someone already known:"
                 color: theme.muted
                 font.pixelSize: 12
             }
             ListView {
+                id: peopleList
                 visible: namer.matches.length > 0
                 Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(200, namer.matches.length * 32)
+                Layout.preferredHeight: Math.min(280, namer.matches.length * 40)
                 clip: true
                 model: namer.matches
-                delegate: ItemDelegate {
+                ScrollBar.vertical: ScrollBar { }
+                delegate: Item {
+                    id: personRow
                     required property var modelData
+                    required property int index
                     width: ListView.view.width
-                    height: 32
-                    text: (modelData.name || "Unnamed") + "  ·  " + modelData.faces
-                    onClicked: { viewer.nameFace(namer.faceId, modelData.id, ""); namer.close() }
+                    height: 40
+                    readonly property bool lit: index === namer.cursor || rowHover.hovered
+                    Rectangle { anchors.fill: parent; radius: 6; color: personRow.lit ? theme.hover : "transparent" }
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 6
+                        anchors.rightMargin: 10
+                        spacing: 10
+                        Item {
+                            width: 30; height: 30
+                            Rectangle { anchors.fill: parent; radius: 15; color: theme.tile }
+                            Image {
+                                anchors.fill: parent
+                                source: personRow.modelData.coverUrl || ""
+                                fillMode: Image.PreserveAspectCrop
+                                sourceSize.width: 60; sourceSize.height: 60
+                                asynchronous: true
+                            }
+                            Image {
+                                anchors.fill: parent
+                                source: icons.ringMask(personRow.lit ? theme.hover : theme.panel)
+                                sourceSize.width: 30; sourceSize.height: 30
+                            }
+                        }
+                        Label {
+                            text: personRow.modelData.name
+                            color: theme.text
+                            font.pixelSize: 13
+                            elide: Text.ElideRight
+                            Layout.fillWidth: true
+                        }
+                        Label {
+                            text: personRow.modelData.faces + (personRow.modelData.faces === 1 ? " photo" : " photos")
+                            color: theme.muted
+                            font.pixelSize: 11
+                        }
+                    }
+                    HoverHandler { id: rowHover }
+                    TapHandler { onTapped: { viewer.nameFace(namer.faceId, personRow.modelData.id, ""); namer.close() } }
                 }
+            }
+            Label {
+                visible: namer.matches.length === 0 && nameField.text.trim().length > 0
+                text: "Nobody called that yet — Save adds a new person."
+                color: theme.muted
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
             }
             RowLayout {
                 Button { text: "Nobody"; flat: true; onClicked: { viewer.nameFace(namer.faceId, 0, ""); namer.close() } }
                 Button { text: "Not a face"; flat: true; onClicked: { viewer.notAFace(namer.faceId); namer.close() } }
                 Item { Layout.fillWidth: true }
                 Button { text: "Cancel"; onClicked: namer.close() }
-                Button { text: "Save"; enabled: nameField.text.trim().length > 0; onClicked: { viewer.nameFace(namer.faceId, 0, nameField.text); namer.close() } }
+                Button {
+                    text: namer.exact ? "Use " + namer.exact.name : "Save"
+                    enabled: nameField.text.trim().length > 0
+                    onClicked: nameField.accepted()
+                }
             }
         }
     }

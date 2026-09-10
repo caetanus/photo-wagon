@@ -16,7 +16,9 @@ connection / indexing status in the footer), a toolbar with **Years / Months / D
 Photos**, a zoom slider and search, the grid (click selects, ⌘/Ctrl-click
 extends, double-click opens, hover shows the heart), the viewer in place of the
 grid with a caption line (date, camera, size, file), a filmstrip and an **ⓘ Info** panel (camera, size, folder, the people
-in the photo with round portraits and "Name" for the unnamed ones), and a
+in the photo with round portraits and "Name" for the unnamed ones; naming a
+face lists the known people alphabetically with their portraits, narrowed as
+you type, ↑/↓ and Return pick one), and a
 People page with round portraits. Light or dark follows the system.
 
 ## Requirements

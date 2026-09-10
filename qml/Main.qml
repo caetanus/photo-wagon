@@ -474,13 +474,19 @@ ApplicationWindow {
                 root.pickDate(parseInt(p[0]), parseInt(p[1] || "0"), parseInt(p[2] || "0"))
             }
             else if (library.shotView.startsWith("person:")) root.pickSource(library.shotView)
+            else if (library.shotView.startsWith("name:")) {}
             else root.mode = library.shotView
         }
+    }
+    Timer {   // PW_SHOT_VIEW=name:<text> with PW_SHOT_OPEN: the naming popup with <text> typed
+        running: library.shotPath.length > 0 && library.shotView.startsWith("name:") && root.viewing
+        interval: 1500
+        onTriggered: viewer.openNamer(library.shotView.substring(5))
     }
     Timer {
         running: library.shotPath.length > 0
         interval: 3500
-        onTriggered: (library.shotSend ? phonePanel.body : shell).grabToImage(function (r) {
+        onTriggered: (library.shotSend ? phonePanel.body : library.shotView.startsWith("name:") ? viewer.namerBody : shell).grabToImage(function (r) {
             r.saveToFile(library.shotPath)
             console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length, "source", root.source, "filter", library.filter)
             library.quit()

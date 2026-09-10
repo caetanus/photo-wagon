@@ -47,6 +47,7 @@ anything that crosses the UI/core boundary.
   round portraits use `Icons.ringMask` (a fat-border Rectangle does not clip).
 - Headless captures: `PW_SHOT=/path.png` plus `PW_SHOT_VIEW=people|days|months|years`,
   `PW_SHOT_VIEW=date:YYYY[-M[-D]]` (a node of the tree), `PW_SHOT_VIEW=person:<id>`,
+  `PW_SHOT_VIEW=name:<text>` with `PW_SHOT_OPEN` (the naming popup, `<text>` typed),
   `PW_SHOT_OPEN=<id>` (viewer with Info), `PW_SHOT_SEND=1` (pairing panel).
 - `Sidebar.qml` is a Column in a Flickable, not a ListView over an ObjectModel:
   a Repeater inside an ObjectModel piles its delegates at (0, 0).

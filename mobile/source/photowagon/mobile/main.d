@@ -107,6 +107,7 @@ int main()
     {
         environment["QSG_INFO"] = "1";           // scene graph setup lines in logcat (tag qt.scenegraph.general)
         environment["QSG_RENDER_TIMING"] = "1";  // per-frame polish / sync / render times: where a stall is spent
+        environment["QT_LOGGING_RULES"] = "qt.qpa.window=true;qt.qpa.android=true;qt.scenegraph.general=true";   // window expose / hide
     }
     installCrashHandler();
     logTls("qt thread");

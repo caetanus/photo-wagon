@@ -122,6 +122,14 @@ Test photos go to `/sdcard/DCIM/Camera` with `adb push`. With a phone attached
 as well, `ANDROID_SERIAL=emulator-5554` picks the emulator for adb and the
 harness: `ANDROID_SERIAL=emulator-5554 APK=mobile/build-android/x86_64/photo-wagon-mobile-debug.apk mobile/adb-harness.sh --install --clear-data --exercise`.
 
+What the emulator does not give: once the app pairs and the sync starts, Qt's
+Android window on this image stops rendering ("Skipping create egl on invalid
+or not yet created surface" from qt.qpa.window, the scene graph's render
+thread gone) while the process, the Qt event loop and the D threads go on —
+a surface/EGL problem of the emulator's swiftshader path, not seen on the
+phone. Use the emulator for launch, permission, indexing and crash hunting;
+use the phone for the UI.
+
 Two things the translated run taught, kept in the code: QtLoader's environment
 (`QT_PLUGIN_PATH`, QML paths) is invisible to a translated libc, so
 `MainActivity` writes it to `files/settings/qt-env` and `main.d` adopts it

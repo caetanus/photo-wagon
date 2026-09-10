@@ -55,6 +55,8 @@ final class Daemon : ServerControl
 	private Database db;
 	private IpcServer ipc;
 	private string ipcAddress;
+	private IpcServer lan;      // the phones' listener next to a loopback --port one
+	private ushort lanPort;
 	private Registry registry;
 	private Events events;
 	private string token;
@@ -150,9 +152,19 @@ final class Daemon : ServerControl
 
 	ushort startServing(string address)
 	{
-		// a loopback listener (--port for tools) does not serve a phone: reopen on the LAN
-		if (ipc !is null && address != ipcAddress && address == "0.0.0.0")
-			stopServing();
+		// A loopback listener (--port, for tools and tests) does not serve a phone: a
+		// second one opens on the LAN, on a port of its own, and the first stays —
+		// closing it would drop the very client that asked for the pairing.
+		if (ipc !is null && address == "0.0.0.0" && ipcAddress != "0.0.0.0")
+		{
+			if (lan is null)
+			{
+				lan = new IpcServer(registry, events, token);
+				lanPort = lan.listen("0.0.0.0", 0);
+				logInfo("core: also listening for phones on 0.0.0.0:%s", lanPort);
+			}
+			return lanPort;
+		}
 		if (ipc !is null)
 			return ipcPortInUse;
 		ipcAddress = address;
@@ -166,6 +178,12 @@ final class Daemon : ServerControl
 
 	void stopServing()
 	{
+		if (lan !is null)
+		{
+			lan.close();
+			lan = null;
+			return;
+		}
 		if (ipc is null)
 			return;
 		ipc.close();
@@ -180,12 +198,12 @@ final class Daemon : ServerControl
 
 	bool serving()
 	{
-		return ipc !is null;
+		return lan !is null || (ipc !is null && ipcAddress == "0.0.0.0");
 	}
 
 	ushort servingPort()
 	{
-		return ipcPortInUse;
+		return lan !is null ? lanPort : ipcPortInUse;
 	}
 
 	string pairingToken()

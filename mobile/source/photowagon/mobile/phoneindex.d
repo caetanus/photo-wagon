@@ -2,10 +2,10 @@
 // capture time and orientation from the pure-D EXIF reader, thumbnails
 // decoded by Qt (QImageReader, DCT-scaled, EXIF-rotated) into the cache dir.
 //
-// Work happens on the Qt thread, one photo per zero-interval timer tick, so
-// the UI stays responsive and no Qt object is ever touched off-thread. The
-// index is a JSON file in the app's data dir; a rescan only decodes what is
-// new or changed.
+// Decoding runs on a few worker threads (value types and files only); the Qt
+// thread merges their results from a timer, so the UI stays responsive and no
+// QObject is ever touched off-thread. The index is a JSON file in the app's
+// data dir; a rescan only decodes what is new or changed.
 module photowagon.mobile.phoneindex;
 
 import photowagon.mobile.plog : plog;
@@ -23,7 +23,7 @@ import std.digest.sha : sha1Of, toHexString, LetterCase;
 import std.file : exists, mkdirRecurse, readText, write, isDir;
 import std.json;
 import std.path : buildPath, baseName;
-import std.stdio : writeln, stdout;
+import core.sync.mutex : Mutex;
 
 import photowagon.core.indexer.scan : Candidate, scanImages;
 import photowagon.core.library.calendar : dateRange, fileUrl, isoTime, localDate;
@@ -84,8 +84,6 @@ final class PhoneIndex
     private PhonePhoto[] photos;     // newest first
     private PhonePhoto[string] byPath;
     private long nextId = 1;
-    private Candidate[] queue;
-    private long queued, processed, added;
     private QTimer pump;
     private bool dirty;
 
@@ -96,22 +94,47 @@ final class PhoneIndex
         thumbDir = buildPath(cacheDir, "thumbs");
         mkdirRecurse(dataDir);
         mkdirRecurse(thumbDir);
+        lock = new Mutex;
         load();
         pump = new QTimer(cast(cppq.QObject) null);
-        pump.setInterval(0);
+        pump.setInterval(30);
         pump.connectTimeout(&step);
     }
 
     string[] rootPaths() const { return roots.dup; }
     size_t length() const { return photos.length; }
-    bool busy() const { return queue.length > processed - (queued - queue.length); }
+    bool busy() const { return processed < queued; }
     bool scanning() { return pump.isActive(); }
 
     // ---- scanning ------------------------------------------------------------
+    //
+    // The walk is quick and happens here; decoding is the slow part (a 108 MP
+    // photo takes a good fraction of a second), so it runs on worker threads
+    // that only touch value types (QImageReader, QImage) and files. The Qt
+    // thread drains their results from a timer and is the only one to touch
+    // `photos`, the index file and the callbacks.
 
-    /// Walks the roots now (fast) and starts decoding what is new, one per tick.
-    /// Returns how many files were found; 0 with no readable root usually means
-    /// the permission is not granted yet.
+    private struct Decoded
+    {
+        Candidate c;
+        PhonePhoto p;      // takenTs, orientation, width, height, thumb
+        string error;
+        uint gen;          // the scan this belongs to; older ones are dropped
+    }
+
+    private Mutex lock;
+    private Candidate[] work;       // under lock: what the workers still have to decode
+    private Decoded[] results;      // under lock: decoded, not yet merged
+    private uint generation;
+    private int workers;            // under lock: threads alive
+    private long queued, processed, added;
+    private long lastSaved;
+
+    enum maxWorkers = 3;
+
+    /// Walks the roots now (fast) and starts decoding what is new on worker
+    /// threads. Returns how many files were found; 0 with no readable root
+    /// usually means the permission is not granted yet.
     size_t scan()
     {
         Candidate[] found;
@@ -122,14 +145,14 @@ final class PhoneIndex
             found ~= scanImages(r);
         }
         bool[string] seen;
-        queue.length = 0;
+        Candidate[] todo;
         foreach (ref c; found)
         {
             seen[c.path] = true;
             auto known = c.path in byPath;
             if (known && known.size == c.size && known.mtimeMs == c.mtimeMs && known.thumb !is null && known.thumb.exists)
                 continue;
-            queue ~= c;
+            todo ~= c;
         }
         long removed;
         foreach (ref p; photos.dup)
@@ -143,13 +166,23 @@ final class PhoneIndex
             photos = photos.remove!(p => p.path !in seen, SwapStrategy.stable);
             dirty = true;
         }
-        queued = queue.length;
+        synchronized (lock)
+        {
+            generation++;
+            work = todo;
+            results.length = 0;
+        }
+        queued = todo.length;
         processed = 0;
         added = 0;
-        plog("phone: ", found.length, " files, ", queue.length, " to decode, ", removed, " gone");
+        lastSaved = 0;
+        plog("phone: ", found.length, " files, ", queued, " to decode, ", removed, " gone");
         if (onProgress) onProgress(0, queued);
-        if (queue.length)
+        if (queued)
+        {
+            startWorkers();
             pump.start();
+        }
         else
         {
             if (dirty) save();
@@ -159,9 +192,76 @@ final class PhoneIndex
         return found.length;
     }
 
+    private void startWorkers()
+    {
+        import core.thread : Thread;
+        import std.parallelism : totalCPUs;
+
+        immutable want = cast(int) (totalCPUs > 1 ? (totalCPUs - 1 < maxWorkers ? totalCPUs - 1 : maxWorkers) : 1);
+        synchronized (lock)
+        {
+            while (workers < want)
+            {
+                workers++;
+                auto t = new Thread(&worker);
+                t.isDaemon = true;
+                t.start();
+            }
+        }
+    }
+
+    /// One worker: takes candidates until there are none, decodes each, posts the result.
+    private void worker()
+    {
+        for (;;)
+        {
+            Candidate c;
+            uint gen;
+            synchronized (lock)
+            {
+                if (work.length == 0)
+                {
+                    workers--;
+                    return;
+                }
+                c = work[0];
+                work = work[1 .. $];
+                gen = generation;
+            }
+            Decoded d;
+            d.c = c;
+            d.gen = gen;
+            try
+                d.p = decode(c, thumbDir);
+            catch (Exception e)
+                d.error = e.msg;
+            synchronized (lock)
+                results ~= d;
+        }
+    }
+
+    /// Qt thread, every few ms while decoding: merges what the workers produced.
     private void step()
     {
-        if (queue.length == 0)
+        Decoded[] batch;
+        synchronized (lock)
+        {
+            batch = results;
+            results = null;
+        }
+        foreach (ref d; batch)
+        {
+            if (d.gen != generation)
+                continue;
+            processed++;
+            if (d.error.length)
+                plog("phone: ", d.c.path, ": ", d.error);
+            else
+                merge(d);
+        }
+        if (batch.length && onProgress)
+            onProgress(processed, queued);
+        if (processed >= queued)
         {
             pump.stop();
             sortPhotos();
@@ -170,61 +270,61 @@ final class PhoneIndex
             if (onDone) onDone(added, 0);
             return;
         }
-        auto c = queue[0];
-        queue = queue[1 .. $];
-        processed++;
-        try
-            index(c);
-        catch (Exception e)
+        if (processed - lastSaved >= 25)
         {
-            plog("phone: ", c.path, ": ", e.msg);
-        }
-        if (onProgress) onProgress(processed, queued);
-        if (processed % 25 == 0)
-        {
+            lastSaved = processed;
             sortPhotos();
             save();
             if (onChanged) onChanged();
         }
     }
 
-    private void index(Candidate c)
+    private void merge(ref Decoded d)
     {
         PhonePhoto p;
-        if (auto known = c.path in byPath)
+        if (auto known = d.c.path in byPath)
             p = *known;
         else
         {
             p.id = nextId++;
-            p.path = c.path;
+            p.path = d.c.path;
         }
-        p.size = c.size;
-        p.mtimeMs = c.mtimeMs;
-
-        auto exif = readExifCore(c.path);
-        p.orientation = exif.found ? exif.orientation : 1;
-        p.takenTs = exif.found && exif.dateTimeOriginal.length ? parseExifTimestamp(exif.dateTimeOriginal) : 0;
-        if (p.takenTs == 0)
-            p.takenTs = c.mtimeMs / 1000;
-
-        immutable thumbPath = buildPath(thumbDir, toHexString!(LetterCase.lower)(sha1Of(c.path ~ "@" ~ c.mtimeMs.to!string)).idup ~ ".jpg");
-        int w, h;
-        makeThumb(c.path, thumbPath, p.orientation, w, h);
-        p.width = w;
-        p.height = h;
-        p.thumb = thumbPath;
-
-        if (c.path !in byPath)
+        p.size = d.c.size;
+        p.mtimeMs = d.c.mtimeMs;
+        p.takenTs = d.p.takenTs;
+        p.orientation = d.p.orientation;
+        p.width = d.p.width;
+        p.height = d.p.height;
+        p.thumb = d.p.thumb;
+        if (d.c.path !in byPath)
         {
             photos ~= p;
             added++;
         }
         else
             foreach (ref q; photos)
-                if (q.path == c.path)
+                if (q.path == d.c.path)
                     q = p;
-        byPath[c.path] = p;
+        byPath[d.c.path] = p;
         dirty = true;
+    }
+
+    /// Worker thread: EXIF and the thumbnail of one file. Touches no shared state.
+    private static PhonePhoto decode(Candidate c, string thumbDir)
+    {
+        PhonePhoto p;
+        auto exif = readExifCore(c.path);
+        p.orientation = exif.found ? exif.orientation : 1;
+        p.takenTs = exif.found && exif.dateTimeOriginal.length ? parseExifTimestamp(exif.dateTimeOriginal) : 0;
+        if (p.takenTs == 0)
+            p.takenTs = c.mtimeMs / 1000;
+        immutable thumbPath = buildPath(thumbDir, toHexString!(LetterCase.lower)(sha1Of(c.path ~ "@" ~ c.mtimeMs.to!string)).idup ~ ".jpg");
+        int w, h;
+        makeThumb(c.path, thumbPath, p.orientation, w, h);
+        p.width = w;
+        p.height = h;
+        p.thumb = thumbPath;
+        return p;
     }
 
     /// Decodes `src` scaled so its longest edge is `thumbEdge`, rotated by EXIF,

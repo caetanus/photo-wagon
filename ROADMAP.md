@@ -57,5 +57,6 @@ fetched album are not pulled, only thumbnails.
 ## M8 — Polish
 - [x] Photos-style desktop UI (sidebar, Years/Months/Days/All, zoom, selection, in-window viewer, Info panel, People, favorites, albums from a selection) — 2026-09-09
 - [x] Back from the old UI: the date tree, the people list and the status in the sidebar, the caption under the photo; `library.dates` follows the filter — 2026-09-10
+- [x] Photos over 64 MP would not open (Qt's 256 MB decode limit): the viewer decodes scaled to 4096² — 2026-09-10
 - [ ] Memories / Places (needs GPS clusters and a map)
 - Flatpak / AppImage, caching, startup time

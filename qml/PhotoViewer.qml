@@ -72,6 +72,11 @@ Item {
             autoTransform: true
             smooth: true
             mipmap: true
+            // Decode scaled to fit 4096²: a 108 MP phone photo is 434 MB decoded, over
+            // Qt's 256 MB image limit, and would not open at all; the JPEG reader scales
+            // while decoding, so this is also faster and lighter.
+            sourceSize.width: 4096
+            sourceSize.height: 4096
         }
         HoverHandler { id: stageHover }
         BusyIndicator { anchors.centerIn: parent; running: image.status === Image.Loading; visible: running }

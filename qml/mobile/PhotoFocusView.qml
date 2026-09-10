@@ -41,6 +41,9 @@ Rectangle {
         anchors.margins: 24
         anchors.bottomMargin: 72
         source: viewer.photo ? viewer.photo.fileUrl : ""
+        // decode scaled: a 108 MP photo (434 MB decoded) is over Qt's 256 MB image limit
+        sourceSize.width: 2560
+        sourceSize.height: 2560
         asynchronous: true
         fillMode: Image.PreserveAspectFit
         autoTransform: true

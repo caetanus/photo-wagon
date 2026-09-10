@@ -11,6 +11,8 @@
 // (or offline) everything still works on the phone alone.
 module photowagon.mobile.localbridge;
 
+import photowagon.mobile.plog : plog;
+
 import std.algorithm : min;
 import std.base64 : Base64;
 import std.conv : to;
@@ -550,7 +552,7 @@ final class LocalBridge : Bridge
             else
             {
                 sendFailed++;
-                writeln("phone: send ", id, " failed: ", e.toString()); stdout.flush();
+                plog("phone: send ", id, " failed: ", e.toString());
                 if (!computer.connected)
                     sendQueue.length = 0; // stop hammering; the user can retry
             }

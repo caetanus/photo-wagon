@@ -5,6 +5,8 @@
 // endpoint in the app's config directory so the next launch reconnects alone.
 module photowagon.mobile.tcpbridge;
 
+import photowagon.mobile.plog : plog;
+
 import qt.quick.qtcpsocket;
 import qt.quick.qabstractsocket;
 import qt.quick.qtimer;
@@ -54,7 +56,7 @@ final class TcpBridge : Bridge
             info = parsePairingCode(code);
         catch (Exception e)
         {
-            writeln("bridge: bad code: ", e.msg); stdout.flush();
+            plog("bridge: bad code: ", e.msg);
             return;
         }
         token = info.token;
@@ -171,7 +173,7 @@ final class TcpBridge : Bridge
             remove(scannedFile);
         }
         catch (Exception) { return; }
-        writeln("bridge: scanned ", code); stdout.flush();
+        plog("bridge: scanned ", code);
         setPairingCode(code);
     }
 
@@ -179,7 +181,7 @@ final class TcpBridge : Bridge
     {
         up = true;
         authed = token.length == 0;
-        writeln("bridge: connected to ", endpoint, token.length ? " (pairing token)" : ""); stdout.flush();
+        plog("bridge: connected to ", endpoint, token.length ? " (pairing token)" : "");
         if (token.length)
         {
             // the door is locked from the network: unlock it before anything else
@@ -188,7 +190,7 @@ final class TcpBridge : Bridge
                 // an older core without daemon.auth, or one that already trusts us: carry on
                 if (e.type != JSONType.null_ && !(e.type == JSONType.object && "code" in e && e["code"].str == "unknown_method"))
                 {
-                    writeln("bridge: pairing refused: ", e.toString()); stdout.flush();
+                    plog("bridge: pairing refused: ", e.toString());
                     return;
                 }
                 authed = true;
@@ -214,7 +216,7 @@ final class TcpBridge : Bridge
         if (!up)
             return;
         up = false;
-        writeln("bridge: disconnected"); stdout.flush();
+        plog("bridge: disconnected");
         failAll("disconnected");
         if (onConnected)
             onConnected(false);
@@ -275,7 +277,7 @@ final class TcpBridge : Bridge
         }
         catch (Exception e)
         {
-            writeln("bridge: cannot save endpoint: ", e.msg); stdout.flush();
+            plog("bridge: cannot save endpoint: ", e.msg);
         }
     }
 

@@ -5,6 +5,8 @@
 // PW_PHONE_ROOTS=/dir[:/dir] standing in for DCIM/ and Pictures/).
 module photowagon.mobile.main;
 
+import photowagon.mobile.plog : plog;
+
 import qt.quick.qguiapplication;
 import qt.quick.qcoreapplication;
 import qt.quick.qqmlapplicationengine;
@@ -19,7 +21,8 @@ import qtmoc, cxxrt, qrc;
 import std.path : buildPath, dirName;
 import std.process : environment;
 import std.stdio : writeln, stdout, stderr;
-import std.string : split;
+import std.string : split, indexOf;
+import std.file : exists;
 
 import photowagon.ui.backend : Library;
 import photowagon.mobile.localbridge : LocalBridge;
@@ -40,8 +43,17 @@ string[] photoRoots()
     immutable forced = environment.get("PW_PHONE_ROOTS", "");
     if (forced.length)
         return forced.split(":");
+    // On Android Qt's writable PicturesLocation is the app's own
+    // Android/data/<pkg>/files/Pictures — empty, and the DCIM next to it does not
+    // exist. The camera roll is under the shared storage that folder lives in.
     immutable pictures = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.PicturesLocation).toString();
-    return [buildPath(pictures.dirName, "DCIM"), pictures];
+    string base = pictures.dirName;
+    immutable at = pictures.indexOf("/Android/data/");
+    if (at > 0)
+        base = pictures[0 .. at];
+    else if (!buildPath(base, "DCIM").exists && environment.get("EXTERNAL_STORAGE", "").length)
+        base = environment["EXTERNAL_STORAGE"];
+    return [buildPath(base, "DCIM"), buildPath(base, "Pictures")];
 }
 
 int main()
@@ -58,7 +70,7 @@ int main()
     immutable dataDir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation).toString();
     immutable cacheDir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation).toString();
     auto roots = photoRoots();
-    writeln("phone: roots ", roots, " data ", dataDir, " cache ", cacheDir); stdout.flush();
+    plog("phone: roots ", roots, " data ", dataDir, " cache ", cacheDir);
 
     auto lib = newQObject!Library();
     auto computer = new TcpBridge;
@@ -75,15 +87,14 @@ int main()
     bool failed;
     engine.connectObjectCreationFailed((const(QUrl)* u) {
         failed = true;
-        stderr.writeln("QML: object creation failed");
+        plog("QML: object creation failed");
     });
 
     auto url = QUrl("qrc:/mobile/Main.qml", QUrl.ParsingMode.TolerantMode);
     engine.load(url);
 
     auto rootObjects = engine.rootObjects();
-    writeln("qml rootObjects = ", rootObjects.length, failed ? " (creation failed)" : "");
-    stdout.flush();
+    plog("qml rootObjects = ", rootObjects.length, failed ? " (creation failed)" : "");
     if (rootObjects.length == 0 || failed)
         return 1;
 

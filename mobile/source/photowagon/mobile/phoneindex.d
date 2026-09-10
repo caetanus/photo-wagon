@@ -8,6 +8,8 @@
 // new or changed.
 module photowagon.mobile.phoneindex;
 
+import photowagon.mobile.plog : plog;
+
 import qt.quick.qimagereader;
 import qt.quick.qimage;
 import qt.quick.qsize;
@@ -144,7 +146,7 @@ final class PhoneIndex
         queued = queue.length;
         processed = 0;
         added = 0;
-        writeln("phone: ", found.length, " files, ", queue.length, " to decode, ", removed, " gone"); stdout.flush();
+        plog("phone: ", found.length, " files, ", queue.length, " to decode, ", removed, " gone");
         if (onProgress) onProgress(0, queued);
         if (queue.length)
             pump.start();
@@ -175,7 +177,7 @@ final class PhoneIndex
             index(c);
         catch (Exception e)
         {
-            writeln("phone: ", c.path, ": ", e.msg); stdout.flush();
+            plog("phone: ", c.path, ": ", e.msg);
         }
         if (onProgress) onProgress(processed, queued);
         if (processed % 25 == 0)
@@ -410,7 +412,7 @@ final class PhoneIndex
         }
         catch (Exception e)
         {
-            writeln("phone: index unreadable, starting over: ", e.msg); stdout.flush();
+            plog("phone: index unreadable, starting over: ", e.msg);
             photos.length = 0;
             byPath = null;
             nextId = 1;
@@ -440,7 +442,7 @@ final class PhoneIndex
         }
         catch (Exception e)
         {
-            writeln("phone: cannot save index: ", e.msg); stdout.flush();
+            plog("phone: cannot save index: ", e.msg);
         }
     }
 }

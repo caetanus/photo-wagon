@@ -118,12 +118,26 @@ private final class Client
 		import std.json;
 		import std.string : strip;
 
+		JSONValue msg;
 		if (authed)
 		{
+			// an already trusted client (loopback) may still send daemon.auth: just say yes
+			try
+				msg = parseJSON(line);
+			catch (Exception)
+			{
+				handler.handle(line);
+				return;
+			}
+			if (getString(msg, "method") == "daemon.auth")
+			{
+				JSONValue id = msg.type == JSONType.object && "id" in msg.object ? msg["id"] : JSONValue(null);
+				send(JSONValue(["id": id, "result": JSONValue(["ok": JSONValue(true)])]).toString() ~ "\n");
+				return;
+			}
 			handler.handle(line);
 			return;
 		}
-		JSONValue msg;
 		try
 			msg = parseJSON(line);
 		catch (Exception)

@@ -46,6 +46,7 @@ fetched album are not pulled, only thumbnails.
   JSON index), sending them to the computer through `library.import`
 - [x] Android package (arm64): LDC cross build + DSide binding for Qt Android, verified on a device (`ANDROID.md`)
 - [x] pairing by QR code (`phone.pairing` + token, ML Kit scanner in the activity)
+- [x] one timeline on the phone: camera roll merged with the computer's library, its albums in the drawer
 - [ ] the phone as a libp2p peer (album sharing both ways) once the core's deps build for Android
 - [ ] the core itself on the phone (needs libsodium, openssl, c-ares, sqlite, vips, gexiv2 for Android)
 - HTTP front-end from the core for a TV

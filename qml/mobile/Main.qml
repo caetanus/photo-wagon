@@ -43,6 +43,8 @@ ApplicationWindow {
     readonly property var pageData: JSON.parse(library.page)
     readonly property var datesData: JSON.parse(library.dates)
     readonly property var current: library.current.length ? JSON.parse(library.current) : null
+    readonly property var albumsData: JSON.parse(library.albums).albums
+    readonly property var filterData: JSON.parse(library.filter)
 
     property int filterYear: 0
     property int filterMonth: 0
@@ -53,6 +55,10 @@ ApplicationWindow {
         filterYear = y; filterMonth = m; filterDay = d
         library.loadPage(0, pageSize, y, m, d)
         dates.close()
+    }
+    function albumName(id) {
+        for (const a of albumsData) if (a.id === id) return a.name
+        return "Album"
     }
 
     header: ToolBar {
@@ -80,7 +86,8 @@ ApplicationWindow {
                 spacing: 0
                 Layout.fillWidth: true
                 Label {
-                    text: filterYear === 0 ? "Photo Wagon"
+                    text: filterData.albumId ? albumName(filterData.albumId)
+                        : filterYear === 0 ? "Photo Wagon"
                         : (filterDay ? filterYear + "-" + pad(filterMonth) + "-" + pad(filterDay)
                            : filterMonth ? filterYear + "-" + pad(filterMonth) : String(filterYear))
                     font.pixelSize: 17
@@ -145,14 +152,47 @@ ApplicationWindow {
         id: dates
         width: Math.min(300, root.width * 0.8)
         height: root.height
-        DateTreeSidebar {
+        ColumnLayout {
             anchors.fill: parent
-            theme: root.theme
-            dates: root.datesData
-            selectedYear: root.filterYear
-            selectedMonth: root.filterMonth
-            selectedDay: root.filterDay
-            onPicked: (y, m, d) => root.applyFilter(y, m, d)
+            spacing: 0
+            DateTreeSidebar {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                theme: root.theme
+                dates: root.datesData
+                selectedYear: root.filterYear
+                selectedMonth: root.filterMonth
+                selectedDay: root.filterDay
+                onPicked: (y, m, d) => root.applyFilter(y, m, d)
+            }
+            // the computer's albums (empty when no computer is paired)
+            Rectangle {
+                visible: root.albumsData.length > 0
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(260, 36 + root.albumsData.length * 44)
+                color: theme.panel
+                border.color: theme.border
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    spacing: 2
+                    Label { text: "Albums on the computer"; color: theme.muted; font.pixelSize: 12; font.bold: true; leftPadding: 6 }
+                    ListView {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        model: root.albumsData
+                        delegate: ItemDelegate {
+                            required property var modelData
+                            width: ListView.view.width
+                            height: 42
+                            text: modelData.name + "  ·  " + modelData.photos
+                            highlighted: root.filterData.albumId === modelData.id
+                            onClicked: { root.filterYear = 0; root.filterMonth = 0; root.filterDay = 0; library.filterAlbum(modelData.id); dates.close() }
+                        }
+                    }
+                }
+            }
         }
     }
 

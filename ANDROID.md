@@ -21,6 +21,13 @@ core over the network with the protocol of `docs/ipc.md`.
    push photos through `library.import`; the computer files them under
    `<data dir>/imports/<yyyy-mm>/` and indexes them. Already-sent photos are
    remembered on the phone.
+4. While the computer is reachable the phone shows **one timeline**: its own
+   camera roll merged with the computer's library by capture time. A computer
+   photo that is the same file as a local one (same name and size, which is how
+   "Send" copies it) appears once. Computer photos carry ids above 10⁹, their
+   thumbnails arrive as data: URLs (`library.thumbs`) and opening one fetches a
+   2048 px rendition (`photo.file`). The drawer lists the computer's albums;
+   tapping one browses it. Offline, the phone shows its own photos only.
 
 Typing the address by hand in the same dialog still works for a core started
 with `--serve --ipc-address 0.0.0.0`; only the loopback interface is exempt

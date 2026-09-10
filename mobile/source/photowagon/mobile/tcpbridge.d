@@ -185,7 +185,8 @@ final class TcpBridge : Bridge
             // the door is locked from the network: unlock it before anything else
             JSONValue params = ["token": JSONValue(token)];
             immutable line = enqueue("daemon.auth", params, (r, e) {
-                if (e.type != JSONType.null_)
+                // an older core without daemon.auth, or one that already trusts us: carry on
+                if (e.type != JSONType.null_ && !(e.type == JSONType.object && "code" in e && e["code"].str == "unknown_method"))
                 {
                     writeln("bridge: pairing refused: ", e.toString()); stdout.flush();
                     return;

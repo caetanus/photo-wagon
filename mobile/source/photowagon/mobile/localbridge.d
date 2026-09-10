@@ -1,9 +1,17 @@
-// LocalBridge — the phone's own library behind the same method names the
-// desktop core answers (docs/ipc.md), so `Library` and the QML do not know
-// they are on a phone. A TcpBridge inside it reaches the computer, used only
-// to send photos there (`photo.upload`, `library.sendAll` → `library.import`).
+// LocalBridge — the phone's library behind the method names of docs/ipc.md,
+// merged with the computer's when one is paired.
+//
+// The phone's own photos (PhoneIndex) and the computer's (over TcpBridge)
+// form one timeline: pages are k-way merged by capture time, a computer
+// photo that is the same file as a local one (same name and size — the way
+// "Send to computer" copies it) is shown once, as the local one. Computer
+// items carry ids offset by `remoteBase`, their thumbnails are fetched as
+// data: URLs, and the open photo's bytes come through `photo.file`. The
+// computer's albums are listed and browsed as they are. Without a computer
+// (or offline) everything still works on the phone alone.
 module photowagon.mobile.localbridge;
 
+import std.algorithm : min;
 import std.base64 : Base64;
 import std.conv : to;
 import std.file : read;
@@ -14,10 +22,13 @@ import std.stdio : writeln, stdout;
 import qt.quick.qtimer;
 import cppq = qt.quick.qobject;
 
-import photowagon.core.library.calendar : isoTime;
+import photowagon.core.library.calendar : isoTime, localDate;
 import photowagon.mobile.phoneindex : PhoneIndex, PhoneFilter, PhonePhoto;
 import photowagon.mobile.tcpbridge : TcpBridge;
 import photowagon.ui.transport : Bridge, ResultCb;
+
+/// Computer photo ids are shifted by this in what the UI sees.
+enum long remoteBase = 1_000_000_000L;
 
 final class LocalBridge : Bridge
 {
@@ -29,6 +40,19 @@ final class LocalBridge : Bridge
     private long[] sendQueue;
     private long sent, sendTotal, sendFailed;
     private bool sending;
+
+    // ---- merged paging state --------------------------------------------------------
+    private JSONValue pageParams;      // the filter of the current listing (no offset/limit)
+    private PhoneFilter localFilter;
+    private bool remoteOnly;           // album / person / favorites: the phone has no such thing
+    private long localOff, remoteOff;
+    private long remoteTotal = -1;     // -1 = not asked yet
+    private bool remoteDone;
+    private JSONValue[] localBuf, remoteBuf;
+    private JSONValue[] served;        // everything handed out so far, merged order
+    private bool[string] localKeys;    // "name|size" of local photos, for dedupe
+    private long dupes;
+    private string[long] thumbCache;   // remote id → data: URL
 
     this(PhoneIndex index, TcpBridge computer)
     {
@@ -49,8 +73,12 @@ final class LocalBridge : Bridge
         };
         computer.onConnected = (bool ok) {
             emit("computer.link", JSONValue(["connected": JSONValue(ok), "endpoint": JSONValue(computer.endpoint)]));
+            emit("library.changed", JSONValue.emptyObject); // the merged timeline changed shape
         };
-        computer.onEvent = (string ev, JSONValue data) { /* the computer's events are not ours to show */ };
+        computer.onEvent = (string ev, JSONValue data) {
+            if (ev == "library.changed" || ev == "index.done")
+                emit("library.changed", JSONValue.emptyObject);
+        };
     }
 
     override void start()
@@ -84,36 +112,9 @@ final class LocalBridge : Bridge
             onEvent(ev, data);
     }
 
-    // ---- requests, answered here ----------------------------------------------------
-
-    override void request(string method, JSONValue params, ResultCb cb)
-    {
-        JSONValue result;
-        try
-            result = handle(method, params, cb);
-        catch (Exception e)
-        {
-            cb(JSONValue(null), error("internal", e.msg));
-            return;
-        }
-        if (result.type != JSONType.null_ || method != "photo.upload")
-            cb(result, JSONValue(null));
-    }
-
     private static JSONValue error(string code, string message)
     {
         return JSONValue(["code": JSONValue(code), "message": JSONValue(message)]);
-    }
-
-    private static PhoneFilter filterOf(JSONValue p)
-    {
-        PhoneFilter f;
-        if (p.type != JSONType.object)
-            return f;
-        if (auto y = "year" in p) f.year = cast(int) y.integer;
-        if (auto m = "month" in p) f.month = cast(int) m.integer;
-        if (auto d = "day" in p) f.day = cast(int) d.integer;
-        return f;
     }
 
     private static long num(JSONValue p, string key, long def = 0)
@@ -123,7 +124,44 @@ final class LocalBridge : Bridge
         return v && v.type == JSONType.integer ? v.integer : def;
     }
 
-    private JSONValue handle(string method, JSONValue p, ResultCb cb)
+    private static bool flag(JSONValue p, string key)
+    {
+        if (p.type != JSONType.object) return false;
+        auto v = key in p;
+        return v && v.type == JSONType.true_;
+    }
+
+    private static PhoneFilter filterOf(JSONValue p)
+    {
+        PhoneFilter f;
+        f.year = cast(int) num(p, "year");
+        f.month = cast(int) num(p, "month");
+        f.day = cast(int) num(p, "day");
+        return f;
+    }
+
+    // ---- requests -------------------------------------------------------------------
+
+    override void request(string method, JSONValue params, ResultCb cb)
+    {
+        try
+        {
+            switch (method)
+            {
+            case "library.page":    page(params, cb); return;
+            case "library.dates":   dates(cb); return;
+            case "photo.get":       get(num(params, "id"), cb); return;
+            case "photo.upload":    upload(num(params, "id"), cb); return;
+            case "album.list":      albums(cb); return;
+            default:
+                cb(handleSync(method, params), JSONValue(null));
+            }
+        }
+        catch (Exception e)
+            cb(JSONValue(null), error("internal", e.msg));
+    }
+
+    private JSONValue handleSync(string method, JSONValue p)
     {
         switch (method)
         {
@@ -144,37 +182,21 @@ final class LocalBridge : Bridge
         case "library.rescan":
             index.scan();
             return JSONValue.emptyObject;
-        case "library.page":
-            {
-                auto f = filterOf(p);
-                immutable offset = num(p, "offset");
-                immutable limit = num(p, "limit", 60);
-                JSONValue[] items;
-                foreach (ref ph; index.page(f, offset, limit))
-                    items ~= ph.toJson();
-                return JSONValue(["total": JSONValue(index.count(f)), "offset": JSONValue(offset), "items": JSONValue(items)]);
-            }
-        case "library.dates":
-            return index.dates();
-        case "photo.get":
-            {
-                auto ph = index.get(num(p, "id"));
-                if (ph is null)
-                    throw new Exception("no such photo");
-                return ph.toJson();
-            }
         case "photo.neighbours":
             {
-                auto nb = index.neighbours(num(p, "id"), filterOf(p));
-                return JSONValue(["prev": nb[0] ? JSONValue(nb[0]) : JSONValue(null), "next": nb[1] ? JSONValue(nb[1]) : JSONValue(null)]);
+                immutable id = num(p, "id");
+                long prev, next;
+                foreach (i, ref it; served)
+                    if (it["id"].integer == id)
+                    {
+                        if (i > 0) prev = served[i - 1]["id"].integer;
+                        if (i + 1 < served.length) next = served[i + 1]["id"].integer;
+                        break;
+                    }
+                return JSONValue(["prev": prev ? JSONValue(prev) : JSONValue(null), "next": next ? JSONValue(next) : JSONValue(null)]);
             }
-        case "album.list":
-            return JSONValue(["albums": JSONValue(cast(JSONValue[]) [])]);
         case "p2p.status":
             return JSONValue(["peerId": JSONValue(null), "addrs": JSONValue(cast(JSONValue[]) []), "peers": JSONValue(cast(JSONValue[]) []), "off": JSONValue(true)]);
-        case "photo.upload":
-            upload(num(p, "id"), cb);
-            return JSONValue(null);
         case "library.sendAll":
             {
                 auto ids = index.unsentIds();
@@ -189,11 +211,290 @@ final class LocalBridge : Bridge
         }
     }
 
+    // ---- the merged timeline -----------------------------------------------------------
+
+    private void page(JSONValue p, ResultCb cb)
+    {
+        immutable offset = num(p, "offset");
+        immutable limit = cast(size_t) num(p, "limit", 60);
+        if (offset == 0 || served.length == 0)
+            resetPaging(p);
+        fillPage(limit, cb);
+    }
+
+    private void resetPaging(JSONValue p)
+    {
+        pageParams = JSONValue.emptyObject;
+        foreach (key; ["year", "month", "day", "albumId", "personId", "rootId", "favorites"])
+            if (p.type == JSONType.object)
+                if (auto v = key in p)
+                    pageParams[key] = *v;
+        localFilter = filterOf(p);
+        remoteOnly = num(p, "albumId") || num(p, "personId") || flag(p, "favorites");
+        localOff = remoteOff = 0;
+        remoteTotal = -1;
+        remoteDone = !computer.connected;
+        localBuf.length = 0;
+        remoteBuf.length = 0;
+        served.length = 0;
+        dupes = 0;
+        localKeys = null;
+        foreach (ref ph; index.page(PhoneFilter.init, 0, long.max))
+            localKeys[ph.path.baseName ~ "|" ~ ph.size.to!string] = true;
+    }
+
+    private void fillPage(size_t limit, ResultCb cb)
+    {
+        // top up the local buffer
+        if (!remoteOnly && localBuf.length < limit)
+        {
+            foreach (ref ph; index.page(localFilter, localOff, limit))
+            {
+                localBuf ~= ph.toJson();
+                localOff++;
+            }
+        }
+        // top up the remote buffer, then merge (asynchronously when the computer is asked)
+        if (!remoteDone && remoteBuf.length < limit)
+        {
+            JSONValue params = pageParams;
+            params["offset"] = remoteOff;
+            params["limit"] = limit;
+            computer.request("library.page", params, (r, e) {
+                if (e.type != JSONType.null_)
+                    remoteDone = true;
+                else
+                {
+                    remoteTotal = r["total"].integer;
+                    auto items = r["items"].array;
+                    remoteOff += items.length;
+                    if (items.length == 0 || remoteOff >= remoteTotal)
+                        remoteDone = true;
+                    foreach (it; items)
+                    {
+                        immutable key = (it["path"].type == JSONType.string ? it["path"].str.baseName : "") ~ "|" ~ it["size"].integer.to!string;
+                        if (key in localKeys)
+                        {
+                            dupes++;
+                            continue; // the local copy stands for it
+                        }
+                        remoteBuf ~= toPhoneItem(it);
+                    }
+                }
+                mergeAndAnswer(limit, cb);
+            });
+            return;
+        }
+        mergeAndAnswer(limit, cb);
+    }
+
+    /// A computer item as the phone shows it: shifted id, marked remote.
+    private static JSONValue toPhoneItem(JSONValue it)
+    {
+        it["id"] = it["id"].integer + remoteBase;
+        it["remote"] = true;
+        it["sent"] = true;
+        it["thumbUrl"] = JSONValue(null); // filled from the computer below
+        return it;
+    }
+
+    private void mergeAndAnswer(size_t limit, ResultCb cb)
+    {
+        JSONValue[] out_;
+        while (out_.length < limit && (localBuf.length || remoteBuf.length))
+        {
+            bool takeLocal;
+            if (localBuf.length && remoteBuf.length)
+                takeLocal = localBuf[0]["takenTs"].integer >= remoteBuf[0]["takenTs"].integer;
+            else
+                takeLocal = localBuf.length > 0;
+            if (takeLocal)
+            {
+                out_ ~= localBuf[0];
+                localBuf = localBuf[1 .. $];
+            }
+            else
+            {
+                out_ ~= remoteBuf[0];
+                remoteBuf = remoteBuf[1 .. $];
+            }
+        }
+        // the remote buffer may still be short while the local one is long; that is
+        // fine: next page tops both up again
+        served ~= out_;
+        long total = remoteOnly ? 0 : index.count(localFilter);
+        if (remoteTotal > 0)
+            total += remoteTotal - dupes;
+        if (total < served.length)
+            total = served.length;
+        immutable totalFinal = total;
+        withRemoteThumbs(out_, () {
+            cb(JSONValue(["total": JSONValue(totalFinal), "offset": JSONValue(served.length), "items": JSONValue(out_)]), JSONValue(null));
+        });
+    }
+
+    /// Fills thumbUrl of remote items in `items` (data: URLs), then calls `done`.
+    private void withRemoteThumbs(JSONValue[] items, void delegate() done)
+    {
+        JSONValue[] want;
+        foreach (ref it; items)
+        {
+            if (it["id"].integer < remoteBase)
+                continue;
+            immutable rid = it["id"].integer - remoteBase;
+            if (auto t = rid in thumbCache)
+                it["thumbUrl"] = *t;
+            else
+                want ~= JSONValue(rid);
+        }
+        if (want.length == 0 || !computer.connected)
+        {
+            done();
+            return;
+        }
+        JSONValue params = JSONValue.emptyObject;
+        params["ids"] = JSONValue(want);
+        computer.request("library.thumbs", params, (r, e) {
+            if (e.type == JSONType.null_ && "thumbs" in r)
+                foreach (key, b64; r["thumbs"].object)
+                    thumbCache[key.to!long] = "data:image/jpeg;base64," ~ b64.str;
+            foreach (ref it; items)
+                if (it["id"].integer >= remoteBase)
+                    if (auto t = (it["id"].integer - remoteBase) in thumbCache)
+                        it["thumbUrl"] = *t;
+            // also patch what was served, so neighbours/viewer see the thumbs
+            foreach (ref it; served)
+                if (it["id"].integer >= remoteBase && it["thumbUrl"].type == JSONType.null_)
+                    if (auto t = (it["id"].integer - remoteBase) in thumbCache)
+                        it["thumbUrl"] = *t;
+            done();
+        });
+    }
+
+    private void dates(ResultCb cb)
+    {
+        auto local = index.dates();
+        if (!computer.connected)
+        {
+            cb(local, JSONValue(null));
+            return;
+        }
+        computer.request("library.dates", JSONValue(null), (r, e) {
+            if (e.type != JSONType.null_)
+            {
+                cb(local, JSONValue(null));
+                return;
+            }
+            cb(mergeDates(local, r), JSONValue(null));
+        });
+    }
+
+    /// Sums the two trees per year/month/day (duplicates are counted twice; close enough).
+    static JSONValue mergeDates(JSONValue a, JSONValue b)
+    {
+        long[string] days; // "y-m-d" → count
+        foreach (tree; [a, b])
+            foreach (y; tree["years"].array)
+                foreach (m; y["months"].array)
+                    foreach (d; m["days"].array)
+                        days[y["year"].integer.to!string ~ "-" ~ m["month"].integer.to!string ~ "-" ~ d["day"].integer.to!string]
+                            += d["count"].integer;
+        // rebuild newest first
+        import std.algorithm : sort;
+        import std.array : array, split;
+
+        struct Key { int y, m, d; long n; }
+        Key[] keys;
+        foreach (k, n; days)
+        {
+            auto parts = k.split("-");
+            keys ~= Key(parts[0].to!int, parts[1].to!int, parts[2].to!int, n);
+        }
+        keys.sort!((p, q) => p.y != q.y ? p.y > q.y : p.m != q.m ? p.m > q.m : p.d > q.d);
+        JSONValue[] years;
+        int cy = -1, cm = -1;
+        foreach (ref k; keys)
+        {
+            if (k.y != cy)
+            {
+                years ~= JSONValue(["year": JSONValue(k.y), "count": JSONValue(0), "months": JSONValue(cast(JSONValue[]) [])]);
+                cy = k.y; cm = -1;
+            }
+            auto year = &years[$ - 1];
+            if (k.m != cm)
+            {
+                (*year)["months"].array ~= JSONValue(["month": JSONValue(k.m), "count": JSONValue(0), "days": JSONValue(cast(JSONValue[]) [])]);
+                cm = k.m;
+            }
+            auto month = &(*year)["months"].array[$ - 1];
+            (*month)["days"].array ~= JSONValue(["day": JSONValue(k.d), "count": JSONValue(k.n)]);
+            (*month)["count"] = JSONValue((*month)["count"].integer + k.n);
+            (*year)["count"] = JSONValue((*year)["count"].integer + k.n);
+        }
+        return JSONValue(["years": JSONValue(years)]);
+    }
+
+    private void albums(ResultCb cb)
+    {
+        if (!computer.connected)
+        {
+            cb(JSONValue(["albums": JSONValue(cast(JSONValue[]) [])]), JSONValue(null));
+            return;
+        }
+        computer.request("album.list", JSONValue(null), (r, e) {
+            cb(e.type == JSONType.null_ ? r : JSONValue(["albums": JSONValue(cast(JSONValue[]) [])]), JSONValue(null));
+        });
+    }
+
+    /// One photo: the phone's own, or the computer's with its bytes inlined.
+    private void get(long id, ResultCb cb)
+    {
+        if (id < remoteBase)
+        {
+            auto ph = index.get(id);
+            if (ph is null)
+                cb(JSONValue(null), error("not_found", "no such photo"));
+            else
+                cb(ph.toJson(), JSONValue(null));
+            return;
+        }
+        if (!computer.connected)
+        {
+            cb(JSONValue(null), error("no_computer", "the computer is not connected"));
+            return;
+        }
+        immutable rid = id - remoteBase;
+        JSONValue params = ["id": JSONValue(rid)];
+        computer.request("photo.get", params, (r, e) {
+            if (e.type != JSONType.null_)
+            {
+                cb(JSONValue(null), e);
+                return;
+            }
+            auto item = toPhoneItem(r);
+            if (auto t = rid in thumbCache)
+                item["thumbUrl"] = *t;
+            JSONValue fp = ["id": JSONValue(rid), "maxEdge": JSONValue(2048)];
+            computer.request("photo.file", fp, (f, e2) {
+                if (e2.type == JSONType.null_)
+                    item["fileUrl"] = "data:" ~ f["mime"].str ~ ";base64," ~ f["base64"].str;
+                else if (item["thumbUrl"].type == JSONType.string)
+                    item["fileUrl"] = item["thumbUrl"];
+                cb(item, JSONValue(null));
+            });
+        });
+    }
+
     // ---- sending to the computer ---------------------------------------------------
 
     /// Reads the file and hands it to the computer as `library.import`.
     private void upload(long id, ResultCb cb)
     {
+        if (id >= remoteBase)
+        {
+            cb(JSONValue(null), error("bad_params", "already on the computer"));
+            return;
+        }
         auto ph = index.get(id);
         if (ph is null)
         {
@@ -251,11 +552,19 @@ final class LocalBridge : Bridge
                 sendFailed++;
                 writeln("phone: send ", id, " failed: ", e.toString()); stdout.flush();
                 if (!computer.connected)
-                {
                     sendQueue.length = 0; // stop hammering; the user can retry
-                }
             }
             pumpSend();
         });
     }
+}
+
+unittest
+{
+    auto a = parseJSON(`{"years":[{"year":2024,"count":2,"months":[{"month":5,"count":2,"days":[{"day":1,"count":2}]}]}]}`);
+    auto b = parseJSON(`{"years":[{"year":2024,"count":1,"months":[{"month":5,"count":1,"days":[{"day":3,"count":1}]}]},{"year":2023,"count":1,"months":[{"month":1,"count":1,"days":[{"day":9,"count":1}]}]}]}`);
+    auto m = LocalBridge.mergeDates(a, b);
+    assert(m["years"].array.length == 2);
+    assert(m["years"][0]["year"].integer == 2024 && m["years"][0]["count"].integer == 3);
+    assert(m["years"][0]["months"][0]["days"][0]["day"].integer == 3); // newest day first
 }

@@ -1,0 +1,19 @@
+{
+	"fileVersion": 1,
+	"versions": {
+		"during": "0.3.0",
+		"eventcore": "0.9.39",
+		"fluent-asserts": "2.0.5",
+		"libdparse": "0.25.1",
+		"libp2p": {"path":"../../libp2p-dlang"},
+		"libsodiumd": "0.2.0+1.0.18",
+		"openssl": "3.4.0",
+		"silly": "1.2.0-dev.2",
+		"stdx-allocator": "2.77.5",
+		"taggedalgebraic": "1.0.1",
+		"unit-threaded": "2.2.5",
+		"vibe-container": "1.7.1",
+		"vibe-core": "2.14.0",
+		"webrtc": {"path":"../../d-webrtc-v3"}
+	}
+}

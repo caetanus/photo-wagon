@@ -32,6 +32,19 @@ for p in "$LDC_CONF" "$BUILD/libbinding_ldc2.a" "$BUILD/libshims.a" "$GEN/cxxrt.
 done
 mkdir -p "$OUT"
 
+# libp2p (lite: no webrtc transport, no c-ares), vibe-core, eventcore and the
+# libsodium binding, as sources; libsodium itself is the archive in toolchain/android-libs.
+DUBP=$HOME/.dub/packages
+LIBP2P=$HERE/../../libp2p-dlang/source
+P2P_INCLUDES="-I$LIBP2P"
+P2P_SOURCES=$(find "$LIBP2P" -name '*.d' | grep -v '/transport/webrtc/' | grep -v 'dns_cares.d')
+for d in eventcore-0.9.39/eventcore vibe-core-2.14.0/vibe-core vibe-container-1.7.1/vibe-container taggedalgebraic-1.0.1/taggedalgebraic stdx-allocator-2.77.5/stdx-allocator libsodiumd-0.2.0_1.0.18/libsodiumd; do
+    [ -d "$DUBP/$d/source" ] || { echo "missing dub package $d (run dub build in mobile/ once)" >&2; exit 1; }
+    P2P_INCLUDES="$P2P_INCLUDES -I$DUBP/$d/source"
+    P2P_SOURCES="$P2P_SOURCES $(find "$DUBP/$d/source" -name '*.d')"
+done
+ABI_DIR=arm64
+
 link() {
     # -shared: Qt for Android loads lib<app>_<abi>.so and calls its exported main().
     # -relocation-model=pic: everything in a .so must be PIC (the binding archive was built so too).
@@ -41,14 +54,18 @@ link() {
         -d-version=PhotoWagonMobile \
         -of="$OUT/lib${APP}_${ABI}.so" \
         source/photowagon/mobile/main.d source/photowagon/mobile/plog.d source/photowagon/mobile/tcpbridge.d \
+        source/photowagon/mobile/p2pbridge.d \
         source/photowagon/mobile/localbridge.d source/photowagon/mobile/phoneindex.d \
-        ../source/photowagon/ui/backend.d ../source/photowagon/ui/transport.d \
+        ../source/photowagon/ui/backend.d ../source/photowagon/ui/transport.d ../source/photowagon/ui/bridge.d \
+        ../source/photowagon/core/ipc/link.d ../source/photowagon/core/p2p/identity.d \
+        $P2P_SOURCES -d-version=LibP2P_Lite $P2P_INCLUDES \
         ../source/photowagon/core/indexer/scan.d ../source/photowagon/core/library/calendar.d \
         ../source/photowagon/core/metadata/exifparse.d ../source/photowagon/core/pairingcode.d \
         "$DSIDE/runtime/qrc/qrc.d" \
         -Isource -I../source -I"$GEN" -I"$DSIDE/runtime/qrc" -J=../qml \
         -L--gc-sections -L--as-needed \
         -L--start-group -L="$BUILD/libbinding_ldc2.a" -L="$BUILD/libshims.a" -L--end-group \
+        -L="$HERE/toolchain/android-libs/$ABI_DIR/libsodium.a" \
         -L-L"$QT_ANDROID/lib" \
         -L-lQt6Quick_${ABI} -L-lQt6QmlModels_${ABI} -L-lQt6Qml_${ABI} -L-lQt6Network_${ABI} \
         -L-lQt6Gui_${ABI} -L-lQt6Core_${ABI} \

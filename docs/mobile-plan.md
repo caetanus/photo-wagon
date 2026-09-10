@@ -99,7 +99,7 @@ order the pieces unblock each other.
    worker already has (the vips version stays on the desktop), same `kind.d`
    rules and model. Screenshots and memes get their own smart albums and are
    excluded from backup by default (toggle in settings).
-2. **Discovery**: the computer broadcasts a small UDP beacon on the LAN
+2. **Discovery** (the phone is a libp2p peer since 2026-09-10; still to do: finding the computer without the QR): the computer broadcasts a small UDP beacon on the LAN
    (`photowagon` magic + port + a hash of the token); the phone listens with
    `QUdpSocket`, so a paired phone reconnects on any network where the computer
    is, without the QR again. The QR stays for the first pairing and for the

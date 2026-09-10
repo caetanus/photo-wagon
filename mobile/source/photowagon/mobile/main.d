@@ -27,7 +27,7 @@ import std.file : exists;
 import photowagon.ui.backend : Library;
 import photowagon.mobile.localbridge : LocalBridge;
 import photowagon.mobile.phoneindex : PhoneIndex;
-import photowagon.mobile.tcpbridge : TcpBridge;
+import photowagon.mobile.p2pbridge : P2pBridge;
 
 // GC statistics on (read back every 100 photos in phoneindex): a stop-the-world
 // collection pauses the Qt thread too, and that is what a stall looks like.
@@ -83,7 +83,7 @@ int main()
     plog("phone: roots ", roots, " data ", dataDir, " cache ", cacheDir);
 
     auto lib = newQObject!Library();
-    auto computer = new TcpBridge;
+    auto computer = new P2pBridge(buildPath(dataDir, "settings"));
     // PW_ENDPOINT=host:port overrides the saved computer (tests, first run).
     immutable forced = environment.get("PW_ENDPOINT", "");
     if (forced.length)

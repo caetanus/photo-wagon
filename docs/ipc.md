@@ -34,6 +34,7 @@ has a matching response, even on failure.
 
 | method | params | result |
 |---|---|---|
+| `daemon.auth` over libp2p | the phone opens `/photowagon/ipc/1.0.0` on the computer's node and sends every line of this protocol as a length-prefixed frame; the first must be `daemon.auth {token}` (libp2p says who the peer is, the pairing token says it is allowed in) | as over TCP |
 | `library.autoSync` (phone) | `{on}` | the sync status below; the setting persists |
 | `library.syncStatus` (phone) | `{}` | `{enabled, connected, active, pending, total, done, sent, skipped, failed, error}`; also pushed as the `sync.status` event |
 | `phone.pairing` | `{enable?: bool}` | `{enabled, port, addrs, code, qr: {width, rows}, qrImage}` — turns the LAN listener (0.0.0.0) on/off; `code` is `pw://<token>@<ip>:<port>[,…]`, `qrImage` a PNG data: URL of it |

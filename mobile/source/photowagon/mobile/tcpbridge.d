@@ -25,6 +25,8 @@ import photowagon.ui.transport : Bridge, ResultCb;
 
 final class TcpBridge : Bridge
 {
+    /// A QR code arrived (files/settings/scanned): whoever wraps this bridge hears too.
+    void delegate(string code) onScanned;
     private QTcpSocket sock;
     private QTimer retry;
     private string host;
@@ -175,6 +177,8 @@ final class TcpBridge : Bridge
         catch (Exception) { return; }
         plog("bridge: scanned ", code);
         setPairingCode(code);
+        if (onScanned)
+            onScanned(code);
     }
 
     private void onSockConnected()

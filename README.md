@@ -57,7 +57,8 @@ printf '{"id":1,"method":"daemon.hello"}\n' | nc 127.0.0.1 "$(cat "$XDG_RUNTIME_
 
 ## Phone
 
-`mobile/` is Photo Wagon on the phone: it keeps the computer up to date by itself
+`mobile/` is Photo Wagon on the phone: a libp2p peer of the computer's node
+(the pairing QR carries its addresses), it keeps the computer up to date by itself
 (a persistent queue, progress in an Android notification), shows the phone's own photos and
 sends them to your computer's library. Click **Phone** on the computer, scan the
 QR code with the app (⚙ → Scan QR code), then **Send all** or **Send to

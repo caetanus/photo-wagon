@@ -35,7 +35,7 @@ enum long remoteBase = 1_000_000_000L;
 final class LocalBridge : Bridge
 {
     private PhoneIndex index;
-    private TcpBridge computer;
+    private Bridge computer;
     private bool up;
     private QTimer rescan;        // until the permission lands, keep trying
     private int rescanTries;
@@ -81,7 +81,7 @@ final class LocalBridge : Bridge
     private long dupes;
     private string[long] thumbCache;   // remote id → data: URL
 
-    this(PhoneIndex index, TcpBridge computer, string settingsDir = null)
+    this(PhoneIndex index, Bridge computer, string settingsDir = null)
     {
         this.index = index;
         this.computer = computer;

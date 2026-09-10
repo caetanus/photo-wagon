@@ -107,6 +107,25 @@ the D GC's pause statistics, `QSG_RENDER_TIMING` per-frame lines from Qt, and a
 SIGSEGV/SIGABRT handler that writes a libunwind backtrace to logcat — Samsung's
 shipping builds keep no tombstones for third-party apps.
 
+## The computer over libp2p
+
+The pairing code carries the computer's libp2p addresses after a `#`
+(`pw://<token>@<ip>:<port>#/ip4/<ip>/tcp/<port>/p2p/<peer id>,…`). The phone
+runs a small libp2p host of its own — the "lite" build of libp2p-dlang: TCP
+transport, Noise, yamux, Ed25519 only, IP addresses only (`-d-version=LibP2P_Lite`
+leaves OpenSSL and c-ares out) — on a vibe-core event loop on its own thread,
+with an identity in `files/settings/identity.seed`. It dials the computer, opens
+`/photowagon/ipc/1.0.0` and carries the JSON lines of `docs/ipc.md` as
+length-prefixed frames; the Qt thread reaches that thread through the same
+`InProcessLink` the desktop UI uses for its core (`mobile/…/p2pbridge.d`). A
+plain `host:port` typed by hand still goes over TCP (`tcpbridge.d` underneath).
+libsodium for arm64 is the archive in `toolchain/android-libs/arm64/`, built
+from the 1.0.20 release with `dist-build/android-armv8-a.sh`
+(`ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.2.12479018`); vibe-core, eventcore,
+vibe-container, taggedalgebraic, stdx-allocator and libsodiumd come from
+`~/.dub/packages` (a `dub build` in `mobile/` fetches them) and are compiled
+into the app's `.so` by `build-android.sh`.
+
 ## Sync to the computer
 
 The phone keeps the computer up to date by itself once "Keep the computer up to
@@ -135,9 +154,10 @@ the phone's `127.0.0.1:47111` reach a core started with `--serve --port 47111`.
   emulator image cannot run it; an arm64 device is needed.
 - Only the `cxx-quick` binding was generated for Android (Controls come as QML
   plugins, no D binding needed).
-- The core's native dependencies (sqlite3, gexiv2, vips, libsodium, openssl,
-  c-ares) have no Android builds here, which is why the phone keeps a JSON index
-  of its own photos and sends them to the computer instead of running the core.
+- The core's native dependencies (sqlite3, gexiv2, vips, openssl, c-ares) have
+  no Android builds here, which is why the phone keeps a JSON index of its own
+  photos and sends them to the computer instead of running the core. libsodium
+  is built for arm64 (see above), which is what libp2p needs.
 - `QImageReader::read()` returning `QImage` by value is mis-bound (sret); the
   phone index uses the `read(QImage*)` overload. The binding never frees a
   `QImage` or `QImageReader` (no deleter yet): the decoders reuse one of each

@@ -134,5 +134,33 @@ status = json.load(open(os.path.join(tmp, "xdg-data", "PhotoWagon", "photo-wagon
 check(status["enabled"] and not status["active"] and status["pending"] == 0, "sync-status file for the notification: " + json.dumps(status))
 
 core.terminate(); core.wait()
+
+# 5. the same over libp2p: a core with its node on, the pairing code carrying its
+#    addresses, the phone dialing them instead of the TCP listener
+core2_dir = os.path.join(tmp, "core2"); os.makedirs(core2_dir)
+port2 = free_port()
+core2 = subprocess.Popen([CORE, "--headless", "--data", core2_dir, "--runtime", core2_dir, "--port", str(port2)],
+                         stdout=open(os.path.join(tmp, "core2.log"), "w"), stderr=subprocess.STDOUT)
+for _ in range(100):
+    try:
+        call(port2, "daemon.hello"); break
+    except Exception:
+        time.sleep(0.1)
+pairing = call(port2, "phone.pairing", {"enable": True})
+check(len(pairing.get("p2p", [])) > 0 and "#/ip4/" in pairing["code"], "pairing code carries libp2p addresses: " + pairing["code"][-60:])
+shutil.rmtree(os.path.join(tmp, "xdg-data"), ignore_errors=True)   # a fresh phone
+p = phone(25, "p2p.png", {"PW_ENDPOINT": pairing["code"], "PW_SHOT_SEND": "1"})
+for _ in range(80):
+    time.sleep(0.5)
+    if "sync: done" in phone_log("p2p.png"):
+        break
+p.terminate(); p.wait()
+log = phone_log("p2p.png")
+check("p2p: connected to" in log, "phone connected over libp2p: " + ([l for l in log.splitlines() if "p2p: connected" in l] or ["no"])[0].split("p2p: ")[-1])
+check("sync: done" in log, "sync over libp2p ran to the end")
+total2 = call(port2, "library.stats")["total"]
+check(total2 > 0, "computer received the photos over libp2p (%d)" % total2)
+check("ipc/p2p" in open(os.path.join(tmp, "core2.log")).read(), "the core saw the phone on /photowagon/ipc/1.0.0")
+core2.terminate(); core2.wait()
 print("\n%d failures  (%s)" % (fails, tmp))
 sys.exit(1 if fails else 0)

@@ -16,6 +16,8 @@ interface ServerControl
 	bool serving();
 	ushort servingPort();
 	string pairingToken();
+	/// The libp2p node's listen addresses with `/p2p/<id>`, or none without a node.
+	string[] p2pAddrs();
 }
 
 void registerPairingApi(Registry r, ServerControl ctl)
@@ -36,11 +38,26 @@ void registerPairingApi(Registry r, ServerControl ctl)
 		JSONValue[] a;
 		foreach (x; addrs)
 			a ~= JSONValue(x);
-		immutable code = pairingCode(ctl.pairingToken, addrs.length ? addrs : ["127.0.0.1"], ctl.servingPort);
+		// the node listens on 0.0.0.0: say it once per LAN address the phone can reach
+		string[] p2p;
+		foreach (m; ctl.p2pAddrs())
+		{
+			import std.string : replace, indexOf;
+			if (m.indexOf("/ip4/0.0.0.0/") >= 0)
+				foreach (ip; addrs.length ? addrs : ["127.0.0.1"])
+					p2p ~= m.replace("/ip4/0.0.0.0/", "/ip4/" ~ ip ~ "/");
+			else if (m.indexOf("/ip6/::/") < 0)
+				p2p ~= m;
+		}
+		JSONValue[] pa;
+		foreach (x; p2p)
+			pa ~= JSONValue(x);
+		immutable code = pairingCode(ctl.pairingToken, addrs.length ? addrs : ["127.0.0.1"], ctl.servingPort, p2p);
 		return JSONValue([
 			"enabled": JSONValue(true),
 			"port": JSONValue(ctl.servingPort),
 			"addrs": JSONValue(a),
+			"p2p": JSONValue(pa),
 			"code": JSONValue(code),
 			"qr": qrMatrix(code),
 			"qrImage": JSONValue(qrPngDataUrl(code)),

@@ -59,6 +59,7 @@ fetched album are not pulled, only thumbnails.
 - [x] Back from the old UI: the date tree, the people list and the status in the sidebar, the caption under the photo; `library.dates` follows the filter — 2026-09-10
 - [x] Photos over 64 MP would not open (Qt's 256 MB decode limit): the viewer decodes scaled to 4096² — 2026-09-10
 - [x] Phone: camera roll found, thumbnails on worker threads, no black window, adb harness, automatic sync surviving crashes with an Android notification — 2026-09-10
-- [ ] Phone: sync over libp2p; faces from the computer, names both ways
+- [x] Phone: the computer over libp2p (`/photowagon/ipc/1.0.0`, the lite libp2p build on Android, libsodium cross-built) — 2026-09-10
+- [ ] Phone: faces from the computer, names both ways
 - [ ] Memories / Places (needs GPS clusters and a map)
 - Flatpak / AppImage, caching, startup time

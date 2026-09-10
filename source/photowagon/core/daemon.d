@@ -33,6 +33,7 @@ import photowagon.core.ipc.handler : RequestHandler;
 import photowagon.core.ipc.link : InProcessLink;
 import photowagon.core.ipc.protocol : Registry;
 import photowagon.core.ipc.server : IpcServer;
+import photowagon.core.p2p.ipc : IpcOverP2p;
 import photowagon.core.library.albums : AlbumRepo;
 import photowagon.core.library.dates : DateTree;
 import photowagon.core.library.kindjob : KindService;
@@ -125,6 +126,8 @@ final class Daemon : ServerControl
 		registerFaceApi(registry, faceRepo, facesService, store);
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerP2pApi(registry, node, sharing);
+		if (node !is null)
+			new IpcOverP2p(node.host, registry, events, token);   // the phone's way in over libp2p
 
 		if (link !is null)
 		{
@@ -183,6 +186,11 @@ final class Daemon : ServerControl
 	string pairingToken()
 	{
 		return token;
+	}
+
+	string[] p2pAddrs()
+	{
+		return node is null ? null : node.addrs;
 	}
 
 	/// Moves request lines from the UI to the handler, for as long as the core runs.

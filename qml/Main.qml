@@ -76,8 +76,17 @@ ApplicationWindow {
     property int zoom: 176
     // the viewer alone, over the whole screen (F / F11 / the toolbar button; Escape leaves)
     property bool fullscreen: false
-    visibility: fullscreen ? Window.FullScreen : Window.Windowed
+    // Set the window state directly: a binding on `visibility` is overwritten the
+    // moment the window manager reports the change, and then nothing leaves.
+    onFullscreenChanged: {
+        if (fullscreen) root.showFullScreen()
+        else root.showNormal()
+    }
+    onVisibilityChanged: if (visibility !== Window.FullScreen && fullscreen) fullscreen = false
     onViewingChanged: if (!viewing) fullscreen = false
+    // Escape / F / F11 leave full screen whatever has the focus.
+    Shortcut { sequences: ["Escape", "F11"]; context: Qt.ApplicationShortcut; enabled: root.fullscreen && viewer.zoom === 1 && !viewer.infoOpen; onActivated: root.fullscreen = false }
+    Shortcut { sequence: "F"; context: Qt.ApplicationShortcut; enabled: root.viewing; onActivated: root.fullscreen = !root.fullscreen }
 
     function pathsOf(ids) {
         const out = []
@@ -388,6 +397,21 @@ ApplicationWindow {
                 onNotAPerson: (id) => library.deletePerson(id)
                 onRemovePerson: (id) => library.removePerson(id)
             }
+            // a way out of full screen for the mouse, shown while the pointer is near the top
+            Rectangle {
+                z: 20
+                visible: root.fullscreen
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.margins: 12
+                width: 36; height: 36; radius: 18
+                color: Qt.rgba(0, 0, 0, exitHover.hovered ? 0.7 : 0.35)
+                Image { anchors.centerIn: parent; source: icons.tint(icons.fullscreenExit, "white"); sourceSize.width: 18; sourceSize.height: 18 }
+                HoverHandler { id: exitHover }
+                TapHandler { onTapped: root.fullscreen = false }
+                ToolTip.visible: exitHover.hovered
+                ToolTip.text: "Leave full screen (Esc)"
+            }
             PhotoViewer {
                 id: viewer
                 anchors.fill: parent
@@ -537,7 +561,7 @@ ApplicationWindow {
             else if (library.shotView.startsWith("person:")) root.pickSource(library.shotView)
             else if (library.shotView.startsWith("search:")) { searchField.text = library.shotView.substring(7); root.search(searchField.text) }
             else if (library.shotView.startsWith("name:")) {}
-            else if (library.shotView === "fullscreen") {}
+            else if (library.shotView === "fullscreen" || library.shotView === "fullscreen-exit") {}
             else if (library.shotView === "menu") {}
             else root.mode = library.shotView
         }
@@ -548,9 +572,14 @@ ApplicationWindow {
         onTriggered: viewer.openNamer(library.shotView.substring(5))
     }
     Timer {   // PW_SHOT_VIEW=fullscreen with PW_SHOT_OPEN: the viewer over the whole window, zoomed in a bit
-        running: library.shotPath.length > 0 && library.shotView === "fullscreen" && root.viewing
+        running: library.shotPath.length > 0 && (library.shotView === "fullscreen" || library.shotView === "fullscreen-exit") && root.viewing
         interval: 1200
         onTriggered: { root.fullscreen = true; viewer.setZoom(1.6) }
+    }
+    Timer {   // PW_SHOT_VIEW=fullscreen-exit: …and out again, the way Escape does it
+        running: library.shotPath.length > 0 && library.shotView === "fullscreen-exit" && root.fullscreen
+        interval: 1000
+        onTriggered: { viewer.resetZoom(); root.fullscreen = false; console.log("shot: left full screen, visibility", root.visibility, "sidebar", sidebar.visible) }
     }
     Timer {   // PW_SHOT_VIEW=menu: the context menu over the first photo
         running: library.shotPath.length > 0 && library.shotView === "menu" && root.pageData.items.length > 0

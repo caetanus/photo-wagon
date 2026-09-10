@@ -59,6 +59,8 @@ ApplicationWindow {
     readonly property var current: library.current.length ? JSON.parse(library.current) : null
     readonly property var albumsData: JSON.parse(library.albums).albums
     readonly property var filterData: JSON.parse(library.filter)
+    readonly property var peopleData: JSON.parse(library.people).people
+    readonly property var facesData: JSON.parse(library.faces).faces
 
     property int filterYear: 0
     property int filterMonth: 0
@@ -157,8 +159,11 @@ ApplicationWindow {
             canSend: true
             facesOnHover: false
             sendEnabled: library.computerConnected
+            faces: root.facesData
+            people: root.peopleData
             onClosed: library.closePhoto()
             onSend: (id) => library.sendToComputer(id)
+            onNameFace: (faceId, personId, name) => library.setFacePerson(faceId, personId, name)
         }
     }
 

@@ -126,6 +126,21 @@ vibe-container, taggedalgebraic, stdx-allocator and libsodiumd come from
 `~/.dub/packages` (a `dub build` in `mobile/` fetches them) and are compiled
 into the app's `.so` by `build-android.sh`.
 
+## Faces on the phone
+
+The phone runs no face model; the computer's face database is what it shows.
+Opening a photo asks the computer for its faces: a computer photo by id, one
+of the phone's own by content hash (`library.byHash`, so the phone's copy and
+the computer's copy are the same photo), with the face crops and the people's
+portraits inline as data: URLs (`photo.faces` / `people.list` with
+`inline: true`). Naming a face in the viewer sends `face.setPerson` to the
+computer; renames, merges, "not a face" and "not a person" go the same way,
+and the computer's `people.changed` / `faces.done` events come back, so a name
+given on either side shows on both. Without the computer the viewer shows no
+faces. `tests/phone-sync.py <photos> <faces dir>` covers it: the computer finds
+the people in what the phone sent, the phone gets one face for its own
+lena.jpg, and a name lands in the computer's people.
+
 ## Sync to the computer
 
 The phone keeps the computer up to date by itself once "Keep the computer up to

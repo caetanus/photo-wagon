@@ -111,12 +111,19 @@ final class LocalBridge : Bridge
         computer.onConnected = (bool ok) {
             emit("computer.link", JSONValue(["connected": JSONValue(ok), "endpoint": JSONValue(computer.endpoint)]));
             emit("library.changed", JSONValue.emptyObject); // the merged timeline changed shape
-            if (ok) startSync();
-            else publishSync();
+            if (ok)
+            {
+                emit("people.changed", JSONValue.emptyObject);   // the open photo's faces, now reachable
+                startSync();
+            }
+            else
+                publishSync();
         };
         computer.onEvent = (string ev, JSONValue data) {
             if (ev == "library.changed" || ev == "index.done")
                 emit("library.changed", JSONValue.emptyObject);
+            else if (ev == "people.changed" || ev == "faces.done")
+                emit(ev, data);   // the UI reloads people; a face named on the computer shows here
         };
     }
 
@@ -216,6 +223,12 @@ final class LocalBridge : Bridge
             case "photo.get":       get(num(params, "id"), cb); return;
             case "photo.upload":    upload(num(params, "id"), cb); return;
             case "album.list":      albums(cb); return;
+            case "photo.faces":     faces(num(params, "id"), cb); return;
+            case "people.list":     people(cb); return;
+            // names, merges and corrections: the computer keeps the face database, both ways
+            case "face.setPerson": case "face.delete": case "people.rename": case "people.merge":
+            case "people.delete": case "people.similar":
+                forward(method, params, cb); return;
             default:
                 timed(method, 30, { cb(handleSync(method, params), JSONValue(null)); });
             }
@@ -597,6 +610,76 @@ final class LocalBridge : Bridge
             else
                 index.markFailed(id);
             cb(r, e);
+        });
+    }
+
+    // ---- faces and people: the computer's face database, seen from here ---------------
+
+    private void forward(string method, JSONValue params, ResultCb cb)
+    {
+        if (!computer.connected)
+        {
+            cb(JSONValue(null), error("no_computer", "the computer is not connected"));
+            return;
+        }
+        computer.request(method, params, cb);
+    }
+
+    /// The computer's people, portraits inline (its files are not reachable from here).
+    private void people(ResultCb cb)
+    {
+        if (!computer.connected)
+        {
+            cb(JSONValue(["people": JSONValue(cast(JSONValue[]) [])]), JSONValue(null));
+            return;
+        }
+        JSONValue params = ["inline": JSONValue(true)];
+        computer.request("people.list", params, cb);
+    }
+
+    /// Faces of a photo: a computer photo by its id, one of ours by its hash (once it is
+    /// there); nothing when the computer is away.
+    private void faces(long id, ResultCb cb)
+    {
+        JSONValue none = ["photoId": JSONValue(id), "faces": JSONValue(cast(JSONValue[]) [])];
+        if (!computer.connected)
+        {
+            cb(none, JSONValue(null));
+            return;
+        }
+        void ask(long remoteId)
+        {
+            JSONValue params = ["id": JSONValue(remoteId), "inline": JSONValue(true)];
+            computer.request("photo.faces", params, (r, e) {
+                if (e.type != JSONType.null_ || r.type != JSONType.object)
+                {
+                    cb(none, JSONValue(null));
+                    return;
+                }
+                r["photoId"] = id;   // the id the viewer asked with
+                plog("faces: ", r["faces"].array.length, " for photo ", id, " (computer id ", remoteId, ")");
+                cb(r, JSONValue(null));
+            });
+        }
+        if (id >= remoteBase)
+        {
+            ask(id - remoteBase);
+            return;
+        }
+        auto ph = index.get(id);
+        if (ph is null || ph.hash.length == 0)
+        {
+            cb(none, JSONValue(null));
+            return;
+        }
+        JSONValue byHash = ["sha256": JSONValue(ph.hash)];
+        computer.request("library.byHash", byHash, (r, e) {
+            if (e.type != JSONType.null_ || r.type != JSONType.object || !("id" in r))
+            {
+                cb(none, JSONValue(null));
+                return;
+            }
+            ask(r["id"].integer);
         });
     }
 

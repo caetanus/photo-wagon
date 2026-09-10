@@ -100,6 +100,16 @@ void registerLibraryApi(Registry r, RootRepo roots, PhotoRepo photos, DateTree d
 	// the same filter as library.page (dates ignored): the tree of a person, an album, the favourites…
 	r.add("library.dates", (JSONValue p) { return dates.build(filterOf(p)); });
 
+	// {sha256} → {id, path}: the photo with that content, or not_found (the phone asks for
+	// its own photos' faces this way)
+	r.add("library.byHash", (JSONValue p) {
+		immutable h = requireString(p, "sha256");
+		auto have = photos.byHash(h);
+		if (have.isNull)
+			throw new ApiError("not_found", "no photo with that hash");
+		return JSONValue(["id": JSONValue(have.get.id), "path": JSONValue(have.get.path)]);
+	});
+
 	r.add("photo.get", (JSONValue p) {
 		auto photo = photos.get(requireLong(p, "id"));
 		return photos.toJson(photo);

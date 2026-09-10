@@ -3,7 +3,7 @@
 phone client (offscreen): photos go to the computer by themselves, the computer is
 asked by hash before any bytes move, and a kill in the middle loses nothing.
 
-usage: tests/phone-sync.py <dir with a few images>
+usage: tests/phone-sync.py <dir with a few images> [<dir with lena.jpg and friends, for faces>]
 """
 import json, os, shutil, signal, socket, subprocess, sys, tempfile, time
 
@@ -34,9 +34,9 @@ def call(port, method, params=None):
         buf += chunk
     s.close()
     r = json.loads(buf.split(b"\n")[0])
-    if "error" in r and r["error"]:
+    if r.get("error"):
         raise RuntimeError(r["error"])
-    return r["result"]
+    return r.get("result")
 
 tmp = tempfile.mkdtemp(prefix="pw-sync-")
 core_dir = os.path.join(tmp, "core"); os.makedirs(core_dir)
@@ -139,7 +139,8 @@ core.terminate(); core.wait()
 #    addresses, the phone dialing them instead of the TCP listener
 core2_dir = os.path.join(tmp, "core2"); os.makedirs(core2_dir)
 port2 = free_port()
-core2 = subprocess.Popen([CORE, "--headless", "--data", core2_dir, "--runtime", core2_dir, "--port", str(port2)],
+core2 = subprocess.Popen([CORE, "--headless", "--data", core2_dir, "--runtime", core2_dir, "--port", str(port2),
+                          "--models", os.path.join(ROOT, "models")],
                          stdout=open(os.path.join(tmp, "core2.log"), "w"), stderr=subprocess.STDOUT)
 for _ in range(100):
     try:
@@ -161,6 +162,48 @@ check("sync: done" in log, "sync over libp2p ran to the end")
 total2 = call(port2, "library.stats")["total"]
 check(total2 > 0, "computer received the photos over libp2p (%d)" % total2)
 check("ipc/p2p" in open(os.path.join(tmp, "core2.log")).read(), "the core saw the phone on /photowagon/ipc/1.0.0")
+# 6. faces: the computer finds them in what the phone sent; the phone shows them on
+#    its own copy (matched by hash) and can name them; with a face folder if given
+faces_dir = os.path.abspath(sys.argv[2]) if len(sys.argv) > 2 else None
+if faces_dir:
+    shutil.rmtree(os.path.join(tmp, "xdg-data"), ignore_errors=True)
+    e = {"PW_ENDPOINT": pairing["code"], "PW_SHOT_SEND": "1", "PW_PHONE_ROOTS": faces_dir}
+    p = phone(25, "faces-sync.png", e)
+    for _ in range(80):
+        time.sleep(0.5)
+        if "sync: done" in phone_log("faces-sync.png"):
+            break
+    p.terminate(); p.wait()
+    people = []
+    for _ in range(120):
+        time.sleep(1)
+        people = call(port2, "people.list").get("people", [])
+        if people:
+            break
+    check(len(people) > 0, "computer found people in the phone's photos: %d" % len(people))
+    idx = index()
+    lena = next((ph["id"] for ph in idx["photos"] if ph["path"].endswith("/lena.jpg")), None)
+    check(lena is not None and idx is not None, "the phone's own copy of lena.jpg is photo %s" % lena)
+    e2 = dict(e); e2.pop("PW_SHOT_SEND"); e2["PW_SHOT_OPEN"] = str(lena or 1)
+    p = phone(20, "faces-open.png", e2)
+    for _ in range(60):
+        time.sleep(0.5)
+        if "faces: " in phone_log("faces-open.png"):
+            break
+    p.terminate(); p.wait()
+    line = ([l for l in phone_log("faces-open.png").splitlines() if "faces: " in l] or ["faces: none"])[0]
+    check("faces: 1 for photo %s" % lena in line, "the phone got the computer's faces for its own photo: " + line.split("faces: ")[-1])
+    lena_hash = next((ph.get("hash") for ph in idx["photos"] if ph["id"] == lena), None)
+    try:
+        cid = call(port2, "library.byHash", {"sha256": lena_hash})["id"]
+        cfaces = call(port2, "photo.faces", {"id": cid})["faces"]
+        check(len(cfaces) == 1, "the computer has lena.jpg (id %d) with %d face" % (cid, len(cfaces)))
+        call(port2, "face.setPerson", {"faceId": cfaces[0]["id"], "name": "Lena"})
+        people = call(port2, "people.list")["people"]
+        check(any(pp.get("name") == "Lena" for pp in people), "a name given goes into the computer's people (the phone sends face.setPerson the same way)")
+    except Exception as ex:
+        check(False, "naming through the computer: %s (hash %s)" % (ex, lena_hash))
+
 core2.terminate(); core2.wait()
 print("\n%d failures  (%s)" % (fails, tmp))
 sys.exit(1 if fails else 0)

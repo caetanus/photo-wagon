@@ -60,6 +60,7 @@ fetched album are not pulled, only thumbnails.
 - [x] Photos over 64 MP would not open (Qt's 256 MB decode limit): the viewer decodes scaled to 4096² — 2026-09-10
 - [x] Phone: camera roll found, thumbnails on worker threads, no black window, adb harness, automatic sync surviving crashes with an Android notification — 2026-09-10
 - [x] Phone: the computer over libp2p (`/photowagon/ipc/1.0.0`, the lite libp2p build on Android, libsodium cross-built) — 2026-09-10
-- [ ] Phone: faces from the computer, names both ways
+- [x] Phone: the computer's faces on the phone's own photos (by hash), names and corrections both ways — 2026-09-10
+- [ ] Phone: the computer found without the QR (LAN beacon / DHT), faces cached for offline
 - [ ] Memories / Places (needs GPS clusters and a map)
 - Flatpak / AppImage, caching, startup time

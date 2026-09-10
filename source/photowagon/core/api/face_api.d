@@ -16,10 +16,26 @@ void registerFaceApi(Registry r, FaceRepo faces, FaceService service, ContentSto
 		return hash is null ? null : fileUrl(store.pathFor(hash));
 	}
 
+	// {inline: true}: the crops as data: URLs, for a client (the phone) that cannot open our files
+	bool inline(JSONValue p)
+	{
+		return p.type == JSONType.object && "inline" in p && p["inline"].type == JSONType.true_;
+	}
+
+	string dataUrl(string hash)
+	{
+		import std.base64 : Base64;
+
+		if (hash is null || !store.has(hash))
+			return null;
+		return "data:image/jpeg;base64," ~ cast(string) Base64.encode(store.get(hash));
+	}
+
 	r.add("people.list", (JSONValue p) {
+		immutable inl = inline(p);
 		JSONValue[] out_;
 		foreach (person; faces.people())
-			out_ ~= FaceRepo.toJson(person, url(person.coverThumb));
+			out_ ~= FaceRepo.toJson(person, inl ? dataUrl(person.coverThumb) : url(person.coverThumb));
 		return JSONValue(["people": JSONValue(out_)]);
 	});
 
@@ -37,9 +53,10 @@ void registerFaceApi(Registry r, FaceRepo faces, FaceService service, ContentSto
 
 	r.add("photo.faces", (JSONValue p) {
 		immutable id = requireLong(p, "id");
+		immutable inl = inline(p);
 		JSONValue[] out_;
 		foreach (ref f; faces.facesOfPhoto(id))
-			out_ ~= FaceRepo.toJson(f, url(f.thumbHash));
+			out_ ~= FaceRepo.toJson(f, inl ? dataUrl(f.thumbHash) : url(f.thumbHash));
 		return JSONValue(["photoId": JSONValue(id), "faces": JSONValue(out_)]);
 	});
 

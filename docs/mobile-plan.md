@@ -104,8 +104,8 @@ order the pieces unblock each other.
    `QUdpSocket`, so a paired phone reconnects on any network where the computer
    is, without the QR again. The QR stays for the first pairing and for the
    token.
-3. **Faces on the phone, read-only**: the computer tells the phone who is in
-   the photos it has; naming stays on the computer for now.
+3. **Faces on the phone** — done 2026-09-10, both ways: the computer's faces for the
+   phone's photos (matched by hash), naming from the phone through `face.setPerson`.
 
 ## Phase 4 — shipping (three days)
 

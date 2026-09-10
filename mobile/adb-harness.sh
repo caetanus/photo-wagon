@@ -11,7 +11,7 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 PKG=org.photowagon.mobile
 ACT=$PKG/.MainActivity
-APK=$HERE/build-android/photo-wagon-mobile-debug.apk
+APK=${APK:-$HERE/build-android/photo-wagon-mobile-debug.apk}   # APK=… for the x86_64 build
 OUT=${OUT:-$HERE/build-android/harness}
 SECONDS_TO_WATCH=90
 INSTALL=0
@@ -94,9 +94,14 @@ while [ $i -lt "$SECONDS_TO_WATCH" ]; do
     allow=$(adb shell cat /sdcard/pw-ui.xml 2>/dev/null | python3 -c '
 import re, sys
 x = sys.stdin.read()
+best = None
 for m in re.finditer(r"<node[^>]*text=\"([^\"]*)\"[^>]*bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", x):
-    if re.match(r"(?i)allow|permitir", m.group(1)):
-        print((int(m.group(2)) + int(m.group(4))) // 2, (int(m.group(3)) + int(m.group(5))) // 2); break')
+    t = m.group(1).lower()
+    # "Allow all" (Android 14+) before a plain "Allow"; never "Don t allow" / "Select photos"
+    rank = 2 if t.startswith(("allow all", "permitir tod")) else 1 if t.startswith(("allow", "permitir")) else 0
+    if rank and (best is None or rank > best[0]):
+        best = (rank, (int(m.group(2)) + int(m.group(4))) // 2, (int(m.group(3)) + int(m.group(5))) // 2)
+if best: print(best[1], best[2])')
     if [ -n "$allow" ]; then adb shell input tap $allow; ok "permission dialog: tapped Allow at $allow"; fi
   fi
   pid=$(adb shell pidof $PKG | tr -d '\r')

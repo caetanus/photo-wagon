@@ -53,8 +53,36 @@ public class MainActivity extends QtActivity
     {
         super.onCreate(savedInstanceState);
         instance = this;
+        exportQtEnvironment();
         watchSyncStatus();
         handle(getIntent());
+    }
+
+    /**
+     * QtLoader sets QT_PLUGIN_PATH, QML_IMPORT_PATH and friends with Os.setenv,
+     * which the native side normally sees through getenv. Under the emulator's
+     * ARM translation (Berberis) the translated libc keeps its own copy of the
+     * environment taken before that, so Qt finds no platform plugin. The D side
+     * reads this file and sets the variables itself (see main.d).
+     */
+    private void exportQtEnvironment()
+    {
+        try
+        {
+            StringBuilder sb = new StringBuilder();
+            for (java.util.Map.Entry<String, String> e : System.getenv().entrySet())
+                if (e.getKey().startsWith("QT") || e.getKey().startsWith("QML") || e.getKey().equals("LD_LIBRARY_PATH"))
+                    sb.append(e.getKey()).append('=').append(e.getValue()).append('\n');
+            File dir = new File(getFilesDir(), "settings");
+            dir.mkdirs();
+            FileWriter w = new FileWriter(new File(dir, "qt-env"));
+            w.write(sb.toString());
+            w.close();
+        }
+        catch (Exception e)
+        {
+            Log.w(TAG, "cannot export Qt environment: " + e.getMessage());
+        }
     }
 
     @Override

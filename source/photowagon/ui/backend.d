@@ -80,7 +80,7 @@ import photowagon.ui.transport : Bridge;
     /// Phone: parsed library.syncStatus — {enabled, connected, active, pending, total, done, sent, skipped, failed, error}
     @Property("syncChanged") string sync = `{"enabled":false,"connected":false,"active":false,"pending":0,"total":0,"done":0,"sent":0,"skipped":0,"failed":0,"error":null}`;
     /// {"year","month","day","personId","albumId","rootId","favorites"} — what the page shows.
-    @Property("filterChanged") string filter = `{"year":0,"month":0,"day":0,"personId":0,"albumId":0,"rootId":0,"favorites":false}`;
+    @Property("filterChanged") string filter = `{"year":0,"month":0,"day":0,"personId":0,"albumId":0,"rootId":0,"favorites":false,"kind":"","text":""}`;
 
     private Bridge client;
     private string[long] thumbCache; // id → data: URL, remote only
@@ -91,6 +91,7 @@ import photowagon.ui.transport : Bridge;
     private long fAlbum, fRoot;
     private bool fFavorites;
     private string fKind;
+    private string fText;
     private long openId; // photo being opened/shown; faces answers for others are dropped
     private int pageLimit = 120;
     private bool indexing;
@@ -217,6 +218,17 @@ import photowagon.ui.transport : Bridge;
         loadDates();
     }
 
+    /// Photos whose file name or folder contains `q` ("" = everything).
+    @Slot void filterSearch(string q)
+    {
+        import std.string : strip;
+        clearFilters();
+        fText = q.strip();
+        publishFilter();
+        reload(0, pageLimit);
+        loadDates();
+    }
+
     /// The user's word on what a picture is.
     @Slot void setKind(int id, string kind)
     {
@@ -254,6 +266,7 @@ import photowagon.ui.transport : Bridge;
         fPerson = fAlbum = fRoot = 0;
         fFavorites = false;
         fKind = null;
+        fText = null;
     }
 
     private void publishFilter()
@@ -263,6 +276,7 @@ import photowagon.ui.transport : Bridge;
         f["personId"] = fPerson; f["albumId"] = fAlbum; f["rootId"] = fRoot;
         f["favorites"] = fFavorites;
         f["kind"] = fKind is null ? "" : fKind;
+        f["text"] = fText is null ? "" : fText;
         filter = f.toString();
         filterChanged.emit();
         if (personFilter != cast(int) fPerson)
@@ -336,6 +350,7 @@ import photowagon.ui.transport : Bridge;
         if (fRoot)   params["rootId"] = fRoot;
         if (fFavorites) params["favorites"] = true;
         if (fKind.length) params["kind"] = fKind;
+        if (fText.length) params["q"] = fText;
         immutable off = offset;
         client.request("library.page", params, (r, e) {
             if (e.type != JSONType.null_) { report("page", e); return; }
@@ -361,6 +376,7 @@ import photowagon.ui.transport : Bridge;
         if (fRoot)   params["rootId"] = fRoot;
         if (fFavorites) params["favorites"] = true;
         if (fKind.length) params["kind"] = fKind;
+        if (fText.length) params["q"] = fText;
         client.request("library.dates", params, (r, e) {
             if (e.type != JSONType.null_) { report("dates", e); return; }
             dates = r.toString();

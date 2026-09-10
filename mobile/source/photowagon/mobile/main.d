@@ -5,7 +5,7 @@
 // PW_PHONE_ROOTS=/dir[:/dir] standing in for DCIM/ and Pictures/).
 module photowagon.mobile.main;
 
-import photowagon.mobile.plog : plog, installCrashHandler;
+import photowagon.mobile.plog : plog, installCrashHandler, captureStdioToLogcat;
 
 import qt.quick.qguiapplication;
 import qt.quick.qcoreapplication;
@@ -60,8 +60,47 @@ string[] photoRoots()
     return [buildPath(base, "DCIM"), buildPath(base, "Pictures")];
 }
 
+/// Under the emulator's ARM translation the environment QtLoader set (plugin and
+/// QML paths) is invisible here; MainActivity writes it to settings/qt-env and we
+/// take it from there. On a real device the variables are already present.
+void adoptQtEnvironment()
+{
+    version (Android)
+    {
+        import core.thread : Thread;
+        import core.time : msecs;
+        import std.file : exists, readText;
+        import std.string : splitLines, indexOf;
+
+        if (environment.get("QT_PLUGIN_PATH", "").length)
+            return;
+        immutable file = buildPath(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation).toString(),
+            "settings", "qt-env");
+        foreach (i; 0 .. 60)   // MainActivity.onCreate writes it right after Qt started loading
+        {
+            if (file.exists)
+                break;
+            Thread.sleep(50.msecs);
+        }
+        if (!file.exists)
+        {
+            plog("qt-env: not found, hoping the environment is fine");
+            return;
+        }
+        foreach (line; readText(file).splitLines)
+        {
+            immutable eq = line.indexOf('=');
+            if (eq > 0)
+                environment[line[0 .. eq]] = line[eq + 1 .. $];
+        }
+        plog("qt-env: adopted, plugin path ", environment.get("QT_PLUGIN_PATH", ""));
+    }
+}
+
 int main()
 {
+    captureStdioToLogcat();
+    adoptQtEnvironment();
     if ("QT_QUICK_CONTROLS_STYLE" !in environment)
         environment["QT_QUICK_CONTROLS_STYLE"] = "Material";
     version (Android)

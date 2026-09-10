@@ -115,6 +115,7 @@ ApplicationWindow {
     readonly property string headerTitle: {
         if (viewing) return "";
         if (source === "people") return "People"
+        if (filterData.text) return "Results for “" + filterData.text + "”"
         if (source === "person") return personName(filterData.personId)
         if (filterData.favorites) return "Favorites"
         if (filterData.kind === "photo") return "Photos"
@@ -305,14 +306,16 @@ ApplicationWindow {
                     color: theme.field
                     Image { x: 8; anchors.verticalCenter: parent.verticalCenter; source: icons.tint(icons.search, theme.muted); sourceSize.width: 14; sourceSize.height: 14 }
                     TextField {
-                        id: search
+                        id: searchField
                         anchors.fill: parent
                         anchors.leftMargin: 26
                         background: null
                         placeholderText: "Search"
                         font.pixelSize: 12
                         color: theme.text
-                        onAccepted: root.search(text)
+                        onTextEdited: searchDebounce.restart()
+                        onAccepted: { searchDebounce.stop(); root.search(text) }
+                        Keys.onEscapePressed: { text = ""; searchDebounce.stop(); root.search("") }
                     }
                 }
             }
@@ -433,19 +436,39 @@ ApplicationWindow {
         height: Math.min(600, root.height - 80)
     }
 
-    // Search: a person's name, or a year / "month year".
+    // Search, as you type: a person, an album, a year, "month year", "favorites",
+    // "screenshots" / "memes" / "photos"; anything else looks for the words in the
+    // file names and folders (the core's `q` filter).
+    property string searchText: ""
     function search(text) {
         const q = text.trim().toLowerCase()
+        searchText = q
         if (!q) { pickSource("all"); return }
+        library.closePhoto()
+        grid.clearSelection()
         for (const p of peopleData)
-            if (p.name && p.name.toLowerCase().startsWith(q)) { openPerson(p.id); return }
+            if (p.name && p.name.toLowerCase().split(/\s+/).some(w => w.startsWith(q))) { openPerson(p.id); return }
+        for (const a of albumsData)
+            if (a.name.toLowerCase().startsWith(q)) { pickSource("album:" + a.id); return }
+        if (["favorites", "favoritos", "favoritas"].includes(q)) { pickSource("favorites"); return }
+        if (["screenshots", "screenshot", "prints", "capturas"].includes(q)) { pickSource("kind:screenshot"); return }
+        if (["memes", "meme"].includes(q)) { pickSource("kind:meme"); return }
+        if (["photos", "fotos", "photographs"].includes(q)) { pickSource("kind:photo"); return }
         const y = q.match(/^(\d{4})$/)
-        if (y) { source = "all"; library.filterDate(parseInt(y[1]), 0, 0); mode = "months"; return }
+        if (y) { source = "all"; library.filterDate(parseInt(y[1]), 0, 0); if (mode === "years") mode = "months"; return }
         for (let m = 1; m <= 12; m++) {
             const name = new Date(2000, m - 1, 1).toLocaleDateString(Qt.locale(), "MMMM").toLowerCase()
             const hit = q.match(new RegExp("^" + name + "\\s+(\\d{4})$"))
-            if (hit) { source = "all"; library.filterDate(parseInt(hit[1]), m, 0); mode = "days"; return }
+            if (hit) { source = "all"; library.filterDate(parseInt(hit[1]), m, 0); if (mode === "years" || mode === "months") mode = "days"; return }
         }
+        source = "search"
+        if (mode === "years" || mode === "months") mode = "all"
+        library.filterSearch(q)
+    }
+    Timer {   // a pause in typing runs the search
+        id: searchDebounce
+        interval: 300
+        onTriggered: root.search(searchField.text)
     }
 
     // Headless capture: PW_SHOT=/path.png (+ PW_SHOT_OPEN=<id>, PW_SHOT_SEND=1 for the pairing
@@ -474,6 +497,7 @@ ApplicationWindow {
                 root.pickDate(parseInt(p[0]), parseInt(p[1] || "0"), parseInt(p[2] || "0"))
             }
             else if (library.shotView.startsWith("person:")) root.pickSource(library.shotView)
+            else if (library.shotView.startsWith("search:")) { searchField.text = library.shotView.substring(7); root.search(searchField.text) }
             else if (library.shotView.startsWith("name:")) {}
             else root.mode = library.shotView
         }

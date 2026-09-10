@@ -9,17 +9,25 @@ set -e
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 DSIDE=${DSIDE:-$HOME/lab/qt-dlang-gen}
-QT_ANDROID=${QT_ANDROID:-$HOME/Qt/6.11.1/android_arm64_v8a}
+# ABI=arm64 (the phone, default) or ABI=x86_64 (the emulator). The generated D
+# sources are the arm64 ones for both: the two are LP64 and the Qt headers are
+# the same; only the compiled archives differ.
+ABI=${ABI:-arm64}
+case "$ABI" in
+    arm64)  TRIPLE=aarch64-linux-android; KIT=android_arm64_v8a; PC=pkgconfig ;;
+    x86_64) TRIPLE=x86_64-linux-android;  KIT=android_x86_64;    PC=pkgconfig-x86_64 ;;
+    *) echo "ABI must be arm64 or x86_64" >&2; exit 2 ;;
+esac
+QT_ANDROID=${QT_ANDROID:-$HOME/Qt/6.11.1/$KIT}
 NDK=${NDK:-/opt/android-sdk/ndk/27.2.12479018}
 NDK_BIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
 API=${API:-35}
-TRIPLE=aarch64-linux-android
 CONF=$HERE/ldc2-android.conf
 SPEC=$HERE/spec_cxx_quick_android.json
 GEN=$DSIDE/generated/qt-6.11-android-arm64/cxx-quick
-BUILD=$DSIDE/.build/qt-6.11-android-arm64-cxx-quick
+BUILD=$DSIDE/.build/qt-6.11-android-$ABI-cxx-quick
 MODS="Qt6Quick Qt6QmlModels Qt6Qml Qt6Gui Qt6Core"
-export PKG_CONFIG_PATH=$HERE/pkgconfig
+export PKG_CONFIG_PATH=$HERE/$PC
 
 generate() {
     (cd "$DSIDE" && ./xiboca/xiboca "$SPEC")
@@ -40,7 +48,7 @@ build_shims() {
     rm -rf "$BUILD/ocpp" && mkdir -p "$BUILD/ocpp"
     CFLAGS=$(pkg-config --cflags $MODS)
     # the spec's include_paths: the private-header dirs of every module, for every unit
-    INC=$(python3 -c "import json,sys; print(' '.join('-I'+p for p in json.load(open(sys.argv[1]))['include_paths']))" "$SPEC")
+    INC=$(python3 -c "import json,sys; print(' '.join('-I'+p for p in json.load(open(sys.argv[1]))['include_paths']))" "$SPEC" | sed "s|android_arm64_v8a|$KIT|g")
     CXX="$CFLAGS $INC -std=c++17 -fPIC -O2 -ffunction-sections -fdata-sections"
     echo yes > "$BUILD/qml-enabled"
     for c in "$GEN"/*.cpp; do

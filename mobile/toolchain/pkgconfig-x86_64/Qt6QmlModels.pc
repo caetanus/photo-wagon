@@ -1,0 +1,9 @@
+prefix=/home/caetano/Qt/6.11.1/android_x86_64
+includedir=${prefix}/include
+libdir=${prefix}/lib
+Name: Qt6QmlModels
+Description: Qt 6.11.1 android_x86_64 Qt6QmlModels (hand-written .pc for xiboca / cross builds)
+Version: 6.11.1
+Requires: Qt6Qml Qt6Core
+Cflags: --target=x86_64-linux-android35 --sysroot=/opt/android-sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/sysroot -I${includedir}/QtQmlModels -I${includedir} -DQT_QMLMODELS_LIB -I${prefix}/mkspecs/android-clang
+Libs: -L${libdir} -lQt6QmlModels_x86_64

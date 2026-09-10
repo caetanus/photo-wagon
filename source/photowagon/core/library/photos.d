@@ -46,6 +46,7 @@ struct Filter
 	int day;
 	bool favorites;
 	string kind; // restrict to one kind; null = any
+	string text; // a word of the path (file name, folder); null = any
 }
 
 struct Neighbours
@@ -395,6 +396,12 @@ final class PhotoRepo
 		{
 			w.where ~= " AND p.kind = ?";
 			w.strings ~= f.kind;
+		}
+		if (f.text.length)
+		{
+			w.where ~= " AND p.path LIKE ? ESCAPE '\\'";
+			import std.string : replace;
+			w.strings ~= "%" ~ f.text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") ~ "%";
 		}
 		if (f.year)
 		{

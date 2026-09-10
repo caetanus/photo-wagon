@@ -15,16 +15,23 @@ set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 DSIDE=${DSIDE:-$HOME/lab/qt-dlang-gen}
 LDC_CONF=${LDC_CONF:-$HERE/toolchain/ldc2-android.conf}
-QT_ANDROID=${QT_ANDROID:-$HOME/Qt/6.11.1/android_arm64_v8a}
+# ABI=arm64-v8a (the phone, default) or ABI=x86_64 (the emulator; see ANDROID.md)
+ABI=${ABI:-arm64-v8a}
+case "$ABI" in
+    arm64-v8a) TRIPLE=aarch64-linux-android; KIT=android_arm64_v8a; ABI_DIR=arm64;  BINDING=qt-6.11-android-arm64-cxx-quick ;;
+    x86_64)    TRIPLE=x86_64-linux-android;  KIT=android_x86_64;    ABI_DIR=x86_64; BINDING=qt-6.11-android-x86_64-cxx-quick ;;
+    *) echo "ABI must be arm64-v8a or x86_64" >&2; exit 2 ;;
+esac
+QT_ANDROID=${QT_ANDROID:-$HOME/Qt/6.11.1/$KIT}
 QT_HOST=${QT_HOST:-$HOME/Qt/6.11.1/gcc_64}
 NDK=${NDK:-/opt/android-sdk/ndk/27.2.12479018}
 export ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-/opt/android-sdk}
 export JAVA_HOME=${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk}
 GEN=$DSIDE/generated/qt-6.11-android-arm64/cxx-quick
-BUILD=$DSIDE/.build/qt-6.11-android-arm64-cxx-quick
+BUILD=$DSIDE/.build/$BINDING
 APP=photowagon          # lib${APP}_${ABI}.so, the name QtActivity loads
-ABI=arm64-v8a
 OUT=$HERE/build-android
+[ "$ABI" = arm64-v8a ] || OUT=$HERE/build-android/$ABI
 PKG_NAME=org.photowagon.mobile
 
 for p in "$LDC_CONF" "$BUILD/libbinding_ldc2.a" "$BUILD/libshims.a" "$GEN/cxxrt.d"; do
@@ -43,14 +50,12 @@ for d in eventcore-0.9.39/eventcore vibe-core-2.14.0/vibe-core vibe-container-1.
     P2P_INCLUDES="$P2P_INCLUDES -I$DUBP/$d/source"
     P2P_SOURCES="$P2P_SOURCES $(find "$DUBP/$d/source" -name '*.d')"
 done
-ABI_DIR=arm64
-
 link() {
     # -shared: Qt for Android loads lib<app>_<abi>.so and calls its exported main().
     # -relocation-model=pic: everything in a .so must be PIC (the binding archive was built so too).
     # qrc.d is compiled in (not only imported) or the link wants "ModuleInfo for qrc".
     cd "$HERE"
-    ldc2 -conf="$LDC_CONF" -mtriple=aarch64-linux-android -shared -relocation-model=pic -O \
+    ldc2 -conf="$LDC_CONF" -mtriple=$TRIPLE -shared -relocation-model=pic -O \
         -d-version=PhotoWagonMobile \
         -of="$OUT/lib${APP}_${ABI}.so" \
         source/photowagon/mobile/main.d source/photowagon/mobile/plog.d source/photowagon/mobile/tcpbridge.d \
@@ -58,7 +63,7 @@ link() {
         source/photowagon/mobile/localbridge.d source/photowagon/mobile/phoneindex.d \
         ../source/photowagon/ui/backend.d ../source/photowagon/ui/transport.d ../source/photowagon/ui/bridge.d \
         ../source/photowagon/core/ipc/link.d ../source/photowagon/core/p2p/identity.d \
-        $P2P_SOURCES -d-version=LibP2P_Lite $P2P_INCLUDES \
+        $P2P_SOURCES -d-version=LibP2P_Lite -d-version=EventcoreEpollDriver $P2P_INCLUDES \
         ../source/photowagon/core/indexer/scan.d ../source/photowagon/core/library/calendar.d \
         ../source/photowagon/core/metadata/exifparse.d ../source/photowagon/core/pairingcode.d \
         "$DSIDE/runtime/qrc/qrc.d" \
@@ -94,7 +99,7 @@ settings() {
    "toolchain-version": "clang",
    "ndk-host": "linux-x86_64",
    "abi": "$ABI",
-   "architectures": { "$ABI": "aarch64-linux-android" },
+   "architectures": { "$ABI": "$TRIPLE" },
    "android-legacy-packaging": true,
    "android-package-source-directory": "$HERE/android",
    "android-package-name": "$PKG_NAME",

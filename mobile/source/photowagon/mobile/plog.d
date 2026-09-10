@@ -119,3 +119,48 @@ else
 {
     void installCrashHandler() nothrow @nogc {}
 }
+
+// ---- stdout / stderr → logcat -----------------------------------------------------
+// Qt's activity gives the process no terminal: D's writeln, vibe-core's log (a
+// fiber that aborts explains itself on stderr first) and Qt's own warnings would
+// vanish. A pipe replaces both descriptors and a thread relays the lines.
+version (Android)
+{
+    void captureStdioToLogcat()
+    {
+        import core.sys.posix.unistd : pipe, dup2, read;
+        import core.thread : Thread;
+
+        int[2] fds;
+        if (pipe(fds) != 0)
+            return;
+        dup2(fds[1], 1);
+        dup2(fds[1], 2);
+        auto t = new Thread({
+            char[4096] buf;
+            string pending;
+            for (;;)
+            {
+                immutable n = read(fds[0], buf.ptr, buf.length);
+                if (n <= 0)
+                    break;
+                pending ~= buf[0 .. n];
+                ptrdiff_t nl;
+                import std.string : indexOf, toStringz;
+                while ((nl = pending.indexOf('\n')) >= 0)
+                {
+                    auto line = pending[0 .. nl];
+                    pending = pending[nl + 1 .. $];
+                    if (line.length)
+                        __android_log_write(4, "photowagon-io", line.toStringz);
+                }
+            }
+        });
+        t.isDaemon = true;
+        t.start();
+    }
+}
+else
+{
+    void captureStdioToLogcat() {}
+}

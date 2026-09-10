@@ -51,15 +51,42 @@ Rectangle {
     }
     function monthName(m) { return new Date(2000, m - 1, 1).toLocaleDateString(Qt.locale(), "MMMM") }
 
-    component SectionHeader: Label {
+    // Which sections are folded (the user's choice, kept for the session).
+    property bool datesOpen: true
+    property bool peopleOpen: true
+    property bool albumsOpen: true
+
+    component SectionHeader: Item {
         required property string title
-        text: title
-        color: theme.muted
-        font.pixelSize: 11
-        font.bold: true
-        leftPadding: 16
-        topPadding: 14
-        bottomPadding: 4
+        property bool collapsible: false
+        property bool open: true
+        signal toggled()
+        width: list.width
+        height: 30
+        Label {
+            anchors.left: parent.left
+            anchors.leftMargin: 16
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 4
+            text: parent.title
+            color: theme.muted
+            font.pixelSize: 11
+            font.bold: true
+        }
+        Image {
+            visible: parent.collapsible
+            anchors.right: parent.right
+            anchors.rightMargin: 14
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 6
+            source: icons.tint(icons.chevronRight, theme.muted)
+            sourceSize.width: 11; sourceSize.height: 11
+            rotation: parent.open ? 90 : 0
+            opacity: headerHover.hovered || !parent.open ? 1 : 0.5
+            Behavior on rotation { NumberAnimation { duration: 120 } }
+        }
+        HoverHandler { id: headerHover }
+        TapHandler { enabled: parent.collapsible; onTapped: parent.toggled() }
     }
 
     // One line of the list: a highlight, an icon or a portrait, a title and a detail.
@@ -176,9 +203,13 @@ Rectangle {
             }
 
             // ---- years → months → days ------------------------------------------------
-            SectionHeader { title: "Dates"; visible: sidebar.dates.years.length > 0 }
+            SectionHeader {
+                title: "Dates"; visible: sidebar.dates.years.length > 0
+                collapsible: true; open: sidebar.datesOpen
+                onToggled: sidebar.datesOpen = !sidebar.datesOpen
+            }
             Repeater {
-                model: sidebar.dates.years
+                model: sidebar.datesOpen ? sidebar.dates.years : []
                 delegate: Column {
                     id: yearNode
                     required property var modelData
@@ -248,9 +279,13 @@ Rectangle {
             }
 
             // ---- named people ------------------------------------------------------------
-            SectionHeader { title: "People"; visible: sidebar.namedPeople.length > 0 }
+            SectionHeader {
+                title: "People"; visible: sidebar.namedPeople.length > 0
+                collapsible: true; open: sidebar.peopleOpen
+                onToggled: sidebar.peopleOpen = !sidebar.peopleOpen
+            }
             Repeater {
-                model: sidebar.namedPeople
+                model: sidebar.peopleOpen ? sidebar.namedPeople : []
                 delegate: Row {
                     required property var modelData
                     key: "person:" + modelData.id
@@ -266,9 +301,13 @@ Rectangle {
             Row { key: "kind:screenshot"; title: "Screenshots"; icon: icons.screenshot; detail: String(sidebar.stats.kinds.screenshot || 0) }
             Row { key: "kind:meme"; title: "Memes"; icon: icons.meme; detail: String(sidebar.stats.kinds.meme || 0) }
 
-            SectionHeader { title: "Albums"; visible: sidebar.albums.length > 0 }
+            SectionHeader {
+                title: "Albums"; visible: sidebar.albums.length > 0
+                collapsible: true; open: sidebar.albumsOpen
+                onToggled: sidebar.albumsOpen = !sidebar.albumsOpen
+            }
             Repeater {
-                model: sidebar.albums
+                model: sidebar.albumsOpen ? sidebar.albums : []
                 delegate: Row {
                     required property var modelData
                     key: "album:" + modelData.id

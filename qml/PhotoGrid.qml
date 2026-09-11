@@ -52,6 +52,17 @@ Item {
         selected = s; selectionChanged()
     }
     function clearSelection() { selected = ({}); cursor = -1; selectionChanged() }
+    /// Shift-click: everything from the last plain click (the anchor) to here, added to the selection.
+    property int anchor: -1
+    function selectRange(to) {
+        const from = anchor < 0 ? to : anchor
+        const s = Object.assign({}, selected)
+        for (let i = Math.min(from, to); i <= Math.max(from, to); i++)
+            if (i >= 0 && i < page.items.length) s[page.items[i].id] = true
+        selected = s
+        cursor = to
+        selectionChanged()
+    }
     function selectedIds() { return Object.keys(selected).map(Number) }
 
     function indexOf(id) {
@@ -69,11 +80,14 @@ Item {
     }
 
     Keys.onPressed: (event) => {
+        const extend = event.modifiers & Qt.ShiftModifier
+        const step = (d) => { if (extend) { if (anchor < 0) anchor = Math.max(0, cursor); selectRange(Math.max(0, Math.min(page.items.length - 1, (cursor < 0 ? 0 : cursor) + d))) } else { moveCursor(d); anchor = cursor } }
         switch (event.key) {
-        case Qt.Key_Left: moveCursor(-1); break
-        case Qt.Key_Right: moveCursor(1); break
-        case Qt.Key_Up: moveCursor(-columns); break
-        case Qt.Key_Down: moveCursor(columns); break
+        case Qt.Key_A: if (event.modifiers & Qt.ControlModifier) { anchor = 0; selectRange(page.items.length - 1); break } return
+        case Qt.Key_Left: step(-1); break
+        case Qt.Key_Right: step(1); break
+        case Qt.Key_Up: step(-columns); break
+        case Qt.Key_Down: step(columns); break
         case Qt.Key_Return: case Qt.Key_Enter: case Qt.Key_Space:
             if (cursor >= 0 && cursor < page.items.length) grid.open(page.items[cursor].id); break
         case Qt.Key_Escape: clearSelection(); break
@@ -138,12 +152,16 @@ Item {
         HoverHandler { id: cellHover }
         TapHandler {
             acceptedModifiers: Qt.NoModifier
-            onTapped: { grid.cursor = cell.cellIndex; grid.selectOnly(cell.photo.id); grid.forceActiveFocus() }
+            onTapped: { grid.cursor = cell.cellIndex; grid.anchor = cell.cellIndex; grid.selectOnly(cell.photo.id); grid.forceActiveFocus() }
             onDoubleTapped: grid.open(cell.photo.id)
         }
         TapHandler {
             acceptedModifiers: Qt.ControlModifier
-            onTapped: { grid.cursor = cell.cellIndex; grid.toggle(cell.photo.id); grid.forceActiveFocus() }
+            onTapped: { grid.cursor = cell.cellIndex; grid.anchor = cell.cellIndex; grid.toggle(cell.photo.id); grid.forceActiveFocus() }
+        }
+        TapHandler {
+            acceptedModifiers: Qt.ShiftModifier
+            onTapped: { grid.selectRange(cell.cellIndex); grid.forceActiveFocus() }
         }
         TapHandler {
             acceptedButtons: Qt.RightButton

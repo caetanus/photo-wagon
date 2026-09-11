@@ -562,6 +562,10 @@ ApplicationWindow {
             else if (library.shotView.startsWith("search:")) { searchField.text = library.shotView.substring(7); root.search(searchField.text) }
             else if (library.shotView.startsWith("name:")) {}
             else if (library.shotView === "fullscreen" || library.shotView === "fullscreen-exit") {}
+            else if (library.shotView.startsWith("select:")) {   // select:A-B — a shift-click range
+                const ab = library.shotView.substring(7).split("-")
+                grid.anchor = parseInt(ab[0]); grid.selectRange(parseInt(ab[1]))
+            }
             else if (library.shotView === "menu") {}
             else root.mode = library.shotView
         }

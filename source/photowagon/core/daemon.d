@@ -42,6 +42,7 @@ import photowagon.core.library.kindjob : KindService;
 import photowagon.core.library.photos : PhotoRepo;
 import photowagon.core.library.places : Geocoder, PlaceService;
 import photowagon.core.library.scenes : SceneService;
+import photowagon.core.library.keywords : KeywordService;
 import photowagon.core.library.roots : RootRepo;
 import photowagon.core.p2p.identity : loadOrCreateIdentity;
 import photowagon.core.p2p.node : Node;
@@ -155,7 +156,7 @@ final class Daemon : ServerControl
 		registerFaceApi(registry, faceRepo, facesService, store, events);
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerPlacesApi(registry, places);
-		registerTagsApi(registry, scenes);
+		registerTagsApi(registry, scenes, new KeywordService(db, store, events));
 		registerP2pApi(registry, node, sharing);
 		if (node !is null)
 			new IpcOverP2p(node.host, registry, events, token);   // the phone's way in over libp2p

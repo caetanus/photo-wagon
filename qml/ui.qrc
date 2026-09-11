@@ -10,6 +10,7 @@
     <file>PeopleView.qml</file>
     <file>PlacesView.qml</file>
     <file>PlaceDialog.qml</file>
+    <file>KeywordDialog.qml</file>
     <file>AlbumDialog.qml</file>
     <file>MergeSuggestion.qml</file>
     <file>PhotoMenu.qml</file>

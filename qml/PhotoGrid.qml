@@ -158,6 +158,25 @@ Item {
             border.color: "white"; border.width: 1.5
             Image { anchors.centerIn: parent; source: icons.tint(icons.check, "white"); sourceSize.width: 12; sourceSize.height: 12 }
         }
+        // the classifiers' word, top left, while hovering
+        Row {
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.margins: 6
+            spacing: 4
+            visible: cellHover.hovered && grid.cell >= 120
+            Repeater {
+                model: [cell.photo.scene, cell.photo.holiday, cell.photo.weather].filter(t => t)
+                Rectangle {
+                    required property string modelData
+                    height: 18
+                    width: badgeLabel.implicitWidth + 12
+                    radius: 9
+                    color: Qt.rgba(0, 0, 0, 0.55)
+                    Label { id: badgeLabel; anchors.centerIn: parent; text: modelData; color: "white"; font.pixelSize: 10 }
+                }
+            }
+        }
         // favorite heart (shown on hover, or always when set)
         Image {
             anchors.left: parent.left

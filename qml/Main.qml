@@ -62,6 +62,7 @@ ApplicationWindow {
     readonly property var peopleData: JSON.parse(library.people).people
     readonly property var placesData: JSON.parse(library.places).places
     readonly property var tagsData: JSON.parse(library.tags)
+    readonly property var keywordsData: JSON.parse(library.keywords).keywords
     readonly property var tagGroups: ["scene", "mood", "weather", "holiday"]
     readonly property var tagLabels: JSON.parse(library.tagLabels)
     readonly property var facesData: JSON.parse(library.faces).faces
@@ -115,6 +116,11 @@ ApplicationWindow {
         else if (key === "peers") { peersPanel.open(); source = "all" }
         else if (key === "people") library.loadPeople()
         else if (key === "places") library.loadPlaces()
+        else if (key.startsWith("keyword:")) {
+            const k = key.substring(8)
+            if (filterData.keyword === k) pickSource("all")
+            else { source = "keyword"; library.filterKeyword(k); grid.clearSelection() }
+        }
         else if (root.tagGroups.some(g => key.startsWith(g + ":"))) {
             const group = root.tagGroups.find(g => key.startsWith(g + ":"))
             const tag = key.substring(group.length + 1)
@@ -161,6 +167,7 @@ ApplicationWindow {
         if (source === "places") return "Places"
         if (filterData.place) return filterData.place + (filterData.country ? ", " + filterData.country : "")
         for (const g of tagGroups) if (filterData[g]) return filterData[g]
+        if (filterData.keyword) return "#" + filterData.keyword
         if (filterData.text) return "Results for “" + filterData.text + "”"
         if (source === "person") return personName(filterData.personId)
         if (filterData.favorites) return "Favorites"
@@ -221,10 +228,12 @@ ApplicationWindow {
             people: root.peopleData
             places: root.placesData
             tags: root.tagsData
+            keywords: root.keywordsData
             status: root.status
             selected: root.source === "person" ? "person:" + root.filterData.personId
                     : root.source === "place" ? "place:" + root.filterData.place + "|" + (root.filterData.country || "")
                     : root.tagGroups.indexOf(root.source) >= 0 ? root.source + ":" + root.filterData[root.source]
+                    : root.source === "keyword" ? "keyword:" + root.filterData.keyword
                     : root.source
             onPick: (key) => root.pickSource(key)
             onPickDate: (y, m, d) => root.pickDate(y, m, d)
@@ -346,6 +355,12 @@ ApplicationWindow {
                     icon_: icons.pin
                     ToolTip.text: "Set Place"; ToolTip.visible: hovered
                     onClicked: { placeDialog.photoIds = grid.selectedIds(); placeDialog.open() }
+                }
+                ToolIcon {
+                    visible: !root.viewing && grid.selectedIds().length > 0
+                    icon_: icons.hash
+                    ToolTip.text: "Add Tags"; ToolTip.visible: hovered
+                    onClicked: { keywordDialog.photoIds = grid.selectedIds(); keywordDialog.open() }
                 }
                 ToolIcon {
                     visible: !root.viewing && grid.selectedIds().length > 0
@@ -485,6 +500,11 @@ ApplicationWindow {
                 onNotAFace: (faceId) => library.deleteFace(faceId)
                 onSetKind: (id, kind) => library.setKind(id, kind)
                 onFavorite: (id) => library.toggleFavorite(id)
+                onFilterTag: (group, tag) => { library.closePhoto(); root.pickSource(group + ":" + tag) }
+                onFilterPlace: (place, country) => { library.closePhoto(); root.openPlace(place, country) }
+                onFilterKeyword: (k) => { library.closePhoto(); root.pickSource("keyword:" + k) }
+                onAddKeywords: (id, text) => library.addKeywords(JSON.stringify([id]), text)
+                onRemoveKeyword: (id, k) => library.removeKeyword(JSON.stringify([id]), k)
             }
         }
     } // shell
@@ -508,6 +528,7 @@ ApplicationWindow {
         onAddToAlbum: (ids) => { albumDialog.photoIds = ids; albumDialog.open() }
         onSetPlace: (ids) => { placeDialog.photoIds = ids; placeDialog.open() }
         onSetTag: (ids, group, tag) => library.setTag(JSON.stringify(ids), group, tag)
+        onAddTags: (ids) => { keywordDialog.photoIds = ids; keywordDialog.open() }
         onSetKind: (ids, kind) => library.setKinds(JSON.stringify(ids), kind)
         onRemove: (ids, permanent) => root.removePhotos(ids, permanent)
     }
@@ -557,6 +578,15 @@ ApplicationWindow {
         width: 380
         onAddTo: (albumId, ids) => library.addToAlbum(albumId, JSON.stringify(ids))
         onCreateNew: (name, ids) => library.createAlbum(name, JSON.stringify(ids))
+    }
+
+    KeywordDialog {
+        id: keywordDialog
+        theme: root.theme
+        keywords: root.keywordsData
+        anchors.centerIn: parent
+        width: 380
+        onAdd: (text, ids) => library.addKeywords(JSON.stringify(ids), text)
     }
 
     PlaceDialog {
@@ -645,6 +675,7 @@ ApplicationWindow {
             else if (library.shotView.startsWith("place:")) root.pickSource(library.shotView)   // place:<name>|<country>
             else if (root.tagGroups.some(g => library.shotView.startsWith(g + ":"))) root.pickSource(library.shotView)
             else if (library.shotView === "info") {}
+            else if (library.shotView.startsWith("keyword:")) root.pickSource(library.shotView)
             else if (library.shotView.startsWith("date:")) {          // date:YYYY[-M[-D]]
                 const p = library.shotView.substring(5).split("-")
                 root.pickDate(parseInt(p[0]), parseInt(p[1] || "0"), parseInt(p[2] || "0"))

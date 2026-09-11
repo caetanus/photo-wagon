@@ -45,7 +45,11 @@ Mother's / Father's / Children's / Valentine's Day come from the calendar (Brazi
 dates), Birthday, Wedding and Graduation from the picture. All four are sections of the
 sidebar with counts, rows of the ⓘ Info panel (with the model's top guesses), and
 submenus of the right-click menu to correct them (the vocabulary lives in
-`data/scenes/labels.tsv`). Light or dark follows the system.
+`data/scenes/labels.tsv`). Under every open photo a **tag strip** shows its chips —
+scene, mood, weather, holiday, place and your own **tags** ("+ Tag", any words, comma
+separated; × removes one) — and a click on a chip shows every photo sharing it; the
+grid shows the scene, holiday and weather while you hover. Your tags are a sidebar
+section too, and "Add Tags…" (menu or toolbar) puts them on a whole selection. Light or dark follows the system.
 
 ## Requirements
 

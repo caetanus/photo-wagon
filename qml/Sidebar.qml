@@ -21,11 +21,13 @@ Rectangle {
     property var people: []
     /// parsed library.places.places: [{place, country, count, cover}]
     property var places: []
+    /// parsed library.keywords.keywords: [{keyword, count, cover}]
+    property var keywords: []
     /// parsed library.tags: {scene: [{tag, count, cover}], mood: […], weather: […], holiday: […]}
     property var tags: ({ scene: [], mood: [], weather: [], holiday: [] })
     /// parsed library.status
     property var status: ({ connected: false, indexing: false, text: "" })
-    /// "all" | "favorites" | "people" | "person:<id>" | "places" | "place:<name>|<country>" | "scene:<name>" | "mood:<name>" | "weather:<name>" | "holiday:<name>" | "imports" | "album:<id>" | "kind:<k>" | "phone" | "peers"
+    /// "all" | "favorites" | "people" | "person:<id>" | "places" | "place:<name>|<country>" | "keyword:<word>" | "scene:<name>" | "mood:<name>" | "weather:<name>" | "holiday:<name>" | "imports" | "album:<id>" | "kind:<k>" | "phone" | "peers"
     property string selected: "all"
 
     signal pick(string key)
@@ -62,6 +64,7 @@ Rectangle {
     property bool peopleOpen: true
     property bool placesOpen: true
     property var tagsOpen: ({ scene: true, mood: true, weather: true, holiday: true })
+    property bool keywordsOpen: true
     function toggleTags(g) { const o = Object.assign({}, tagsOpen); o[g] = !o[g]; tagsOpen = o }
     property bool albumsOpen: true
 
@@ -327,6 +330,23 @@ Rectangle {
                     key: "place:" + modelData.place + "|" + (modelData.country || "")
                     title: modelData.place
                     icon: icons.pin
+                    detail: String(modelData.count)
+                }
+            }
+
+            // ---- the user's own tags -----------------------------------------------------------
+            SectionHeader {
+                title: "Tags"; visible: sidebar.keywords.length > 0
+                collapsible: true; open: sidebar.keywordsOpen
+                onToggled: sidebar.keywordsOpen = !sidebar.keywordsOpen
+            }
+            Repeater {
+                model: sidebar.keywordsOpen ? sidebar.keywords : []
+                delegate: Row {
+                    required property var modelData
+                    key: "keyword:" + modelData.keyword
+                    title: modelData.keyword
+                    icon: icons.hash
                     detail: String(modelData.count)
                 }
             }

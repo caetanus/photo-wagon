@@ -28,6 +28,8 @@ QtObject {
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="9" r="3.2"/><path d="M8 2.5v1.5M8 14v1.5M1.5 9H3M13 9h1.5M3.4 4.4l1 1M11.6 4.4l-1 1"/><path d="M11 20h7.5a3 3 0 0 0 .4-6 4.5 4.5 0 0 0-8.6-1.2A3.6 3.6 0 0 0 11 20z"/></svg>'
     readonly property string holiday:
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="4" rx="1"/><path d="M5 12v8h14v-8M12 8v12"/><path d="M12 8c-2-3-5-3.5-5-1.5S10 8 12 8zm0 0c2-3 5-3.5 5-1.5S14 8 12 8z"/></svg>'
+    readonly property string hash:
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 9h14M5 15h14M10 4 8 20M16 4l-2 16"/></svg>'
     readonly property string pin:
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6-5.3-6-11a6 6 0 0 1 12 0c0 5.7-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/></svg>'
     readonly property string photos:

@@ -25,6 +25,7 @@ import photowagon.ui.transport : Bridge;
     Signal!() pageChanged;
     Signal!() placesChanged;
     Signal!() tagsChanged;
+    Signal!() keywordsChanged;
     Signal!() tagLabelsChanged;
     Signal!() photoTagsChanged;
     Signal!() placeSuggestionsChanged;
@@ -84,6 +85,8 @@ import photowagon.ui.transport : Bridge;
     @Property("tagsChanged") string tags = `{"scene":[],"mood":[],"weather":[],"holiday":[],"available":false}`;
     /// tags.labels: {"scene":[names],"mood":[names],"weather":[…],"holiday":[…]} — what the user can pick in the menu
     @Property("tagLabelsChanged") string tagLabels = `{"scene":[],"mood":[],"weather":[],"holiday":[]}`;
+    /// keywords.list: {"keywords":[{keyword,count,cover}]} — the user's own tags, most photos first
+    @Property("keywordsChanged") string keywords = `{"keywords":[]}`;
     /// photo.tags of the open photo: {"id", <group>: tag, "by": {group: auto|date|user}, "scores": {group: [{tag,prob}]}}
     @Property("photoTagsChanged") string photoTags = `{"id":0}`;
     /// {"photoId":N,"faces":[{id,x,y,w,h,personId,name,thumbUrl}]} for the open photo.
@@ -117,6 +120,7 @@ import photowagon.ui.transport : Bridge;
     private string fCountry;
     private string fTagGroup;
     private string fTag;
+    private string fKeyword;
     /// Screenshots and memes stay out of the library timeline (they have their own
     /// views under Media Types); an album, a search or an explicit kind shows everything.
     private bool onlyPhotos = true;
@@ -124,7 +128,7 @@ import photowagon.ui.transport : Bridge;
     private string kindParam()
     {
         if (fKind.length) return fKind;
-        if (onlyPhotos && !fAlbum && !fText.length && !fPlace.length && !fTag.length) return "photo";
+        if (onlyPhotos && !fAlbum && !fText.length && !fPlace.length && !fTag.length && !fKeyword.length) return "photo";
         return null;
     }
     private long openId; // photo being opened/shown; faces answers for others are dropped
@@ -288,6 +292,58 @@ import photowagon.ui.transport : Bridge;
         loadDates();
     }
 
+    /// Photos carrying one of the user's own tags ("" clears).
+    @Slot void filterKeyword(string keyword)
+    {
+        import std.string : strip;
+        clearFilters();
+        fKeyword = keyword.strip();
+        publishFilter();
+        reload(0, pageLimit);
+        loadDates();
+    }
+
+    @Slot void loadKeywords()
+    {
+        client.request("keywords.list", (r, e) {
+            if (e.type != JSONType.null_) return;
+            keywords = r.toString();
+            keywordsChanged.emit();
+        });
+    }
+
+    /// Adds the comma-separated `text` as tags to these photos.
+    @Slot void addKeywords(string photoIdsJson, string text)
+    {
+        JSONValue ids;
+        try
+            ids = parseJSON(photoIdsJson);
+        catch (JSONException)
+            ids = JSONValue.emptyArray;
+        JSONValue params = JSONValue.emptyObject;
+        params["ids"] = ids;
+        params["keywords"] = text;
+        client.request("photo.addKeywords", params, (r, e) {
+            if (e.type != JSONType.null_) { report("photo.addKeywords", e); return; }
+            setStatus(true, indexing, "tagged");
+        });
+    }
+
+    @Slot void removeKeyword(string photoIdsJson, string keyword)
+    {
+        JSONValue ids;
+        try
+            ids = parseJSON(photoIdsJson);
+        catch (JSONException)
+            ids = JSONValue.emptyArray;
+        JSONValue params = JSONValue.emptyObject;
+        params["ids"] = ids;
+        params["keyword"] = keyword;
+        client.request("photo.removeKeyword", params, (r, e) {
+            if (e.type != JSONType.null_) { report("photo.removeKeyword", e); return; }
+        });
+    }
+
     @Slot void loadTags()
     {
         client.request("tags.list", (r, e) {
@@ -422,6 +478,7 @@ import photowagon.ui.transport : Bridge;
         fText = null;
         fPlace = fCountry = null;
         fTagGroup = fTag = null;
+        fKeyword = null;
     }
 
     private void publishFilter()
@@ -436,6 +493,7 @@ import photowagon.ui.transport : Bridge;
         f["country"] = fCountry is null ? "" : fCountry;
         foreach (g; ["scene", "mood", "weather", "holiday"])
             f[g] = fTagGroup == g && fTag !is null ? fTag : "";
+        f["keyword"] = fKeyword is null ? "" : fKeyword;
         filter = f.toString();
         filterChanged.emit();
         if (personFilter != cast(int) fPerson)
@@ -512,6 +570,7 @@ import photowagon.ui.transport : Bridge;
         if (fText.length) params["q"] = fText;
         if (fPlace.length) { params["place"] = fPlace; if (fCountry.length) params["country"] = fCountry; }
         if (fTag.length && fTagGroup.length) params[fTagGroup] = fTag;
+        if (fKeyword.length) params["keyword"] = fKeyword;
         immutable off = offset;
         client.request("library.page", params, (r, e) {
             if (e.type != JSONType.null_) { report("page", e); return; }
@@ -540,6 +599,7 @@ import photowagon.ui.transport : Bridge;
         if (fText.length) params["q"] = fText;
         if (fPlace.length) { params["place"] = fPlace; if (fCountry.length) params["country"] = fCountry; }
         if (fTag.length && fTagGroup.length) params[fTagGroup] = fTag;
+        if (fKeyword.length) params["keyword"] = fKeyword;
         client.request("library.dates", params, (r, e) {
             if (e.type != JSONType.null_) { report("dates", e); return; }
             dates = r.toString();
@@ -550,6 +610,7 @@ import photowagon.ui.transport : Bridge;
     @Slot void refresh()
     {
         loadPlaces();
+        loadKeywords();
         loadTags();
         loadTagLabels();
         loadDates();
@@ -998,6 +1059,12 @@ import photowagon.ui.transport : Bridge;
             break;
         case "tags.done":
             setStatus(true, indexing, data["tagged"].integer.to!string ~ " of " ~ data["photos"].integer.to!string ~ " photos got a scene or mood");
+            break;
+        case "keywords.changed":
+            loadKeywords();
+            reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));
+            if (openId)
+                openPhoto(cast(int) openId);
             break;
         case "tags.changed":
             loadTags();

@@ -180,6 +180,7 @@ Filter filterOf(JSONValue p)
 	f.text = getString(p, "q");
 	f.place = getString(p, "place");
 	f.country = getString(p, "country");
+	f.keyword = getString(p, "keyword");
 	foreach (g; ["scene", "mood", "weather", "holiday"])
 		if (auto v = getString(p, g))
 		{

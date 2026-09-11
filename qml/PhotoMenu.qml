@@ -19,6 +19,7 @@ Menu {
     signal toggleFavorite(var ids)
     signal addToAlbum(var ids)
     signal setPlace(var ids)
+    signal addTags(var ids)
     signal setTag(var ids, string group, string tag)
     signal setKind(var ids, string kind)
     signal remove(var ids, bool permanent)
@@ -32,6 +33,7 @@ Menu {
     MenuItem { text: (menu.favorite ? "Unfavorite" : "Favorite") + menu.suffix; onTriggered: menu.toggleFavorite(menu.ids) }
     MenuItem { text: "Add to Album…" + menu.suffix; onTriggered: menu.addToAlbum(menu.ids) }
     MenuItem { text: "Set Place…" + menu.suffix; onTriggered: menu.setPlace(menu.ids) }
+    MenuItem { text: "Add Tags…" + menu.suffix; onTriggered: menu.addTags(menu.ids) }
     MenuSeparator { }
     MenuItem { text: "Move to Trash" + menu.suffix; onTriggered: menu.remove(menu.ids, false) }
     MenuItem { text: "Delete Permanently…" + menu.suffix; onTriggered: menu.remove(menu.ids, true) }

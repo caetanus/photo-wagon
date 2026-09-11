@@ -58,7 +58,7 @@ created once per library (`<data dir>/pair.token`).
 | `library.addRoot` | `{path}` | `{id}` — starts an index job; progress arrives as events |
 | `library.removeRoot` | `{id}` | `{}` |
 | `library.rescan` | `{id?}` | `{}` — all roots when `id` is omitted |
-| `library.page` | `{offset, limit, year?, month?, day?, rootId?, albumId?, personId?, favorites?, kind?, q?, place?, country?, scene?, mood?, weather?, holiday?}` | `{total, offset, items: [Photo]}` newest first; inside an album, album order |
+| `library.page` | `{offset, limit, year?, month?, day?, rootId?, albumId?, personId?, favorites?, kind?, q?, place?, country?, scene?, mood?, weather?, holiday?, keyword?}` | `{total, offset, items: [Photo]}` newest first; inside an album, album order |
 | `library.dates` | same filter as `library.page` (dates ignored) | `{years: [{year, count, cover, months: [{month, count, cover, days: [{day, count}]}]}]}` — `cover` is the thumbnail URL of the newest photo of that year/month |
 | `photo.favorite` | `{id, on?}` | `{id, favorite}` (default on) |
 | `library.stats` | — | `{total, kinds: {photo, screenshot, meme, unknown}}` |
@@ -74,8 +74,10 @@ created once per library (`<data dir>/pair.token`).
  "width": 4000, "height": 3000, "orientation": 1, "camera": "Canon EOS R6",
  "lat": null, "lon": null, "size": 3456789, "remote": false, "favorite": false,
  "kind": "photo", "kindBy": "auto", "place": "São Paulo", "country": "Brazil",
- "scene": "Beach", "mood": "Joyful", "weather": "Sunny", "holiday": null}
+ "scene": "Beach", "mood": "Joyful", "weather": "Sunny", "holiday": null, "keywords": ["praia 2020"]}
 ```
+
+`keywords` are the user's own tags (any words, any number; see *keywords*).
 
 `scene`, `mood`, `weather` and `holiday` are the tags of *scenes, moods, weather,
 holidays*; null when nothing in particular fits or the photo has not been looked at.
@@ -162,6 +164,15 @@ Father's, Children's and Valentine's Day on the Brazilian dates; `by: "date"`). 
 | `photo.tags` | `{id}` | `{scene, mood, weather, holiday, by: {group: auto|date|user}, scores: {group: [{tag, prob}] ×3}}` |
 | `photo.setTag` | `{ids, group, tag}` | `{}` — the user's word; `tag: ""` = nothing in particular; sticks through re-scoring |
 
+### keywords (the user's own tags)
+
+| method | params | result |
+|---|---|---|
+| `keywords.list` | `{inline?}` | `{keywords: [{keyword, count, cover}]}` most photos first |
+| `photo.addKeywords` | `{ids, keywords: ["a", "b"] \| "a, b"}` | `{}` — trimmed, deduplicated case-insensitively, the user's spelling kept |
+| `photo.removeKeyword` | `{ids, keyword}` | `{}` (case-insensitive) |
+| `keywords.rename` | `{from, to}` | `{}` — everywhere; merges into `to` when it exists |
+
 ### albums
 
 | method | params | result |
@@ -200,4 +211,5 @@ Methods that need the node answer `{"error": {"code": "p2p_off"}}` when it is no
 | `tags.progress` | `{done, total}` | scenes and moods being computed |
 | `tags.done` | `{photos, tagged, seconds}` | the pass is over |
 | `tags.changed` | `{}` | tags were assigned or changed; re-list them |
+| `keywords.changed` | `{}` | the user's tags changed; re-list them |
 | `log` | `{level, message}` |

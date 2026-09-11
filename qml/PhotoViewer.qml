@@ -52,6 +52,12 @@ Item {
     signal contextMenu(int id, string path, bool favorite)
     signal remove(var ids, bool permanent)
     signal renamePerson(int personId, string name)
+    /// A chip of the tag strip was clicked: show every photo with it.
+    signal filterTag(string group, string tag)
+    signal filterPlace(string place, string country)
+    signal filterKeyword(string keyword)
+    signal addKeywords(int id, string text)
+    signal removeKeyword(int id, string keyword)
 
     // Right-click on a face: what to do with the tag.
     Menu {
@@ -327,7 +333,7 @@ Item {
         id: caption
         anchors.left: parent.left
         anchors.right: info.visible ? info.left : parent.right
-        anchors.bottom: strip.visible ? strip.top : parent.bottom
+        anchors.bottom: tagBar.top
         height: 30
         color: theme.viewerBg
         RowLayout {
@@ -373,6 +379,110 @@ Item {
                 Layout.maximumWidth: 420
                 Layout.fillWidth: true
                 horizontalAlignment: Text.AlignRight
+            }
+        }
+    }
+
+    // ---- tags: what the classifiers, the calendar, the map and you say about the photo ----
+    Rectangle {
+        id: tagBar
+        anchors.left: parent.left
+        anchors.right: info.visible ? info.left : parent.right
+        anchors.bottom: strip.visible ? strip.top : parent.bottom
+        height: viewer.photo ? 34 : 0
+        color: theme.viewerBg
+        readonly property var chips: {
+            if (!viewer.photo) return []
+            const p = viewer.photo
+            const out = []
+            if (p.scene) out.push({ group: "scene", text: p.scene, icon: icons.tag })
+            if (p.mood) out.push({ group: "mood", text: p.mood, icon: icons.mood })
+            if (p.weather) out.push({ group: "weather", text: p.weather, icon: icons.weather })
+            if (p.holiday) out.push({ group: "holiday", text: p.holiday, icon: icons.holiday })
+            if (p.place) out.push({ group: "place", text: p.place + (p.country ? ", " + p.country : ""), icon: icons.pin, country: p.country || "" })
+            for (const k of (p.keywords || [])) out.push({ group: "keyword", text: k, icon: icons.hash })
+            return out
+        }
+        component Chip: Rectangle {
+            id: chip
+            required property var modelData
+            height: 22
+            width: chipRow.implicitWidth + 18 + (chip.modelData.group === "keyword" && chipHover.hovered ? 14 : 0)
+            radius: 11
+            color: chipHover.hovered ? theme.selection : theme.hover
+            Behavior on width { NumberAnimation { duration: 80 } }
+            Row {
+                id: chipRow
+                anchors.left: parent.left
+                anchors.leftMargin: 8
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 5
+                Image { source: icons.tint(chip.modelData.icon, chip.modelData.group === "keyword" ? theme.accent : theme.muted); sourceSize.width: 12; sourceSize.height: 12; anchors.verticalCenter: parent.verticalCenter }
+                Label { text: chip.modelData.text; color: theme.text; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
+            }
+            Image {   // × on a keyword: remove it from this photo
+                visible: chip.modelData.group === "keyword" && chipHover.hovered
+                anchors.right: parent.right
+                anchors.rightMargin: 6
+                anchors.verticalCenter: parent.verticalCenter
+                source: icons.tint(icons.close, theme.text)
+                sourceSize.width: 9; sourceSize.height: 9
+                TapHandler { onTapped: viewer.removeKeyword(viewer.photo.id, chip.modelData.text) }
+            }
+            HoverHandler { id: chipHover }
+            TapHandler {
+                onTapped: {
+                    const m = chip.modelData
+                    if (m.group === "place") viewer.filterPlace(viewer.photo.place, m.country)
+                    else if (m.group === "keyword") viewer.filterKeyword(m.text)
+                    else viewer.filterTag(m.group, m.text)
+                }
+            }
+            ToolTip.visible: chipHover.hovered
+            ToolTip.delay: 600
+            ToolTip.text: chip.modelData.group === "keyword" ? "Your tag — click to see every photo with it, × removes it"
+                        : chip.modelData.group === "place" ? "Place — click to see every photo taken there"
+                        : chip.modelData.group.charAt(0).toUpperCase() + chip.modelData.group.slice(1) + " — click to see every photo tagged " + chip.modelData.text
+        }
+        Flickable {
+            anchors.fill: parent
+            anchors.leftMargin: 16
+            anchors.rightMargin: 16
+            contentWidth: chipsRow.implicitWidth
+            clip: true
+            flickableDirection: Flickable.HorizontalFlick
+            Row {
+                id: chipsRow
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 6
+                Repeater { model: tagBar.chips; Chip { } }
+                // "+ Tag": a word of your own, or several separated by commas
+                Rectangle {
+                    height: 22
+                    width: tagEditor.visible ? 180 : addLabel.implicitWidth + 18
+                    radius: 11
+                    color: addHover.hovered || tagEditor.visible ? theme.hover : "transparent"
+                    border.color: theme.separator
+                    border.width: 1
+                    Label { id: addLabel; visible: !tagEditor.visible; anchors.centerIn: parent; text: "+ Tag"; color: theme.muted; font.pixelSize: 12 }
+                    TextField {
+                        id: tagEditor
+                        visible: false
+                        anchors.fill: parent
+                        anchors.leftMargin: 6
+                        anchors.rightMargin: 6
+                        font.pixelSize: 12
+                        color: theme.text
+                        placeholderText: "tag, another tag"
+                        background: Item { }
+                        verticalAlignment: TextInput.AlignVCenter
+                        onAccepted: { if (text.trim().length) viewer.addKeywords(viewer.photo.id, text); text = ""; visible = false }
+                        onActiveFocusChanged: if (!activeFocus) { visible = false; text = "" }
+                        Keys.onEscapePressed: { text = ""; visible = false; viewer.forceActiveFocus() }
+                    }
+                    HoverHandler { id: addHover }
+                    TapHandler { enabled: !tagEditor.visible; onTapped: { tagEditor.visible = true; tagEditor.forceActiveFocus() } }
+                }
             }
         }
     }

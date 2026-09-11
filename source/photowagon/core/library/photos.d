@@ -40,6 +40,7 @@ struct Photo
 	string mood;
 	string weather;
 	string holiday;
+	string[] keywords; // the user's own tags (core/library/keywords.d)
 }
 
 /// Restricts a page or a count. Zero means "no restriction" for every field.
@@ -58,6 +59,7 @@ struct Filter
 	string country;
 	string tagGroup; // photos carrying one tag: scene | mood | weather | holiday …
 	string tag;      // … with this value; null = any
+	string keyword;  // photos carrying one of the user's own tags; null = any
 }
 
 struct Neighbours
@@ -331,6 +333,7 @@ final class PhotoRepo
 			"mood": p.mood is null ? JSONValue(null) : JSONValue(p.mood),
 			"weather": p.weather is null ? JSONValue(null) : JSONValue(p.weather),
 			"holiday": p.holiday is null ? JSONValue(null) : JSONValue(p.holiday),
+			"keywords": JSONValue(p.keywords),
 		];
 		return j;
 	}
@@ -352,7 +355,8 @@ final class PhotoRepo
 		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'scene' AND t.tag <> ''),
 		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'mood' AND t.tag <> ''),
 		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'weather' AND t.tag <> ''),
-		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'holiday' AND t.tag <> '')`;
+		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'holiday' AND t.tag <> ''),
+		(SELECT group_concat(k.keyword, char(31)) FROM (SELECT keyword FROM photo_keywords WHERE photo_id = p.id ORDER BY keyword) k)`;
 
 	private static Photo readRow(ref Statement s)
 	{
@@ -387,6 +391,11 @@ final class PhotoRepo
 		p.mood = s.getString(23);
 		p.weather = s.getString(24);
 		p.holiday = s.getString(25);
+		if (!s.isNull(26))
+		{
+			import std.array : split;
+			p.keywords = s.getString(26).split("\x1f");
+		}
 		return p;
 	}
 
@@ -468,6 +477,11 @@ final class PhotoRepo
 				w.where ~= " AND p.country = ?";
 				w.add(f.country);
 			}
+		}
+		if (f.keyword.length)
+		{
+			w.where ~= " AND EXISTS (SELECT 1 FROM photo_keywords kw WHERE kw.photo_id = p.id AND kw.keyword = ? COLLATE NOCASE)";
+			w.add(f.keyword);
 		}
 		if (f.tag.length && f.tagGroup.length)
 		{

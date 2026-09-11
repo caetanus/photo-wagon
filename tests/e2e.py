@@ -159,6 +159,16 @@ if labels.get("scene"):
     a.call("photo.setTag", {"ids": [first["id"]], "group": "scene", "tag": ""})
     check(a.call("photo.tags", {"id": first["id"]})["scene"] is None, "tag cleared")
 
+# the user's own tags
+a.call("photo.addKeywords", {"ids": [first["id"], nb["next"]], "keywords": " praia , Casa da Vó,praia"})
+kw = a.call("keywords.list")["keywords"]
+check([(k["keyword"], k["count"]) for k in kw] == [("Casa da Vó", 2), ("praia", 2)], f"keywords listed with counts: {[(k['keyword'], k['count']) for k in kw]}")
+check(a.call("photo.get", {"id": first["id"]})["keywords"] == ["Casa da Vó", "praia"], "Photo carries its keywords")
+check(a.call("library.page", {"keyword": "PRAIA", "limit": 10})["total"] == 2, "page filtered by keyword, case aside")
+a.call("photo.removeKeyword", {"ids": [first["id"]], "keyword": "praia"})
+a.call("keywords.rename", {"from": "Casa da Vó", "to": "vovó"})
+check(a.call("photo.get", {"id": first["id"]})["keywords"] == ["vovó"], "remove and rename")
+
 # rescan is incremental: nothing new
 a.call("library.rescan")
 done2 = a.wait_event("index.done", lambda d: d["rootId"] == rid and d is not done)

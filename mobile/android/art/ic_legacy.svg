@@ -1,13 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">
-  <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1a7cff"/><stop offset="1" stop-color="#0b4fb3"/></linearGradient></defs>
-  <rect x="18" y="18" width="72" height="72" rx="16" fill="url(#g)"/>
-  <g fill="#ffffff">
-    <rect x="25" y="36" width="58" height="30" rx="7"/>
-    <rect x="18" y="49" width="10" height="5" rx="2.5" transform="rotate(-25 23 51.5)"/>
+  <defs><radialGradient id="bg" cx="0.5" cy="0.45" r="0.7"><stop offset="0" stop-color="#3b6a8c"/><stop offset="1" stop-color="#1b3247"/></radialGradient></defs>
+  <rect x="14" y="14" width="80" height="80" rx="18" fill="url(#bg)"/>
+<defs>
+    <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c8904a"/><stop offset="1" stop-color="#9a6630"/></linearGradient>
+    <linearGradient id="roof" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8a5526"/><stop offset="1" stop-color="#6b3e1a"/></linearGradient>
+    <linearGradient id="red" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e04a3f"/><stop offset="1" stop-color="#a8231c"/></linearGradient>
+  </defs>
+  <!-- wheels -->
+  <g>
+    <circle cx="36" cy="82" r="9" fill="#4a2c14"/><circle cx="36" cy="82" r="6.5" fill="#7a4a22"/><circle cx="36" cy="82" r="2" fill="#2a1708"/>
+    <path d="M36 76v12M30 82h12" stroke="#4a2c14" stroke-width="1.4"/>
+    <circle cx="74" cy="82" r="9" fill="#4a2c14"/><circle cx="74" cy="82" r="6.5" fill="#7a4a22"/><circle cx="74" cy="82" r="2" fill="#2a1708"/>
+    <path d="M74 76v12M68 82h12" stroke="#4a2c14" stroke-width="1.4"/>
   </g>
-  <circle cx="54" cy="51" r="10.5" fill="#0b4fb3"/>
-  <circle cx="54" cy="51" r="6.5" fill="#1a7cff"/>
-  <circle cx="51.5" cy="48.5" r="2" fill="#ffffff"/>
-  <g fill="#ffffff"><circle cx="40" cy="72" r="8"/><circle cx="68" cy="72" r="8"/></g>
-  <g fill="#0b4fb3"><circle cx="40" cy="72" r="3"/><circle cx="68" cy="72" r="3"/></g>
+  <!-- body: planks -->
+  <rect x="24" y="36" width="62" height="40" rx="3" fill="url(#wood)"/>
+  <path d="M24 46h62M24 56h62M24 66h62" stroke="#7d4f22" stroke-width="1.2" opacity="0.8"/>
+  <rect x="24" y="36" width="62" height="40" rx="3" fill="none" stroke="#5a3a1e" stroke-width="1.6"/>
+  <!-- roof -->
+  <path d="M19 37 Q55 16 91 37 L86 38 Q55 23 24 38 Z" fill="url(#roof)"/>
+  <path d="M19 37 Q55 16 91 37" fill="none" stroke="#5a3a1e" stroke-width="1.6" stroke-linecap="round"/>
+  <!-- the opening -->
+  <rect x="35" y="42" width="40" height="30" rx="2" fill="#1e120a"/>
+  <!-- curtains, tied open -->
+  <path d="M35 42h13Q44 52 47 60Q44 66 42 72H35Z" fill="url(#red)"/>
+  <path d="M75 42h-13Q66 52 63 60Q66 66 68 72H75Z" fill="url(#red)"/>
+  <path d="M41 43q3 12-1 28M69 43q-3 12 1 28" stroke="#7d1b15" stroke-width="1" fill="none" opacity="0.7"/>
+  <path d="M40 60q4-2 8 0M70 60q-4-2-8 0" stroke="#e8b84a" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+  <!-- the camera -->
+  <rect x="50" y="52" width="20" height="14" rx="2.5" fill="#2b2b30"/>
+  <rect x="53" y="49.5" width="6" height="3" rx="1" fill="#2b2b30"/>
+  <circle cx="60" cy="59" r="5.2" fill="#3a3a40"/>
+  <circle cx="60" cy="59" r="3.6" fill="#1a7cff"/>
+  <circle cx="58.7" cy="57.7" r="1.1" fill="#ffffff"/>
+  <rect x="64.5" y="53.5" width="3" height="2" rx="0.6" fill="#e8b84a"/>
 </svg>

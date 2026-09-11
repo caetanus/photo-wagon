@@ -13,6 +13,9 @@ extern "C" {
 /* Loads the image encoder. 0 on success. Safe to call more than once. */
 int pw_clip_init(const char *vision_onnx_path);
 
+/* Frees the model (about a gigabyte of weights and buffers); pw_clip_init loads it again. */
+void pw_clip_release(void);
+
 /* Encodes an image file into a unit-length 512-float embedding.
    Returns 0, or -1 when the image cannot be read or the model is not loaded. */
 int pw_clip_encode(const char *image_path, float *out512);

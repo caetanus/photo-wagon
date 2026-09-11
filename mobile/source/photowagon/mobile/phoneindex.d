@@ -645,15 +645,15 @@ final class PhoneIndex
 
     private QTimer saveTimer;
 
-    /// Writes the index soon (1.5 s after the last change): the sync marks a photo every
-    /// couple of seconds, and each write is 60–100 ms of JSON on the Qt thread.
+    /// Writes the index soon (half a second after the last change): the sync marks a
+    /// photo every couple of seconds, and each write is 60–100 ms of JSON on the Qt thread.
     private void save()
     {
         if (saveTimer is null)
         {
             saveTimer = new QTimer(cast(cppq.QObject) null);
             saveTimer.setSingleShot(true);
-            saveTimer.setInterval(1500);
+            saveTimer.setInterval(500);
             saveTimer.connectTimeout(&saveNow);
         }
         saveTimer.start();

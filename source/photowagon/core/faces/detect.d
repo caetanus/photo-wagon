@@ -1,22 +1,12 @@
-/// Face detection + embedding through the one C++ shim (csrc/face_opencv).
-/// `detectFaces` is a plain function of a path returning value types: it runs
-/// on a worker thread via `async`, and the shim serialises calls itself.
+/// Face detection + embedding through the vision worker (core/vision/worker.d):
+/// OpenCV runs in a child process for the length of a pass. `detectFaces` is a
+/// plain function of value types: it runs on a worker thread via `async`.
 module photowagon.core.faces.detect;
 
-import std.string : toStringz;
+import std.array : split;
+import std.conv : to;
 
-private extern (C) nothrow @nogc
-{
-	struct PwFace
-	{
-		float x, y, w, h;
-		float score;
-		float[128] embedding;
-	}
-
-	int pw_face_init(const char* yunet, const char* sface);
-	int pw_face_detect(const char* path, int maxEdge, PwFace* out_, int maxFaces);
-}
+import photowagon.core.vision.worker : visionRequest;
 
 /// One detected face: box as fractions of the (rotated) image, SFace feature.
 struct FaceHit
@@ -32,31 +22,40 @@ enum sameFaceCosine = 0.363f;
 /// Longest edge the detector works on; larger photos are downscaled first.
 enum detectMaxEdge = 1280;
 
-/// Loads the models once. Throws if OpenCV cannot read them.
+/// Checks that the models are there (the worker loads them on its first face).
 void initFaces(string yunetPath, string sfacePath)
 {
-	if (pw_face_init(yunetPath.toStringz, sfacePath.toStringz) != 0)
-		throw new Exception("cannot load the face models (" ~ yunetPath ~ ", " ~ sfacePath ~ ")");
+	import std.file : exists;
+
+	if (!yunetPath.exists || !sfacePath.exists)
+		throw new Exception("cannot find the face models (" ~ yunetPath ~ ", " ~ sfacePath ~ ")");
 }
 
 /// Faces in `path`, or an empty array; throws when the image cannot be read.
-immutable(FaceHit)[] detectFaces(string path)
+/// `edgeHint` is the picture's longest edge when known (0 otherwise): a big JPEG
+/// is then decoded reduced instead of in full.
+immutable(FaceHit)[] detectFaces(string path, int edgeHint = 0)
 {
-	PwFace[64] raw = void;
-	immutable n = pw_face_detect(path.toStringz, detectMaxEdge, raw.ptr, cast(int) raw.length);
-	if (n < 0)
-		throw new Exception("face detection failed for " ~ path);
+	auto parts = visionRequest("face " ~ detectMaxEdge.to!string ~ " " ~ edgeHint.to!string ~ " " ~ path).split(' ');
+	if (!parts.length)
+		throw new Exception("face detection: empty answer for " ~ path);
+	immutable n = parts[0].to!int;
+	enum per = 5 + 128;
+	if (parts.length != 1 + n * per)
+		throw new Exception("face detection: malformed answer for " ~ path);
 	FaceHit[] hits;
 	hits.reserve(n);
 	foreach (i; 0 .. n)
 	{
+		auto f = parts[1 + i * per .. 1 + (i + 1) * per];
 		FaceHit h;
-		h.x = raw[i].x;
-		h.y = raw[i].y;
-		h.w = raw[i].w;
-		h.h = raw[i].h;
-		h.score = raw[i].score;
-		h.embedding = raw[i].embedding;
+		h.x = f[0].to!float;
+		h.y = f[1].to!float;
+		h.w = f[2].to!float;
+		h.h = f[3].to!float;
+		h.score = f[4].to!float;
+		foreach (k; 0 .. 128)
+			h.embedding[k] = f[5 + k].to!float;
 		hits ~= h;
 	}
 	return cast(immutable) hits;

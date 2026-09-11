@@ -13,6 +13,8 @@ import vibe.core.task : InterruptException;
 
 import libp2p.util.fibers : FiberGroup;
 
+import photowagon.core.jobs.scheduler : jobs, Priority;
+
 import photowagon.core.faces.repo : FaceRepo;
 import photowagon.core.ipc.events : Events;
 import photowagon.core.db.sqlite : Database;
@@ -28,7 +30,7 @@ final class KindService
 	private FaceRepo faces;
 	private ContentStore store;
 	private Events events;
-	private FiberGroup jobs;
+	private FiberGroup fibers;
 	private bool running, again;
 	/// Runs after a pass that classified something (the face scan hangs here).
 	void delegate() onDone;
@@ -47,7 +49,7 @@ final class KindService
 		this.faces = faces;
 		this.store = store;
 		this.events = events;
-		jobs = new FiberGroup((Exception e) nothrow {
+		fibers = new FiberGroup((Exception e) nothrow {
 			try
 				logWarn("kinds: job failed: %s", e.msg);
 			catch (Exception)
@@ -69,7 +71,7 @@ final class KindService
 			return;
 		}
 		running = true;
-		jobs.spawn(() {
+		fibers.spawn(() {
 			scope (exit)
 				running = false;
 			do
@@ -84,6 +86,13 @@ final class KindService
 	}
 
 	private void run()
+	{
+		if (photos.unclassified(1).length == 0)
+			return;
+		jobs.pass(Priority.kinds, "sorting photos, screenshots and memes", &runPass);
+	}
+
+	private void runPass()
 	{
 		auto ids = photos.unclassified();
 		if (ids.length == 0)
@@ -106,7 +115,7 @@ final class KindService
 
 				// the original when it is here: a re-compressed thumbnail flattens noise into plateaus
 				immutable src = p.path !is null && p.path.exists ? p.path : store.pathFor(p.thumbHash);
-				sig.stats = async(&imageStats, src).getResult();
+				sig.stats = jobs.background({ return async(&imageStats, src).getResult(); });
 				immutable kind = classify(sig);
 				photos.setKind(id, kind, "auto");
 				counts[kind]++;
@@ -161,6 +170,6 @@ final class KindService
 
 	void close() nothrow
 	{
-		jobs.stopAll();
+		fibers.stopAll();
 	}
 }

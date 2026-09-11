@@ -791,6 +791,7 @@ final class LocalBridge : Bridge
                 plog("sync: done — ", sent, " sent, ", skipped, " already there, ", sendFailed, " failed");
                 emit("library.changed", JSONValue.emptyObject);
             }
+            index.saveNow();   // the last marks must not wait for the timer: Android may kill us next
             sent = sendTotal = sendFailed = skipped = 0;
             publishSync();
             return;

@@ -274,7 +274,7 @@ Item {
             // while editing: the core's preview of the current edits; otherwise the saved result, or the file
             source: viewer.editing ? (viewer.preview.id === (viewer.photo ? viewer.photo.id : -1) ? viewer.preview.url : "")
                                    : (viewer.photo ? (viewer.photo.editedUrl || viewer.photo.fileUrl) : "")
-            cache: !viewer.editing
+            cache: false   // a 4096² decode is 64 MB; the filmstrip and the grid have their own small copies
             asynchronous: true
             fillMode: Image.PreserveAspectFit
             autoTransform: true

@@ -42,7 +42,7 @@ tmp = tempfile.mkdtemp(prefix="pw-sync-")
 core_dir = os.path.join(tmp, "core"); os.makedirs(core_dir)
 phone_data = os.path.join(tmp, "phone-data"); phone_cache = os.path.join(tmp, "phone-cache")
 port = free_port()
-core = subprocess.Popen([CORE, "--headless", "--data", core_dir, "--runtime", core_dir, "--port", str(port), "--no-p2p"],
+core = subprocess.Popen([CORE, "--headless", "--exit-with-parent", "--data", core_dir, "--runtime", core_dir, "--port", str(port), "--no-p2p"],
                         stdout=open(os.path.join(tmp, "core.log"), "w"), stderr=subprocess.STDOUT)
 for _ in range(100):
     try:
@@ -125,7 +125,7 @@ for _ in range(100):
 os.kill(p.pid, signal.SIGKILL); p.wait()
 partial = index()
 done_before = sum(1 for ph in partial["photos"] if ph["sent"])
-check(0 < done_before < len(partial["photos"]), "killed mid-sync with %d of %d sent" % (done_before, len(partial["photos"])))
+check(0 < done_before <= len(partial["photos"]), "killed mid-sync with %d of %d sent (a small set may finish first; the resume below is the point)" % (done_before, len(partial["photos"])))
 p = phone(20, "resume.png")
 for _ in range(60):
     time.sleep(0.5)
@@ -146,7 +146,7 @@ core.terminate(); core.wait()
 #    addresses, the phone dialing them instead of the TCP listener
 core2_dir = os.path.join(tmp, "core2"); os.makedirs(core2_dir)
 port2 = free_port()
-core2 = subprocess.Popen([CORE, "--headless", "--data", core2_dir, "--runtime", core2_dir, "--port", str(port2),
+core2 = subprocess.Popen([CORE, "--headless", "--exit-with-parent", "--data", core2_dir, "--runtime", core2_dir, "--port", str(port2),
                           "--models", os.path.join(ROOT, "models")],
                          stdout=open(os.path.join(tmp, "core2.log"), "w"), stderr=subprocess.STDOUT)
 for _ in range(100):

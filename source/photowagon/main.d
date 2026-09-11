@@ -25,6 +25,31 @@ int main(string[] args)
 		return 2;
 	}
 	setLogLevel(cfg.verbose ? LogLevel.diagnostic : LogLevel.info);
+	if (cfg.exitWithParent)
+	{
+		// a core started by a test or a script must not outlive it: a dozen forgotten
+		// headless cores, each holding a model, once ate 15 GB
+		version (linux)
+		{
+			import core.sys.linux.sys.prctl : prctl, PR_SET_PDEATHSIG;
+			import core.sys.posix.signal : SIGTERM;
+
+			prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0);
+		}
+	}
+	if (cfg.visionWorker)
+	{
+		// the OpenCV child: the models' gigabyte lives here, for one pass
+		import photowagon.core.vision.worker : runVisionWorker, VisionModels;
+		import photowagon.core.jobs.memguard : startMemoryGuard;
+
+		startMemoryGuard(4096, "vision-worker");
+		return runVisionWorker(VisionModels(cfg.visionModels[0], cfg.visionModels[1], cfg.visionModels[2]));
+	}
+	{
+		import photowagon.core.jobs.memguard : startMemoryGuard;
+		startMemoryGuard(cfg.memoryLimitMb);
+	}
 	initVips(args[0]);
 	initExif();
 

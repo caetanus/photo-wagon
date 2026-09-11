@@ -17,7 +17,7 @@ PHOTOS = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else sys.exit("usage:
 shutil.rmtree(WORK, ignore_errors=True)
 os.makedirs(WORK)
 log = open(os.path.join(WORK, "core.log"), "w")
-proc = subprocess.Popen([BIN, "--headless", "--data", WORK, "--runtime", WORK, "--no-p2p", "-v",
+proc = subprocess.Popen([BIN, "--headless", "--exit-with-parent", "--data", WORK, "--runtime", WORK, "--no-p2p", "-v",
                          "--models", os.path.join(S, "..", "models")], stdout=log, stderr=subprocess.STDOUT)
 portfile = os.path.join(WORK, "daemon.port")
 for _ in range(100):

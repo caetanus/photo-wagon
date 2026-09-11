@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Material
 import QtQuick.Layouts
 
 // Full-size viewer over the grid. `photo` is the parsed library.current object
@@ -22,8 +23,22 @@ Rectangle {
     signal send(int id)
     signal nameFace(int faceId, int personId, string name)
 
-    color: Qt.rgba(0, 0, 0, 0.94)
+    color: "#000000"
     focus: visible
+    Icons { id: icons }
+    component GlassButton: RoundButton {
+        required property string icon_
+        width: 44; height: 44
+        Material.background: Qt.rgba(0, 0, 0, 0.45)
+        Material.elevation: 0
+        contentItem: Image {
+            source: icons.tint(parent.icon_, "#ffffff")
+            sourceSize.width: 20; sourceSize.height: 20
+            fillMode: Image.Pad
+            horizontalAlignment: Image.AlignHCenter
+            verticalAlignment: Image.AlignVCenter
+        }
+    }
     onVisibleChanged: if (visible) forceActiveFocus()
 
     Keys.onPressed: (event) => {
@@ -38,8 +53,8 @@ Rectangle {
     Image {
         id: image
         anchors.fill: parent
-        anchors.margins: 24
-        anchors.bottomMargin: 72
+        anchors.margins: 0
+        anchors.bottomMargin: 64
         source: viewer.photo ? viewer.photo.fileUrl : ""
         // decode scaled: a 108 MP photo (434 MB decoded) is over Qt's 256 MB image limit
         sourceSize.width: 2560
@@ -152,78 +167,87 @@ Rectangle {
         visible: running
     }
 
-    RoundButton {
-        text: "‹"
-        font.pixelSize: 28
-        width: 52; height: 52
+    GlassButton {
+        icon_: icons.chevronLeft
         anchors.left: parent.left
         anchors.verticalCenter: image.verticalCenter
-        anchors.leftMargin: 12
+        anchors.leftMargin: 8
         enabled: viewer.photo && viewer.photo.prev !== null
         opacity: enabled ? 0.9 : 0.25
         onClicked: library.prev()
     }
-    RoundButton {
-        text: "›"
-        font.pixelSize: 28
-        width: 52; height: 52
+    GlassButton {
+        icon_: icons.chevronRight
         anchors.right: parent.right
         anchors.verticalCenter: image.verticalCenter
-        anchors.rightMargin: 12
+        anchors.rightMargin: 8
         enabled: viewer.photo && viewer.photo.next !== null
         opacity: enabled ? 0.9 : 0.25
         onClicked: library.next()
     }
-    RoundButton {
-        text: "✕"
-        width: 40; height: 40
+    GlassButton {
+        icon_: icons.close
         anchors.top: parent.top
         anchors.right: parent.right
-        anchors.margins: 12
+        anchors.margins: 10
         onClicked: viewer.closed()
     }
+    // swipe left / right for the neighbours
+    DragHandler {
+        target: null
+        xAxis.enabled: true
+        yAxis.enabled: false
+        onActiveChanged: if (!active) {
+            if (translation.x < -60 && viewer.photo && viewer.photo.next !== null) library.next()
+            else if (translation.x > 60 && viewer.photo && viewer.photo.prev !== null) library.prev()
+        }
+    }
 
-    // Metadata strip.
+    // Metadata strip: date on top, the rest small; the send button at the right.
     Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: 56
-        color: theme.panel
-        border.color: theme.border
+        height: 64
+        color: Qt.rgba(0.08, 0.09, 0.1, 0.96)
         RowLayout {
             anchors.fill: parent
             anchors.leftMargin: 16
-            anchors.rightMargin: 16
-            spacing: 24
-            Label {
-                text: viewer.photo ? viewer.formatDate(viewer.photo.takenAt) : ""
-                color: theme.text
-                font.pixelSize: 14
+            anchors.rightMargin: 12
+            spacing: 12
+            ColumnLayout {
+                spacing: 2
+                Layout.fillWidth: true
+                Label {
+                    text: viewer.photo ? viewer.formatDate(viewer.photo.takenAt) : ""
+                    color: "#eceef2"
+                    font.pixelSize: 14
+                    font.weight: Font.DemiBold
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+                Label {
+                    text: viewer.photo ? [viewer.photo.camera, viewer.photo.width + " × " + viewer.photo.height, viewer.formatSize(viewer.photo.size)].filter(x => x).join("  ·  ") : ""
+                    color: "#8f97a6"
+                    font.pixelSize: 12
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
             }
-            Label {
-                text: viewer.photo && viewer.photo.camera ? viewer.photo.camera : ""
-                color: theme.muted
-            }
-            Label {
-                text: viewer.photo ? viewer.photo.width + " × " + viewer.photo.height : ""
-                color: theme.muted
-            }
-            Label {
-                text: viewer.photo ? viewer.formatSize(viewer.photo.size) : ""
-                color: theme.muted
-            }
-            Item { Layout.fillWidth: true }
             Button {
                 visible: viewer.canSend
                 enabled: viewer.sendEnabled && viewer.photo && !viewer.photo.sent
-                text: viewer.photo && viewer.photo.sent ? "Sent" : "Send to computer"
+                text: viewer.photo && viewer.photo.sent ? "On the computer" : "Send"
+                highlighted: enabled
+                Material.accent: theme.accent
+                Material.foreground: enabled ? "#ffffff" : "#8f97a6"
+                flat: !enabled
                 onClicked: viewer.send(viewer.photo.id)
             }
             Label {
                 visible: !viewer.canSend
                 text: viewer.photo ? viewer.photo.path : ""
-                color: theme.muted
+                color: "#8f97a6"
                 elide: Text.ElideMiddle
                 Layout.maximumWidth: 480
             }

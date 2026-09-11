@@ -69,6 +69,10 @@ final class RequestHandler
 	private void answer(JSONValue id, string method, JSONValue params)
 	{
 		JSONValue reply;
+		import photowagon.core.jobs.scheduler : jobs;
+		jobs.foregroundBegin();   // background passes step aside while this runs
+		scope (exit)
+			jobs.foregroundEnd();
 		try
 		{
 			auto m = registry.find(method);

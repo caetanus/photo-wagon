@@ -20,7 +20,7 @@ class Node:
         shutil.rmtree(self.dir, ignore_errors=True)
         os.makedirs(self.dir)
         self.log = open(os.path.join(self.dir, "daemon.log"), "w")
-        self.proc = subprocess.Popen([DAEMON, "--headless", "--data", self.dir, "--runtime", self.dir, "-v",
+        self.proc = subprocess.Popen([DAEMON, "--headless", "--exit-with-parent", "--data", self.dir, "--runtime", self.dir, "-v",
                                       "--p2p-listen", "/ip4/127.0.0.1/tcp/0"],
                                      stdout=self.log, stderr=subprocess.STDOUT)
         portfile = os.path.join(self.dir, "daemon.port")

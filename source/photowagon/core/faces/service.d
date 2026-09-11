@@ -7,6 +7,8 @@ import core.time : MonoTime, msecs;
 import std.json;
 
 import vibe.core.concurrency : async;
+
+import photowagon.core.jobs.scheduler : jobs, Priority;
 import vibe.core.log : logInfo, logWarn;
 import vibe.core.task : InterruptException;
 
@@ -35,7 +37,7 @@ final class FaceService
 	private ContentStore store;
 	private Events events;
 	private ClusterIndex cluster;
-	private FiberGroup jobs;
+	private FiberGroup fibers;
 	private bool running, again;
 	bool available; // models loaded
 
@@ -48,7 +50,7 @@ final class FaceService
 		this.store = store;
 		this.events = events;
 		cluster = new ClusterIndex(db);
-		jobs = new FiberGroup((Exception e) nothrow {
+		fibers = new FiberGroup((Exception e) nothrow {
 			try
 				logWarn("faces: job failed: %s", e.msg);
 			catch (Exception)
@@ -288,7 +290,7 @@ final class FaceService
 			return;
 		}
 		running = true;
-		jobs.spawn(() {
+		fibers.spawn(() {
 			scope (exit)
 				running = false;
 			do
@@ -301,6 +303,16 @@ final class FaceService
 	}
 
 	private void run()
+	{
+		if (faces.unscannedPhotos(1).length == 0)
+			return;
+		jobs.pass(Priority.faces, "looking for faces", &runPass);
+		// OpenCV's memory goes with the worker; the next pass starts a fresh one
+		import photowagon.core.vision.worker : releaseVision;
+		releaseVision();
+	}
+
+	private void runPass()
 	{
 		auto ids = faces.unscannedPhotos();
 		if (ids.length == 0)
@@ -340,7 +352,9 @@ final class FaceService
 		auto photo = photos.get(id);
 		if (photo.path is null)
 			return 0;
-		auto hits = async(&detectFaces, photo.path).getResult();
+		import std.algorithm : max;
+		immutable edgeHint = max(photo.width, photo.height);
+		auto hits = jobs.background({ return async(&detectFaces, photo.path, edgeHint).getResult(); });
 		long[] inThisPhoto; // nobody appears twice in one picture
 		foreach (ref hit; hits)
 		{
@@ -348,8 +362,8 @@ final class FaceService
 				continue;
 			string thumb;
 			try
-				thumb = async(&renderFaceCrop, photo.path, cfg.storeDir, cast(double) hit.x, cast(double) hit.y,
-						cast(double) hit.w, cast(double) hit.h, faceThumbEdge).getResult();
+				thumb = jobs.background({ return async(&renderFaceCrop, photo.path, cfg.storeDir, cast(double) hit.x, cast(double) hit.y,
+						cast(double) hit.w, cast(double) hit.h, faceThumbEdge).getResult(); });
 			catch (Exception e)
 				logWarn("faces: crop failed for %s: %s", photo.path, e.msg);
 			long person;
@@ -602,6 +616,6 @@ final class FaceService
 
 	void close() nothrow
 	{
-		jobs.stopAll();
+		fibers.stopAll();
 	}
 }

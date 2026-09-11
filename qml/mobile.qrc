@@ -2,6 +2,7 @@
 <RCC version="1.0">
   <qresource prefix="/">
     <file>mobile/Main.qml</file>
+    <file>mobile/Icons.qml</file>
     <file>mobile/EndpointDialog.qml</file>
     <file>mobile/PhotoGrid.qml</file>
     <file>mobile/DateTreeSidebar.qml</file>

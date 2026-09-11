@@ -8,6 +8,8 @@ import std.json;
 
 import vibe.core.concurrency : async;
 
+import photowagon.core.jobs.scheduler : jobs;
+
 import photowagon.core.ipc.protocol;
 import photowagon.core.library.photos : PhotoRepo;
 import photowagon.core.store.store : ContentStore;
@@ -64,8 +66,8 @@ void registerMediaApi(Registry r, PhotoRepo photos, ContentStore store)
 			return v.type == JSONType.float_ ? v.floating : v.type == JSONType.integer ? cast(double) v.integer : def;
 		}
 		immutable maxEdge = cast(int) getLong(p, "maxEdge", 2048);
-		auto bytes = async(&renderRegion, photos.displayPath(photo), frac("x", 0), frac("y", 0), frac("w", 1), frac("h", 1),
-			maxEdge < 64 ? 64 : (maxEdge > 8192 ? 8192 : maxEdge)).getResult();
+		auto bytes = jobs.foreground({ return async(&renderRegion, photos.displayPath(photo), frac("x", 0), frac("y", 0), frac("w", 1), frac("h", 1),
+			maxEdge < 64 ? 64 : (maxEdge > 8192 ? 8192 : maxEdge)).getResult(); });
 		return JSONValue(["mime": JSONValue("image/jpeg"), "base64": JSONValue(cast(string) Base64.encode(bytes))]);
 	});
 
@@ -80,7 +82,7 @@ void registerMediaApi(Registry r, PhotoRepo photos, ContentStore store)
 		string mime;
 		if (maxEdge > 0)
 		{
-			bytes = async(&renderJpeg, photo.path, maxEdge, 88).getResult();
+			bytes = jobs.foreground({ return async(&renderJpeg, photo.path, maxEdge, 88).getResult(); });
 			mime = "image/jpeg";
 		}
 		else

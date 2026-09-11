@@ -10,6 +10,9 @@ private extern (C) nothrow @nogc
 {
 	int vips_init(const char* argv0);
 	void vips_concurrency_set(int n);
+	void vips_cache_set_max(int max);
+	void vips_cache_set_max_mem(size_t maxMem);
+	void vips_cache_set_max_files(int maxFiles);
 	void* vips_image_new_from_file(const char* name, ...);
 	int vips_image_get_width(void* image);
 	int vips_image_get_height(void* image);
@@ -49,6 +52,11 @@ void initVips(string argv0 = "photowagond")
 		throw new Exception("vips_init failed: " ~ vipsError());
 	// each worker fiber already runs one vips pipeline; keep vips's own pool small
 	vips_concurrency_set(2);
+	// vips remembers recent operations to reuse them; a photo library never asks twice,
+	// and the default cache happily keeps hundreds of megabytes of decoded pictures
+	vips_cache_set_max(20);
+	vips_cache_set_max_mem(64 * 1024 * 1024);
+	vips_cache_set_max_files(20);
 }
 
 private string vipsError()

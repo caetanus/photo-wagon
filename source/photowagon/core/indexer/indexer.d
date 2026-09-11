@@ -9,6 +9,8 @@ import core.time : MonoTime, msecs;
 import std.json;
 
 import vibe.core.concurrency : async;
+
+import photowagon.core.jobs.scheduler : jobs, Priority;
 import vibe.core.core : runTask;
 import vibe.core.log : logInfo, logWarn, logDiagnostic;
 import vibe.core.task : Task, InterruptException;
@@ -30,7 +32,7 @@ final class Indexer
 	private Config cfg;
 	private PhotoRepo photos;
 	private Events events;
-	private FiberGroup jobs;
+	private FiberGroup fibers;
 	/// Called on the main thread after each finished job (the face scan hangs here).
 	void delegate() onDone;
 	/// A freshly indexed file carried keywords (XMP / IPTC): the library takes them.
@@ -43,7 +45,7 @@ final class Indexer
 		this.cfg = cfg;
 		this.photos = photos;
 		this.events = events;
-		jobs = new FiberGroup((Exception e) nothrow {
+		fibers = new FiberGroup((Exception e) nothrow {
 			try
 				logWarn("indexer: job failed: %s", e.msg);
 			catch (Exception)
@@ -67,7 +69,7 @@ final class Indexer
 			return;
 		}
 		running[rootId] = true;
-		jobs.spawn(() {
+		fibers.spawn(() {
 			scope (exit)
 				running.remove(rootId);
 			new Job(this, rootId, path).run();
@@ -83,7 +85,7 @@ final class Indexer
 
 	void close() nothrow
 	{
-		jobs.stopAll();
+		fibers.stopAll();
 	}
 }
 
@@ -107,9 +109,14 @@ private final class Job
 
 	void run()
 	{
+		jobs.pass(Priority.indexer, "indexing " ~ root, &runPass);
+	}
+
+	private void runPass()
+	{
 		started = MonoTime.currTime;
 		logInfo("indexer: scanning %s", root);
-		candidates = async(&scanImages, root).getResult();
+		candidates = jobs.background({ return async(&scanImages, root).getResult(); });
 		logInfo("indexer: %s candidates under %s", candidates.length, root);
 		report(true);
 
@@ -184,7 +191,7 @@ private final class Job
 			logDiagnostic("indexer: changed %s (size %s → %s, mtime %s → %s)", c.path, known.get.size, c.size,
 				known.get.mtimeMs, c.mtimeMs);
 
-		immutable hash = async(&sha256File, c.path).getResult();
+		immutable hash = jobs.background({ return async(&sha256File, c.path).getResult(); });
 		auto same = owner.photos.byHash(hash);
 		if (!same.isNull && same.get.path != c.path)
 		{
@@ -194,8 +201,8 @@ private final class Job
 			return;
 		}
 
-		auto exif = async(&readExif, c.path).getResult();
-		auto thumb = async(&makeThumbnail, c.path, owner.cfg.storeDir, owner.cfg.thumbSize).getResult();
+		auto exif = jobs.background({ return async(&readExif, c.path).getResult(); });
+		auto thumb = jobs.background({ return async(&makeThumbnail, c.path, owner.cfg.storeDir, owner.cfg.thumbSize).getResult(); });
 		if (!thumb.ok)
 			throw new Exception(thumb.error);
 
@@ -232,7 +239,7 @@ private final class Job
 			sig.height = p.height;
 			sig.hasCamera = exif.camera !is null;
 			try
-				sig.stats = async(&imageStats, c.path).getResult(); // the original, not the thumbnail
+				sig.stats = jobs.background({ return async(&imageStats, c.path).getResult(); }); // the original, not the thumbnail
 			catch (Exception e)
 				logDiagnostic("indexer: stats failed for %s: %s", c.path, e.msg);
 			p.kind = classify(sig);

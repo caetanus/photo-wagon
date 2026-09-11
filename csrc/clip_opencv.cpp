@@ -4,6 +4,7 @@
 #include <cmath>
 #include <mutex>
 
+#include <opencv2/core/utility.hpp>
 #include <opencv2/dnn.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -18,6 +19,7 @@ int pw_clip_init(const char *vision_onnx_path)
     if (g_loaded)
         return 0;
     try {
+        cv::setNumThreads(2); /* the UI shares these cores */
         g_net = cv::dnn::readNetFromONNX(vision_onnx_path);
         g_net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
         g_net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
@@ -27,6 +29,13 @@ int pw_clip_init(const char *vision_onnx_path)
         g_loaded = false;
         return -1;
     }
+}
+
+void pw_clip_release(void)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_net = cv::dnn::Net();
+    g_loaded = false;
 }
 
 int pw_clip_encode(const char *image_path, float *out512)

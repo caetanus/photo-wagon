@@ -26,8 +26,11 @@ typedef struct {
 
 /* Detects faces in an image file and extracts their embeddings.
    Images larger than max_edge on their longest side are downscaled first
-   (0 = never). Returns the number of faces written, or -1 on error. */
-int pw_face_detect(const char *image_path, int max_edge, PwFace *out, int max_faces);
+   (0 = never); with edge_hint (the picture's longest edge, when known) the JPEG
+   is decoded at 1/2, 1/4 or 1/8 right away instead of in full — a 108 MP photo
+   would otherwise be 324 MB of pixels for a 1280 px detection.
+   Returns the number of faces written, or -1 on error. */
+int pw_face_detect(const char *image_path, int max_edge, int edge_hint, PwFace *out, int max_faces);
 
 #ifdef __cplusplus
 }

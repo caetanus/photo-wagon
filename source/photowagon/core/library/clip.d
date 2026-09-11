@@ -1,30 +1,35 @@
-/// The CLIP ViT-B/32 image encoder through the C++ shim (csrc/clip_opencv).
-/// `clipEncode` is a plain function of a path returning a value: it runs on a
-/// worker thread via `async`, and the shim serialises calls itself.
+/// The CLIP ViT-B/32 image encoder, through the vision worker (core/vision/worker.d):
+/// the model's gigabyte lives in a child process for the length of a pass.
 module photowagon.core.library.clip;
 
-import std.string : toStringz;
+import std.array : split;
+import std.conv : to;
 
-private extern (C) nothrow @nogc
-{
-	int pw_clip_init(const char* onnx);
-	int pw_clip_encode(const char* path, float* out512);
-}
+import photowagon.core.vision.worker : startVision, releaseVision, visionRequest;
 
 enum clipDim = 512;
 
-/// Loads the model once. Throws if OpenCV cannot read it.
+/// Starts the worker (the model itself loads on the first request).
 void initClip(string onnxPath)
 {
-	if (pw_clip_init(onnxPath.toStringz) != 0)
-		throw new Exception("cannot load the CLIP image model (" ~ onnxPath ~ ")");
+	cast(void) onnxPath;   // the worker knows its models from the daemon's configuration
+	startVision();
+}
+
+/// Ends the worker: its memory goes back to the system.
+void releaseClip() nothrow
+{
+	releaseVision();
 }
 
 /// Unit-length embedding of the image at `path`; throws when it cannot be read.
 float[clipDim] clipEncode(string path)
 {
-	float[clipDim] e = void;
-	if (pw_clip_encode(path.toStringz, e.ptr) != 0)
-		throw new Exception("CLIP encoding failed for " ~ path);
+	auto parts = visionRequest("clip " ~ path).split(' ');
+	if (parts.length != clipDim)
+		throw new Exception("CLIP worker: wrong embedding size for " ~ path);
+	float[clipDim] e;
+	foreach (i, p; parts)
+		e[i] = p.to!float;
 	return e;
 }

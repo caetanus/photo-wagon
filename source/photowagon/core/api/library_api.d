@@ -24,6 +24,8 @@ void registerLibraryApi(Registry r, RootRepo roots, PhotoRepo photos, DateTree d
 	// {id} → the pixel statistics the kind rules use (for tuning and curiosity)
 	r.add("photo.stats", (JSONValue p) {
 		import vibe.core.concurrency : async;
+
+import photowagon.core.jobs.scheduler : jobs;
 		import photowagon.core.thumbs.vips : imageStats;
 
 		auto photo = photos.get(requireLong(p, "id"));
@@ -33,7 +35,7 @@ void registerLibraryApi(Registry r, RootRepo roots, PhotoRepo photos, DateTree d
 
 		// the original when we have it: a re-compressed thumbnail flattens noise into plateaus
 		immutable src = photo.path !is null && photo.path.exists ? photo.path : photos.thumbPath(photo.thumbHash);
-		auto st = async(&imageStats, src).getResult();
+		auto st = jobs.foreground({ return async(&imageStats, src).getResult(); });
 		return JSONValue([
 			"dominant": JSONValue(st.dominantFraction), "unique": JSONValue(st.uniqueFraction),
 			"saturation": JSONValue(st.meanSaturation), "edges": JSONValue(st.edgeDensity),

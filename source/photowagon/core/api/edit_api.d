@@ -9,6 +9,8 @@ import std.json;
 import std.path : baseName, buildPath, dirName, extension, stripExtension;
 
 import vibe.core.concurrency : async;
+
+import photowagon.core.jobs.scheduler : jobs;
 import vibe.core.log : logInfo, logWarn;
 
 import photowagon.core.config : Config;
@@ -87,7 +89,7 @@ void registerEditApi(Registry r, Config cfg, PhotoRepo photos, ContentStore stor
 		auto photo = local(p);
 		auto e = editsOf(p);
 		immutable maxEdge = cast(int) getLong(p, "maxEdge", previewEdge);
-		auto bytes = async(&renderJson, photo.path, e.toJson().toString(), maxEdge < 64 ? 64 : (maxEdge > 4096 ? 4096 : maxEdge), 88).getResult();
+		auto bytes = jobs.foreground({ return async(&renderJson, photo.path, e.toJson().toString(), maxEdge < 64 ? 64 : (maxEdge > 4096 ? 4096 : maxEdge), 88).getResult(); });
 		auto size = jpegSize(bytes);
 		return JSONValue(["url": JSONValue(writePreview(photo.id, bytes)), "width": JSONValue(size[0]), "height": JSONValue(size[1])]);
 	});
@@ -102,7 +104,7 @@ void registerEditApi(Registry r, Config cfg, PhotoRepo photos, ContentStore stor
 		foreach (pr; presets())
 		{
 			auto e = withPreset(current, pr);
-			auto bytes = async(&renderJson, photo.path, e.toJson().toString(), maxEdge < 32 ? 32 : (maxEdge > 512 ? 512 : maxEdge), 80).getResult();
+			auto bytes = jobs.foreground({ return async(&renderJson, photo.path, e.toJson().toString(), maxEdge < 32 ? 32 : (maxEdge > 512 ? 512 : maxEdge), 80).getResult(); });
 			out_ ~= JSONValue(["name": JSONValue(pr.name), "url": JSONValue(writePreview(photo.id, bytes, "p" ~ pr.name)), "edits": e.toJson()]);
 		}
 		return JSONValue(["items": JSONValue(out_)]);
@@ -120,7 +122,7 @@ void registerEditApi(Registry r, Config cfg, PhotoRepo photos, ContentStore stor
 			auto now = photos.get(photo.id);
 			return photos.toJson(now);
 		}
-		auto bytes = async(&renderJson, photo.path, e.toJson().toString(), 0, 92).getResult();
+		auto bytes = jobs.foreground({ return async(&renderJson, photo.path, e.toJson().toString(), 0, 92).getResult(); });
 		immutable hash = store.put(bytes);
 		auto thumb = thumbnailOfBytes(bytes, cfg.storeDir, cfg.thumbSize);
 		if (!thumb.ok)
@@ -146,7 +148,7 @@ void registerEditApi(Registry r, Config cfg, PhotoRepo photos, ContentStore stor
 	r.add("photo.saveCopy", (JSONValue p) {
 		auto photo = local(p);
 		Edits e = "edits" in p ? editsOf(p) : (photo.edits.length ? Edits.fromJson(parseJSON(photo.edits)) : Edits.init);
-		auto bytes = async(&renderJson, photo.path, e.toJson().toString(), 0, 92).getResult();
+		auto bytes = jobs.foreground({ return async(&renderJson, photo.path, e.toJson().toString(), 0, 92).getResult(); });
 		immutable dir = photo.path.dirName, base = photo.path.baseName.stripExtension;
 		string target = buildPath(dir, base ~ "-edited.jpg");
 		for (int n = 2; target.exists; n++)
@@ -165,7 +167,7 @@ private void revert(PhotoRepo photos, Config cfg, ref Photo photo)
 
 	if (photo.editedHash is null && photo.edits is null)
 		return;
-	auto thumb = async(&makeThumbnail, photo.path, cfg.storeDir, cfg.thumbSize).getResult();
+	auto thumb = jobs.foreground({ return async(&makeThumbnail, photo.path, cfg.storeDir, cfg.thumbSize).getResult(); });
 	if (!thumb.ok)
 		throw new ApiError("internal", "thumbnail: " ~ thumb.error);
 	immutable swap = photo.orientation >= 5;

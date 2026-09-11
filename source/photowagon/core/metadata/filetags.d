@@ -19,6 +19,7 @@ import libp2p.util.fibers : FiberGroup;
 
 import photowagon.core.db.sqlite : Database;
 import photowagon.core.ipc.events : Events;
+import photowagon.core.jobs.scheduler : jobs, Priority;
 import photowagon.core.metadata.exif : writeSubjects;
 
 /// The prefixes that tell a classifier tag or a place from a plain keyword.
@@ -158,7 +159,7 @@ final class FileTagWriter
 {
 	private Database db;
 	private Events events;
-	private FiberGroup jobs;
+	private FiberGroup fibers;
 	private bool[long] queue;
 	private bool running, closed;
 
@@ -166,7 +167,7 @@ final class FileTagWriter
 	{
 		this.db = db;
 		this.events = events;
-		jobs = new FiberGroup((Exception e) nothrow {
+		fibers = new FiberGroup((Exception e) nothrow {
 			try
 				logWarn("filetags: job failed: %s", e.msg);
 			catch (Exception)
@@ -178,7 +179,7 @@ final class FileTagWriter
 	void close() nothrow
 	{
 		closed = true;
-		jobs.stopAll();
+		fibers.stopAll();
 	}
 
 	/// Queues these photos; the job starts if it is not running.
@@ -189,7 +190,7 @@ final class FileTagWriter
 		if (!running && !closed && queue.length)
 		{
 			running = true;
-			jobs.spawn(&run);
+			fibers.spawn({ jobs.pass(Priority.fileTags, "writing tags into files", &run); });
 		}
 	}
 
@@ -238,7 +239,7 @@ final class FileTagWriter
 			string joined;
 			foreach (i, k; s.encode())
 				joined ~= (i ? "\x1f" : "") ~ k;
-			auto err = async(&writeJoined, path, joined).getResult();
+			auto err = jobs.background({ return async(&writeJoined, path, joined).getResult(); });
 			if (err is null)
 			{
 				written++;

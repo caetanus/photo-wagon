@@ -110,6 +110,21 @@ The scene and mood tags need the CLIP image encoder next to the face models:
 (335 MB, fp32). Without it everything else works and the two sections stay empty.
 `data/scenes/make-prompts.py` regenerates the text side after editing the vocabulary.
 
+## Resources
+
+Background work runs on a leash (`core/jobs/scheduler.d`): indexing, the kinds pass, faces,
+scenes and the tag writer are *passes* that queue on one lane and run one at a time, new
+photos first; every native operation (a decode, a model, a render) takes one of `--jobs N`
+permits (default 2) and steps aside while a request from the window or the phone is being
+answered. The CLIP model (about a gigabyte inside OpenCV) never lives in the app: a child process
+(`photo-wagon --clip-worker`) encodes for one pass and is killed after it;
+faces are detected on a reduced decode of big JPEGs; libvips keeps a 64 MB operation cache
+instead of its default; each pass ends with a garbage collection that returns memory to the
+system. The viewer does not cache the 4096 px decodes of the photos you open. A core started
+by a script should get `--exit-with-parent`: it dies with the process that started it.
+A memory guard watches the resident size: above `--memory-limit` MB (default 1536) the
+process aborts itself with SIGSEGV on purpose, so the core dump says what grew.
+
 ## Phone
 
 `mobile/` is Photo Wagon on the phone: a libp2p peer of the computer's node

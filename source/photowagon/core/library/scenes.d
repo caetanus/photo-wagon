@@ -24,8 +24,9 @@ import photowagon.core.config : Config;
 import photowagon.core.db.schema : getSetting, setSetting;
 import photowagon.core.db.sqlite : Database;
 import photowagon.core.ipc.events : Events;
+import photowagon.core.jobs.scheduler : jobs, Priority;
 import photowagon.core.library.calendar : fileUrl;
-import photowagon.core.library.clip : clipDim, clipEncode, initClip;
+import photowagon.core.library.clip : clipDim, clipEncode, initClip, releaseClip;
 import photowagon.core.library.holidays : holidayOf;
 import photowagon.core.library.photos : PhotoRepo;
 import photowagon.core.store.store : ContentStore;
@@ -163,7 +164,7 @@ final class SceneService
 	private ContentStore store;
 	private Events events;
 	private Label[] vocab;
-	private FiberGroup jobs;
+	private FiberGroup fibers;
 	private bool running, again, closed;
 	/// False when the model file is missing: the library gets no tags, nothing else changes.
 	bool available;
@@ -195,7 +196,7 @@ final class SceneService
 		available = cfg.clipModel.exists;
 		if (!available)
 			logWarn("scenes: no model at %s — scenes and moods are off", cfg.clipModel);
-		jobs = new FiberGroup((Exception e) nothrow {
+		fibers = new FiberGroup((Exception e) nothrow {
 			try
 				logWarn("scenes: job failed: %s", e.msg);
 			catch (Exception)
@@ -207,7 +208,7 @@ final class SceneService
 	void close() nothrow
 	{
 		closed = true;
-		jobs.stopAll();
+		fibers.stopAll();
 	}
 
 	bool busy() const
@@ -225,25 +226,34 @@ final class SceneService
 			return;
 		}
 		running = true;
-		jobs.spawn(() {
+		fibers.spawn(() {
 			scope (exit)
 				running = false;
 			do
 			{
 				again = false;
-				run();
+				if (pending(1).length || rescoreWaiting())
+					jobs.pass(Priority.scenes, "scenes, moods, weather, holidays", &run);
 			}
 			while (again);
+			// the model is a gigabyte of weights: not while nothing is being encoded
+			if (loaded)
+			{
+				releaseClip();
+				loaded = false;
+				logInfo("scenes: CLIP worker released");
+			}
 		});
 	}
 
 	// ---- the pass -----------------------------------------------------------------
 
-	private long[] pending()
+	private long[] pending(long limit = 1_000_000)
 	{
 		// photographs (or not yet classified) with a thumbnail and no embedding yet
 		auto s = db.prepare(`SELECT p.id FROM photos p LEFT JOIN photo_clip c ON c.photo_id = p.id
-			WHERE c.photo_id IS NULL AND p.thumb_hash IS NOT NULL AND (p.kind = 'photo' OR p.kind IS NULL) ORDER BY p.id`);
+			WHERE c.photo_id IS NULL AND p.thumb_hash IS NOT NULL AND (p.kind = 'photo' OR p.kind IS NULL) ORDER BY p.id LIMIT ?`);
+		s.bind(1, limit);
 		long[] out_;
 		while (s.step())
 			out_ ~= s.getLong(0);
@@ -251,6 +261,15 @@ final class SceneService
 	}
 
 	private bool loaded;
+
+	/// Embedded photos still without their tags (a new vocabulary).
+	private bool rescoreWaiting()
+	{
+		auto q = db.prepare(`SELECT 1 FROM photo_clip c WHERE c.ok = 1
+			AND (SELECT count(*) FROM photo_tags t WHERE t.photo_id = c.photo_id) < ? LIMIT 1`);
+		q.bind(1, cast(long) tagGroups.length);
+		return q.step();
+	}
 
 	/// `initClip` for `async`, which wants a value back.
 	private static bool loadClip(string path)
@@ -266,9 +285,9 @@ final class SceneService
 			try
 			{
 				auto started = MonoTime.currTime;
-				async(&loadClip, cfg.clipModel).getResult();
+				jobs.background({ return async(&loadClip, cfg.clipModel).getResult(); });
 				loaded = true;
-				logInfo("scenes: CLIP model loaded in %.1fs", (MonoTime.currTime - started).total!"msecs" / 1000.0);
+				logInfo("scenes: CLIP worker ready in %.1fs", (MonoTime.currTime - started).total!"msecs" / 1000.0);
 			}
 			catch (Exception e)
 			{
@@ -294,7 +313,7 @@ final class SceneService
 				auto p = photos.get(id);
 				// the stored thumbnail: CLIP looks at 224 px anyway, and no 100 MP decode
 				immutable src = store.pathFor(p.thumbHash);
-				emb = async(&clipEncode, src).getResult();
+				emb = jobs.background({ return async(&clipEncode, src).getResult(); });
 				encoded = true;
 			}
 			catch (InterruptException)

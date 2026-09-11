@@ -36,6 +36,8 @@ import photowagon.core.ipc.handler : RequestHandler;
 import photowagon.core.ipc.link : InProcessLink;
 import photowagon.core.ipc.protocol : Registry;
 import photowagon.core.ipc.server : IpcServer;
+import photowagon.core.jobs.scheduler : Scheduler, installScheduler;
+import photowagon.core.vision.worker : configureVision, VisionModels, releaseVision;
 import photowagon.core.p2p.ipc : IpcOverP2p;
 import photowagon.core.library.albums : AlbumRepo;
 import photowagon.core.library.dates : DateTree;
@@ -97,6 +99,8 @@ final class Daemon : ServerControl
 	void start()
 	{
 		mkdirRecurse(cfg.dataDir);
+		installScheduler(new Scheduler(cfg.heavyJobs));
+		configureVision(VisionModels(cfg.clipModel, cfg.yunetModel, cfg.sfaceModel));
 		db = new Database(cfg.dbPath);
 		migrate(db);
 		auto store = new ContentStore(cfg.storeDir);
@@ -300,6 +304,11 @@ final class Daemon : ServerControl
 			kinds.close();
 		if (facesService)
 			facesService.close();
+		if (scenes)
+			scenes.close();
+		if (fileTags)
+			fileTags.close();
+		releaseVision();
 		if (sharing)
 			sharing.close();
 		if (node)

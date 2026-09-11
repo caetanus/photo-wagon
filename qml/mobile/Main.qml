@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Material
 import QtQuick.Layouts
 
 // Phone layout: header, the grid, a drawer with the date tree, the viewer on
@@ -18,15 +19,25 @@ ApplicationWindow {
     title: "Photo Wagon"
     color: theme.bg
 
+    // Material, following the phone's light / dark setting; one palette for both.
+    Material.theme: Material.System
+    Material.accent: theme.accent
+    Material.primary: theme.panel
+    Material.background: theme.bg
+    Material.foreground: theme.text
+    readonly property bool dark: Material.theme === Material.Dark
+
     readonly property QtObject theme: QtObject {
-        readonly property color bg: "#16181d"
-        readonly property color panel: "#1e2128"
-        readonly property color panelAlt: "#262a33"
-        readonly property color border: "#31363f"
-        readonly property color text: "#e6e8ec"
-        readonly property color muted: "#8b93a3"
-        readonly property color accent: "#5aa2ff"
+        readonly property color bg: root.dark ? "#121417" : "#f4f5f7"
+        readonly property color panel: root.dark ? "#1b1e24" : "#ffffff"
+        readonly property color panelAlt: root.dark ? "#242830" : "#eceef2"
+        readonly property color border: root.dark ? "#2c313a" : "#dcdfe5"
+        readonly property color text: root.dark ? "#eceef2" : "#1a1d23"
+        readonly property color muted: root.dark ? "#8f97a6" : "#6b7280"
+        readonly property color accent: "#3d8bff"
+        readonly property color accentText: "#ffffff"
     }
+    Icons { id: icons }
 
     palette {
         window: theme.bg
@@ -82,73 +93,101 @@ ApplicationWindow {
         return "Album"
     }
 
-    header: ToolBar {
-        height: 52
-        background: Rectangle { color: theme.panel; border.color: theme.border }
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 4
-            anchors.rightMargin: 4
-            spacing: 4
-            ToolButton {
-                onClicked: dates.open()
-                implicitWidth: 44
-                // drawn, not a glyph: Android's default font has no U+2630
-                contentItem: Column {
-                    anchors.centerIn: parent
-                    spacing: 4
-                    Repeater {
-                        model: 3
-                        Rectangle { width: 20; height: 2; radius: 1; color: theme.text }
-                    }
-                }
-            }
-            ColumnLayout {
-                spacing: 0
-                Layout.fillWidth: true
-                Label {
-                    text: filterData.albumId ? albumName(filterData.albumId)
-                        : filterYear === 0 ? "Photo Wagon"
-                        : (filterDay ? filterYear + "-" + pad(filterMonth) + "-" + pad(filterDay)
-                           : filterMonth ? filterYear + "-" + pad(filterMonth) : String(filterYear))
-                    font.pixelSize: 17
-                    font.bold: true
-                    color: theme.text
-                    elide: Text.ElideRight
-                    Layout.fillWidth: true
-                }
-                Label {
-                    text: status.text + (library.endpoint.length
-                        ? " · " + (library.computerConnected ? "computer: " + library.endpoint : "computer offline")
-                        : " · no computer set")
-                    color: theme.muted
-                    font.pixelSize: 12
-                    elide: Text.ElideRight
-                    Layout.fillWidth: true
-                }
-            }
-            BusyIndicator {
-                running: status.indexing
-                visible: running
-                implicitWidth: 22
-                implicitHeight: 22
-            }
-            ToolButton {
-                text: root.syncData.active ? "Sending…" : "Sync"
-                enabled: library.computerConnected && !root.syncData.active
-                onClicked: library.sendAll()
-            }
-            ToolButton { text: "⚙"; font.pixelSize: 22; onClicked: endpointDialog.open() }
+    // An icon button of the app bar: our SVG icons, tinted, no glyph fonts (Android's has none of them).
+    component BarButton: ToolButton {
+        required property string icon_
+        property string tip: ""
+        implicitWidth: 48
+        implicitHeight: 48
+        contentItem: Image {
+            source: icons.tint(parent.icon_, parent.enabled ? theme.text : theme.muted)
+            sourceSize.width: 22; sourceSize.height: 22
+            fillMode: Image.Pad
+            horizontalAlignment: Image.AlignHCenter
+            verticalAlignment: Image.AlignVCenter
         }
+        ToolTip.visible: tip.length > 0 && pressed
+        ToolTip.text: tip
     }
 
     Item {
         id: shell
         anchors.fill: parent
 
+        ToolBar {
+            id: bar
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: 60
+            Material.elevation: 0
+            background: Rectangle {
+                color: theme.panel
+                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: theme.border }
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 4
+                anchors.rightMargin: 6
+                spacing: 2
+                BarButton { icon_: icons.sidebar; tip: "Dates and albums"; onClicked: dates.open() }
+                ColumnLayout {
+                    spacing: 1
+                    Layout.fillWidth: true
+                    Label {
+                        text: filterData.albumId ? albumName(filterData.albumId)
+                            : filterYear === 0 ? "Photo Wagon"
+                            : (filterDay ? new Date(filterYear, filterMonth - 1, filterDay).toLocaleDateString(Qt.locale(), "d MMMM yyyy")
+                               : filterMonth ? new Date(filterYear, filterMonth - 1, 1).toLocaleDateString(Qt.locale(), "MMMM yyyy") : String(filterYear))
+                        font.pixelSize: 18
+                        font.weight: Font.DemiBold
+                        color: theme.text
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
+                    RowLayout {
+                        spacing: 6
+                        Layout.fillWidth: true
+                        Rectangle {   // the link to the computer, as a dot
+                            width: 8; height: 8; radius: 4
+                            color: library.computerConnected ? "#3ecf8e" : (library.endpoint.length ? "#e8a33d" : theme.border)
+                        }
+                        Label {
+                            text: root.syncData.active
+                                ? "Sending " + (root.syncData.done + 1) + " of " + root.syncData.total
+                                : library.computerConnected
+                                    ? (root.syncData.pending ? root.syncData.pending + " to send" : (root.syncData.enabled ? "Computer up to date" : "Computer connected"))
+                                    : (library.endpoint.length ? "Computer offline" : "No computer paired")
+                            color: theme.muted
+                            font.pixelSize: 12
+                            elide: Text.ElideRight
+                            Layout.fillWidth: true
+                        }
+                    }
+                }
+                BusyIndicator {
+                    running: status.indexing || root.syncData.active
+                    visible: running
+                    implicitWidth: 24
+                    implicitHeight: 24
+                    Material.accent: theme.accent
+                }
+                BarButton {
+                    icon_: icons.phone
+                    tip: "Send to the computer"
+                    enabled: library.computerConnected && !root.syncData.active
+                    onClicked: library.sendAll()
+                }
+                BarButton { icon_: icons.network; tip: "Computer"; onClicked: endpointDialog.open() }
+            }
+        }
+
         PhotoGrid {
             id: grid
-            anchors.fill: parent
+            anchors.top: bar.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
             theme: root.theme
             page: root.pageData
             onLoadMore: library.loadPage(root.pageData.offset, root.pageSize, root.filterYear, root.filterMonth, root.filterDay)
@@ -174,8 +213,9 @@ ApplicationWindow {
 
     Drawer {
         id: dates
-        width: Math.min(300, root.width * 0.8)
+        width: Math.min(320, root.width * 0.84)
         height: root.height
+        Material.background: theme.panel
         ColumnLayout {
             anchors.fill: parent
             spacing: 0
@@ -195,12 +235,12 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.preferredHeight: Math.min(260, 36 + root.albumsData.length * 44)
                 color: theme.panel
-                border.color: theme.border
+                Rectangle { width: parent.width; height: 1; color: theme.border }
                 ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 6
                     spacing: 2
-                    Label { text: "Albums on the computer"; color: theme.muted; font.pixelSize: 12; font.bold: true; leftPadding: 6 }
+                    Label { text: "ALBUMS ON THE COMPUTER"; color: theme.muted; font.pixelSize: 11; font.letterSpacing: 0.8; font.bold: true; leftPadding: 10; topPadding: 6 }
                     ListView {
                         Layout.fillWidth: true
                         Layout.fillHeight: true

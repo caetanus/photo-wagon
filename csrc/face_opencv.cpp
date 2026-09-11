@@ -5,6 +5,7 @@
 #include <cstring>
 #include <mutex>
 
+#include <opencv2/core/utility.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/objdetect.hpp>
@@ -22,6 +23,7 @@ int pw_face_init(const char *yunet_onnx_path, const char *sface_onnx_path)
     if (g_detector && g_recognizer)
         return 0;
     try {
+        cv::setNumThreads(2); /* the UI shares these cores */
         /* score 0.7, NMS 0.3, top_k 5000; the input size is set per image */
         g_detector = cv::FaceDetectorYN::create(yunet_onnx_path, "", cv::Size(320, 320), 0.7f, 0.3f, 5000);
         g_recognizer = cv::FaceRecognizerSF::create(sface_onnx_path, "");
@@ -33,7 +35,7 @@ int pw_face_init(const char *yunet_onnx_path, const char *sface_onnx_path)
     }
 }
 
-int pw_face_detect(const char *image_path, int max_edge, PwFace *out, int max_faces)
+int pw_face_detect(const char *image_path, int max_edge, int edge_hint, PwFace *out, int max_faces)
 {
     if (!out || max_faces <= 0)
         return -1;
@@ -41,7 +43,15 @@ int pw_face_detect(const char *image_path, int max_edge, PwFace *out, int max_fa
     if (!g_detector || !g_recognizer)
         return -1;
     try {
-        cv::Mat img = cv::imread(image_path, cv::IMREAD_COLOR); /* honours EXIF orientation */
+        /* decode reduced when the picture is far bigger than the detector needs (EXIF
+           orientation is still applied by imread in these modes) */
+        int flags = cv::IMREAD_COLOR;
+        if (max_edge > 0 && edge_hint > 0) {
+            if (edge_hint >= 8 * max_edge) flags = cv::IMREAD_REDUCED_COLOR_8;
+            else if (edge_hint >= 4 * max_edge) flags = cv::IMREAD_REDUCED_COLOR_4;
+            else if (edge_hint >= 2 * max_edge) flags = cv::IMREAD_REDUCED_COLOR_2;
+        }
+        cv::Mat img = cv::imread(image_path, flags);
         if (img.empty())
             return -1;
         if (max_edge > 0 && std::max(img.cols, img.rows) > max_edge) {

@@ -15,12 +15,22 @@ struct Config
 	ushort ipcPort = 0;
 	/// no UI: run the core on the main thread (implies --serve)
 	bool headless = false;
+	/// die with the process that started us (tests, scripts): no core outlives its harness
+	bool exitWithParent = false;
+	/// past this many MB resident the process kills itself with SIGSEGV for the dump (0 = off)
+	long memoryLimitMb = 1536;
+	/// `--vision-worker CLIP YUNET SFACE`: this process is the OpenCV child (core/vision/worker.d)
+	bool visionWorker;
+	string[3] visionModels;
 	/// expose the JSON-lines protocol on loopback TCP and write the port file
 	bool serve = false;
 	bool p2p = true;
 	string[] p2pListen;
 	/// concurrent import pipelines (each hashes, reads EXIF and thumbnails one file)
 	int workers = 4;
+	/// native operations (decodes, models, renders) allowed at once; background passes
+	/// also run one at a time (core/jobs/scheduler.d)
+	int heavyJobs = 2;
 	/// longest edge of a thumbnail in pixels
 	int thumbSize = 512;
 	bool verbose = false;
@@ -99,7 +109,7 @@ string defaultModelsDir()
 	return candidates[0];
 }
 
-/// `--data DIR --runtime DIR --port N --no-p2p --p2p-listen MADDR --workers N --thumb N -v`
+/// `--data DIR --runtime DIR --port N --no-p2p --p2p-listen MADDR --workers N --jobs N --memory-limit MB --thumb N -v`
 Config parseArgs(string[] args)
 {
 	import std.conv : to;
@@ -146,6 +156,21 @@ Config parseArgs(string[] args)
 				c.p2pListen = null;
 			listenGiven = true;
 			c.p2pListen ~= next();
+			break;
+		case "--memory-limit":
+			c.memoryLimitMb = next().to!long;
+			break;
+		case "--vision-worker":
+			c.visionWorker = true;
+			c.visionModels[0] = next();
+			c.visionModels[1] = next();
+			c.visionModels[2] = next();
+			break;
+		case "--exit-with-parent":
+			c.exitWithParent = true;
+			break;
+		case "--jobs":
+			c.heavyJobs = next().to!int;
 			break;
 		case "--workers":
 			c.workers = next().to!int;

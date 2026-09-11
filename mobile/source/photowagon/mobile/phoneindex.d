@@ -396,7 +396,11 @@ final class PhoneIndex
         p.orientation = exif.found ? exif.orientation : 1;
         p.takenTs = exif.found && exif.dateTimeOriginal.length ? parseExifTimestamp(exif.dateTimeOriginal) : 0;
         if (p.takenTs == 0)
-            p.takenTs = c.mtimeMs / 1000;
+        {
+            import photowagon.core.metadata.datefromname : dateFromPath;
+            immutable named = dateFromPath(c.path);
+            p.takenTs = named ? named : c.mtimeMs / 1000;
+        }
         immutable thumbPath = buildPath(thumbDir, toHexString!(LetterCase.lower)(sha1Of(c.path ~ "@" ~ c.mtimeMs.to!string)).idup ~ ".jpg");
         int w, h;
         makeThumb(reader, img, c.path, thumbPath, p.orientation, w, h);

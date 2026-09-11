@@ -8,7 +8,9 @@ an album with a peer you chose.
 
 ## The desktop app
 
-A Photos-style window — the Library timeline shows photographs; screenshots
+Dates come from EXIF, else from the file name or folder (WhatsApp, screenshots,
+camera and Pixel names, `2020/02/13/` folders), and only then from the file's
+modification time. A Photos-style window — the Library timeline shows photographs; screenshots
 and memes live under Media Types (an album or a search shows everything) — with
 a source list (Library, Favorites, People, Imports;
 the **years → months → days** tree with counts, one click to any day, the same

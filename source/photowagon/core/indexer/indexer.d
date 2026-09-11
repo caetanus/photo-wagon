@@ -202,7 +202,10 @@ private final class Job
 		p.rootId = rootId;
 		p.size = c.size;
 		p.mtimeMs = c.mtimeMs;
-		p.takenTs = exif.takenTs ? exif.takenTs : c.mtimeMs / 1000;
+		// EXIF, else a date in the name or the folder, else the file's mtime (the last copy)
+		import photowagon.core.metadata.datefromname : dateFromPath;
+		immutable named = exif.takenTs ? 0 : dateFromPath(c.path);
+		p.takenTs = exif.takenTs ? exif.takenTs : (named ? named : c.mtimeMs / 1000);
 		p.takenAt = isoTime(p.takenTs);
 		// rotated dimensions: what the viewer will actually show
 		immutable swap = exif.orientation >= 5;

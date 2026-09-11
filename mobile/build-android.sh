@@ -65,7 +65,8 @@ link() {
         ../source/photowagon/core/ipc/link.d ../source/photowagon/core/p2p/identity.d \
         $P2P_SOURCES -d-version=LibP2P_Lite -d-version=EventcoreEpollDriver $P2P_INCLUDES \
         ../source/photowagon/core/indexer/scan.d ../source/photowagon/core/library/calendar.d \
-        ../source/photowagon/core/metadata/exifparse.d ../source/photowagon/core/pairingcode.d \
+        ../source/photowagon/core/metadata/exifparse.d ../source/photowagon/core/metadata/datefromname.d \
+        ../source/photowagon/core/pairingcode.d \
         "$DSIDE/runtime/qrc/qrc.d" \
         -Isource -I../source -I"$GEN" -I"$DSIDE/runtime/qrc" -J=../qml \
         -L--gc-sections -L--as-needed \

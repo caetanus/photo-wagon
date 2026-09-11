@@ -101,6 +101,13 @@ final class Daemon : ServerControl
 		facesService = new FaceService(cfg, db, faceRepo, photos, store, events);
 		kinds = new KindService(db, photos, faceRepo, store, events);
 		// index → kinds → faces: faces are only looked for in photographs
+		try
+		{
+			import photowagon.core.library.datefix : fixDates;
+			fixDates(db, events);
+		}
+		catch (Exception e)
+			logWarn("dates: pass failed: %s", e.msg);
 		indexer.onDone = () { kinds.start(); };
 		kinds.onDone = () { facesService.start(); };
 

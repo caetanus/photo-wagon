@@ -1,49 +1,57 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">
-  <defs><radialGradient id="bg" cx="0.5" cy="0.4" r="0.75"><stop offset="0" stop-color="#2f6b75"/><stop offset="1" stop-color="#0f2a33"/></radialGradient></defs>
+  <defs><radialGradient id="bg" cx="0.5" cy="0.45" r="0.72"><stop offset="0" stop-color="#6a3512"/><stop offset="1" stop-color="#1c0d05"/></radialGradient></defs>
   <rect x="12" y="12" width="84" height="84" rx="19" fill="url(#bg)"/>
 <defs>
-    <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d09a57"/><stop offset="1" stop-color="#a06a33"/></linearGradient>
-    <linearGradient id="roof" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7a4b22"/><stop offset="1" stop-color="#5a3316"/></linearGradient>
-    <linearGradient id="red" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b8241d"/><stop offset="0.5" stop-color="#e4483c"/><stop offset="1" stop-color="#b8241d"/></linearGradient>
-    <radialGradient id="stage" cx="0.5" cy="0.55" r="0.6"><stop offset="0" stop-color="#5c3417"/><stop offset="1" stop-color="#170d07"/></radialGradient>
-    <radialGradient id="lens" cx="0.4" cy="0.35" r="0.7"><stop offset="0" stop-color="#6fb4ff"/><stop offset="0.5" stop-color="#1f6fe0"/><stop offset="1" stop-color="#0b2f7a"/></radialGradient>
+    <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d99a4e"/><stop offset="1" stop-color="#a86a2c"/></linearGradient>
+    <linearGradient id="red" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#a51c14"/><stop offset="0.45" stop-color="#e2463a"/><stop offset="1" stop-color="#a51c14"/></linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.55"><stop offset="0" stop-color="#7a3a12"/><stop offset="0.6" stop-color="#2c1408"/><stop offset="1" stop-color="#150903"/></radialGradient>
+    <radialGradient id="glass" cx="0.4" cy="0.35" r="0.75"><stop offset="0" stop-color="#7cc4ff"/><stop offset="0.45" stop-color="#1f5fd0"/><stop offset="1" stop-color="#0a1f5c"/></radialGradient>
   </defs>
-  <!-- chassis and wheels -->
-  <rect x="20" y="72" width="68" height="4" rx="1" fill="#3e2411"/>
-  <g stroke="#3e2411" stroke-width="1.4" stroke-linecap="round">
-    <circle cx="33" cy="82" r="10" fill="#4a2c14" stroke="none"/><circle cx="33" cy="82" r="7.6" fill="#8a5a2a" stroke="none"/>
-    <path d="M33 74.4v15.2M25.4 82h15.2M27.6 76.6l10.8 10.8M38.4 76.6L27.6 87.4"/><circle cx="33" cy="82" r="2.2" fill="#2a1708" stroke="none"/>
-    <circle cx="75" cy="82" r="10" fill="#4a2c14" stroke="none"/><circle cx="75" cy="82" r="7.6" fill="#8a5a2a" stroke="none"/>
-    <path d="M75 74.4v15.2M67.4 82h15.2M69.6 76.6l10.8 10.8M80.4 76.6L69.6 87.4"/><circle cx="75" cy="82" r="2.2" fill="#2a1708" stroke="none"/>
+  <!-- the dark inside, lit from behind the lens -->
+  <rect x="26" y="32" width="56" height="32" fill="url(#glow)"/>
+  <!-- lens hood and lens -->
+  <path d="M47 38h14l-2 3.5H49Z" fill="#2a1a12"/>
+  <circle cx="54" cy="49" r="9.5" fill="#15130f" stroke="#4a3320" stroke-width="1.2"/>
+  <circle cx="54" cy="49" r="7.6" fill="#2a2a30"/>
+  <circle cx="54" cy="49" r="6.4" fill="url(#glass)"/>
+  <circle cx="56.5" cy="51.5" r="1.4" fill="#ffb347" opacity="0.9"/>
+  <circle cx="55" cy="46.5" r="1.1" fill="#7dff7a" opacity="0.8"/>
+  <circle cx="51.5" cy="46.5" r="1.6" fill="#ffffff" opacity="0.85"/>
+  <!-- the curtains, parted and tied back -->
+  <path d="M26 33H52.5Q51.5 40 46.5 45.5L39.5 48.5Q41.5 54 43 64H26Z" fill="url(#red)"/>
+  <path d="M82 33H55.5Q56.5 40 61.5 45.5L68.5 48.5Q66.5 54 65 64H82Z" fill="url(#red)"/>
+  <g stroke="#7f130d" stroke-width="0.9" fill="none" opacity="0.85">
+    <path d="M32 33q1 10 1 31M38 33q3 8 2 13M45 33q2 6-1 11"/>
+    <path d="M76 33q-1 10-1 31M70 33q-3 8-2 13M63 33q-2 6 1 11"/>
   </g>
-  <!-- the wooden body -->
-  <rect x="22" y="30" width="64" height="43" rx="2.5" fill="url(#wood)"/>
-  <path d="M22 41h64M22 52h64M22 63h64" stroke="#7d4a1f" stroke-width="1.1" opacity="0.85"/>
-  <rect x="22" y="30" width="64" height="43" rx="2.5" fill="none" stroke="#4a2c14" stroke-width="1.8"/>
-  <rect x="24.5" y="32.5" width="3" height="38" fill="#5f3a1a" opacity="0.7"/>
-  <rect x="80.5" y="32.5" width="3" height="38" fill="#5f3a1a" opacity="0.7"/>
-  <!-- the bowed roof, with a stovepipe -->
-  <rect x="28" y="17" width="4.5" height="9" fill="#3a3a3f"/><rect x="27" y="16" width="6.5" height="2" rx="0.6" fill="#3a3a3f"/>
-  <path d="M16 35 Q54 11 92 35 Q54 29 16 35 Z" fill="url(#roof)"/>
-  <path d="M16 35 Q54 11 92 35" fill="none" stroke="#3e2411" stroke-width="1.6" stroke-linecap="round"/>
-  <!-- the stage: an arched opening -->
-  <path d="M36 70V47Q36 38 45 38H63Q72 38 72 47V70Z" fill="url(#stage)"/>
-  <path d="M36 70V47Q36 38 45 38H63Q72 38 72 47V70Z" fill="none" stroke="#3e2411" stroke-width="1.6"/>
-  <!-- curtains, drawn to the sides and tied -->
-  <path d="M36.8 42 L48 40.5 Q46 49 41.5 56 Q45.5 62 46.5 69.2 L36.8 69.2 Z" fill="url(#red)"/>
-  <path d="M71.2 42 L60 40.5 Q62 49 66.5 56 Q62.5 62 61.5 69.2 L71.2 69.2 Z" fill="url(#red)"/>
-  <path d="M42 41.5q2 8-1.5 14M44.5 41.2q1.5 7-2.5 13.5M66 41.5q-2 8 1.5 14M63.5 41.2q-1.5 7 2.5 13.5" stroke="#8c1710" stroke-width="0.9" fill="none" opacity="0.8"/>
-  <path d="M37 56.5q4-2.5 7 0M71 56.5q-4-2.5-7 0" stroke="#f0c04d" stroke-width="2.4" fill="none" stroke-linecap="round"/>
-  <!-- the valance across the top, with a gold fringe -->
-  <path d="M36 39H72V42.5Q69 47.5 66 42.5Q63 47.5 60 42.5Q57 47.5 54 42.5Q51 47.5 48 42.5Q45 47.5 42 42.5Q39 47.5 36 42.5Z" fill="#c9281f"/>
-  <path d="M36 42.5Q39 47.5 42 42.5Q45 47.5 48 42.5Q51 47.5 54 42.5Q57 47.5 60 42.5Q63 47.5 66 42.5Q69 47.5 72 42.5" fill="none" stroke="#f0c04d" stroke-width="1.2"/>
-  <!-- the camera, centre stage -->
-  <rect x="46" y="48" width="9" height="4" rx="1.2" fill="#22222a"/>
-  <rect x="42" y="51" width="24" height="16" rx="3" fill="#2a2a32"/>
-  <rect x="42" y="55" width="24" height="7" fill="#1c1c22"/>
-  <rect x="58.5" y="53" width="4.5" height="2.6" rx="0.7" fill="#f0c04d"/>
-  <circle cx="54" cy="59" r="7.2" fill="#3c3c46"/>
-  <circle cx="54" cy="59" r="6" fill="#9a9aa6"/>
-  <circle cx="54" cy="59" r="5" fill="url(#lens)"/>
-  <circle cx="52.2" cy="57" r="1.3" fill="#ffffff" opacity="0.9"/>
+  <g stroke="#f2c14e" stroke-width="2.2" fill="none" stroke-linecap="round">
+    <path d="M37 48q4-2.5 8 0.5M71 48q-4-2.5-8 0.5"/>
+  </g>
+  <g fill="#f2c14e">
+    <path d="M40.5 50.5v2.5l-1.6 3.5h3.2l-1.6-3.5" stroke="#f2c14e" stroke-width="0.9"/>
+    <path d="M67.5 50.5v2.5l-1.6 3.5h3.2l-1.6-3.5" stroke="#f2c14e" stroke-width="0.9"/>
+    <path d="M30 36v3l-1.5 3.5h3l-1.5-3.5" stroke="#f2c14e" stroke-width="0.9"/>
+    <path d="M78 36v3l-1.5 3.5h3l-1.5-3.5" stroke="#f2c14e" stroke-width="0.9"/>
+  </g>
+  <!-- the curved beam on top -->
+  <path d="M23 29Q54 20 85 29V36Q54 27 23 36Z" fill="url(#wood)" stroke="#3a2210" stroke-width="1.4" stroke-linejoin="round"/>
+  <path d="M27 31.5Q54 23.5 81 31.5" fill="none" stroke="#f0c070" stroke-width="0.8" opacity="0.7"/>
+  <circle cx="27.5" cy="32.5" r="1.3" fill="#9a9aa4"/><circle cx="80.5" cy="32.5" r="1.3" fill="#9a9aa4"/>
+  <!-- the wooden side rail -->
+  <rect x="22" y="62" width="64" height="12" fill="url(#wood)" stroke="#3a2210" stroke-width="1.4"/>
+  <path d="M27 68h54M41 62.5v11M67 62.5v11" stroke="#6e4218" stroke-width="1"/>
+  <rect x="22" y="60.5" width="5.5" height="14.5" rx="0.6" fill="#b5722e" stroke="#3a2210" stroke-width="1.2"/>
+  <rect x="80.5" y="60.5" width="5.5" height="14.5" rx="0.6" fill="#b5722e" stroke="#3a2210" stroke-width="1.2"/>
+  <g fill="#9a9aa4"><circle cx="24.8" cy="64" r="1.1"/><circle cx="24.8" cy="71" r="1.1"/><circle cx="83.2" cy="64" r="1.1"/><circle cx="83.2" cy="71" r="1.1"/></g>
+  <!-- the chassis, buffers and steel wheels -->
+  <rect x="19" y="74.5" width="70" height="2.6" rx="1.3" fill="#4a4a54"/>
+  <rect x="26" y="74" width="56" height="4.5" fill="#33333b"/>
+  <g stroke="#3a2210" stroke-width="1.2">
+    <circle cx="38" cy="82" r="7.2" fill="#2c2c33"/><circle cx="38" cy="82" r="4.6" fill="#5a5a64" stroke="none"/>
+    <path d="M38 77.6v8.8M33.6 82h8.8M34.9 78.9l6.2 6.2M41.1 78.9l-6.2 6.2" stroke="#2c2c33" stroke-width="1.2"/>
+    <circle cx="38" cy="82" r="1.7" fill="#c49a52" stroke="none"/>
+    <circle cx="70" cy="82" r="7.2" fill="#2c2c33"/><circle cx="70" cy="82" r="4.6" fill="#5a5a64" stroke="none"/>
+    <path d="M70 77.6v8.8M65.6 82h8.8M66.9 78.9l6.2 6.2M73.1 78.9l-6.2 6.2" stroke="#2c2c33" stroke-width="1.2"/>
+    <circle cx="70" cy="82" r="1.7" fill="#c49a52" stroke="none"/>
+  </g>
 </svg>

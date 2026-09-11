@@ -33,6 +33,8 @@ final class Indexer
 	private FiberGroup jobs;
 	/// Called on the main thread after each finished job (the face scan hangs here).
 	void delegate() onDone;
+	/// A freshly indexed file carried keywords (XMP / IPTC): the library takes them.
+	void delegate(long photoId, string[] subjects) onFileSubjects;
 	private bool[long] running; // root ids with a job in flight
 	private bool[long] again; // roots asked for again while running
 
@@ -178,6 +180,9 @@ private final class Job
 			skipped++;
 			return;
 		}
+		if (!known.isNull)
+			logDiagnostic("indexer: changed %s (size %s → %s, mtime %s → %s)", c.path, known.get.size, c.size,
+				known.get.mtimeMs, c.mtimeMs);
 
 		immutable hash = async(&sha256File, c.path).getResult();
 		auto same = owner.photos.byHash(hash);
@@ -238,6 +243,11 @@ private final class Job
 			owner.photos.update(p);
 		else
 			owner.photos.insert(p);
+		if (exif.keywords.length && owner.onFileSubjects !is null && p.id)
+			try
+				owner.onFileSubjects(p.id, exif.keywords);
+			catch (Exception e)
+				logDiagnostic("indexer: file keywords of %s: %s", c.path, e.msg);
 		imported++;
 		if (imported % 200 == 0)
 			owner.events.emit("library.changed", JSONValue.emptyObject);

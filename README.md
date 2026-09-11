@@ -49,7 +49,12 @@ submenus of the right-click menu to correct them (the vocabulary lives in
 scene, mood, weather, holiday, place and your own **tags** ("+ Tag", any words, comma
 separated; × removes one) — and a click on a chip shows every photo sharing it; the
 grid shows the scene, holiday and weather while you hover. Your tags are a sidebar
-section too, and "Add Tags…" (menu or toolbar) puts them on a whole selection.
+section too, and "Add Tags…" (menu or toolbar) puts them on a whole selection. Tags also
+live **in the files**: your keywords, the scene / mood / weather / holiday and the place go
+into the XMP and IPTC keyword fields (as "praia 2020", "Scene: Beach", "Place: Peruíbe,
+Brazil"), written by themselves after anything you change on a photo and on request for
+the rest ("Write Tags to Files" in the menu); pixels and modification times stay as they
+were, and a file that arrives with keywords brings them into the library.
 **Editing** (the sliders icon, or E): twelve Instagram-style filters previewed on the
 photo itself, sliders for brightness, contrast, saturation, warmth, fade, vignette,
 sharpen and sepia, rotate and flip, and a crop frame with draggable corners and aspect

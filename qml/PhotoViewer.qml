@@ -21,7 +21,8 @@ Item {
         if (!viewer.photo) return ""
         const t = viewer.photoTags && viewer.photoTags.id === viewer.photo.id ? viewer.photoTags : null
         const tag = t ? (t[group] || "") : (viewer.photo[group] || "")
-        const by = t && t.by && t.by[group] === "user" ? " (yours)" : t && t.by && t.by[group] === "date" ? " (calendar)" : ""
+        const src = t && t.by ? t.by[group] : ""
+        const by = src === "user" ? " (yours)" : src === "date" ? " (calendar)" : src === "file" ? " (from the file)" : ""
         const sc = t && t.scores && t.scores[group] ? t.scores[group] : []
         const pct = g => g.tag + " " + Math.round(g.prob * 100) + " %"
         if (!tag) return sc.length ? "—  (" + pct(sc[0]) + ")" : "—"

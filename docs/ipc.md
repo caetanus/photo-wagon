@@ -161,9 +161,27 @@ Father's, Children's and Valentine's Day on the Brazilian dates; `by: "date"`). 
 |---|---|---|
 | `tags.list` | `{inline?}` | `{scene: [{tag, count, cover}], mood: […], weather: […], holiday: […], available}` most photos first |
 | `tags.labels` | — | `{scene: [names], mood: […], weather: […], holiday: […]}` — what `photo.setTag` accepts |
-| `photo.tags` | `{id}` | `{scene, mood, weather, holiday, by: {group: auto|date|user}, scores: {group: [{tag, prob}] ×3}}` |
+| `photo.tags` | `{id}` | `{scene, mood, weather, holiday, by: {group: auto|date|file|user}, scores: {group: [{tag, prob}] ×3}}` |
 | `photo.similar` | `{id, limit?}` | `{items: [Photo + similarity], total, offset}` — the photos that look like this one: a nearest-neighbour query over the CLIP embeddings in sqlite-vec (`photo_vec`) |
 | `photo.setTag` | `{ids, group, tag}` | `{}` — the user's word; `tag: ""` = nothing in particular; sticks through re-scoring |
+
+### tags in the files
+
+What the user says about a photo is written into the file itself — XMP `dc:subject` and
+IPTC keywords, the fields every other program reads — as plain keywords plus prefixed
+entries: `Scene: Beach`, `Mood: Joyful`, `Weather: Hot`, `Holiday: Christmas`,
+`Place: Peruíbe, Brazil`. Pixels are untouched, the modification time is put back and the new size is recorded, so
+the indexer does not re-import the file and the library's hash stays the import-time one
+(the one a phone deduplicates by). A file is written, with everything the library knows about the photo (the classifiers' word
+included), by itself after the user changes something about it (keywords, a tag picked in
+the menu, a place set), and on request for the rest. On import the same fields are read back:
+keywords become the photo's tags, prefixed ones and the place come in as `file` — shown at
+once, replaced when the classifiers run with a new vocabulary, never overriding what the user
+said here.
+
+| method | params | result |
+|---|---|---|
+| `files.writeTags` | `{ids?}` | `{queued}` — queues these files (or every tagged local photo) for writing; progress as `files.tags` events |
 
 ### keywords (the user's own tags)
 
@@ -232,4 +250,6 @@ Methods that need the node answer `{"error": {"code": "p2p_off"}}` when it is no
 | `tags.done` | `{photos, tagged, seconds}` | the pass is over |
 | `tags.changed` | `{}` | tags were assigned or changed; re-list them |
 | `keywords.changed` | `{}` | the user's tags changed; re-list them |
+| `files.tags` | `{done, total}` | tags being written into files |
+| `files.tags.done` | `{written, failed}` | the writer finished its queue |
 | `log` | `{level, message}` |

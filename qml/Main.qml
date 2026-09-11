@@ -540,6 +540,7 @@ ApplicationWindow {
         onSetPlace: (ids) => { placeDialog.photoIds = ids; placeDialog.open() }
         onSetTag: (ids, group, tag) => library.setTag(JSON.stringify(ids), group, tag)
         onAddTags: (ids) => { keywordDialog.photoIds = ids; keywordDialog.open() }
+        onWriteTags: (ids) => library.writeTagsToFiles(JSON.stringify(ids))
         onSetKind: (ids, kind) => library.setKinds(JSON.stringify(ids), kind)
         onRemove: (ids, permanent) => root.removePhotos(ids, permanent)
     }

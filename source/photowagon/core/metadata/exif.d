@@ -14,6 +14,11 @@ private extern (C) nothrow @nogc
 	char* gexiv2_metadata_try_get_tag_string(void* self, const char* tag, void** error);
 	int gexiv2_metadata_try_get_orientation(void* self, void** error);
 	int gexiv2_metadata_try_get_gps_info(void* self, double* lon, double* lat, double* alt, void** error);
+	char** gexiv2_metadata_try_get_tag_multiple(void* self, const char* tag, void** error);
+	int gexiv2_metadata_try_set_tag_multiple(void* self, const char* tag, const(char*)* values, void** error);
+	int gexiv2_metadata_try_clear_tag(void* self, const char* tag, void** error);
+	int gexiv2_metadata_save_file(void* self, const char* path, void** error);
+	void g_strfreev(char** v);
 	void g_object_unref(void* obj);
 	void g_free(void* p);
 	void g_error_free(void* err);
@@ -45,7 +50,106 @@ struct ExifInfo
 	bool hasGps;
 	double lat;
 	double lon;
+	/// XMP dc:subject and IPTC keywords, in file order, deduplicated
+	string[] keywords;
 	string error;
+}
+
+/// The tags other programs read and write keywords into.
+private enum subjectTags = ["Xmp.dc.subject", "Iptc.Application2.Keywords"];
+
+private string[] readSubjects(void* meta)
+{
+	string[] out_;
+	bool[string] seen;
+	foreach (tag; subjectTags)
+	{
+		void* e;
+		auto v = gexiv2_metadata_try_get_tag_multiple(meta, tag.ptr, &e);
+		if (e)
+			g_error_free(e);
+		if (v is null)
+			continue;
+		scope (exit)
+			g_strfreev(v);
+		for (size_t i = 0; v[i] !is null; i++)
+		{
+			auto k = v[i].fromStringz.idup;
+			import std.string : strip;
+			k = k.strip;
+			if (!k.length || k in seen)
+				continue;
+			seen[k] = true;
+			out_ ~= k;
+		}
+	}
+	return out_;
+}
+
+/// Writes `subjects` as the file's keywords (XMP dc:subject and IPTC), keeping the
+/// pixels and every other tag, and puts the modification time back so the indexer
+/// does not see a changed file. Plain function of value types: runs on a worker.
+/// Returns null, or the error.
+string writeSubjects(string path, string[] subjects)
+{
+	import std.file : getTimes, setTimes;
+
+	auto meta = gexiv2_metadata_new();
+	if (meta is null)
+		return "gexiv2_metadata_new failed";
+	scope (exit)
+		g_object_unref(meta);
+	{
+		void* e;
+		if (!gexiv2_metadata_open_path(meta, path.toStringz, &e))
+		{
+			auto msg = e ? "cannot open for writing" : "cannot open";
+			if (e)
+				g_error_free(e);
+			return msg;
+		}
+	}
+	const(char)*[] values;
+	foreach (s; subjects)
+		values ~= s.toStringz;
+	values ~= null;
+	foreach (tag; subjectTags)
+	{
+		void* e;
+		if (subjects.length)
+			gexiv2_metadata_try_set_tag_multiple(meta, tag.ptr, values.ptr, &e);
+		else
+			gexiv2_metadata_try_clear_tag(meta, tag.ptr, &e);
+		if (e)
+			g_error_free(e);
+	}
+	import std.datetime : SysTime;
+	SysTime accessed, modified;
+	bool haveTimes;
+	try
+	{
+		getTimes(path, accessed, modified);
+		haveTimes = true;
+	}
+	catch (Exception)
+	{
+	}
+	{
+		void* e;
+		if (!gexiv2_metadata_save_file(meta, path.toStringz, &e))
+		{
+			if (e)
+				g_error_free(e);
+			return "save failed (read-only file or unsupported format?)";
+		}
+	}
+	if (haveTimes)
+		try
+			setTimes(path, accessed, modified);
+		catch (Exception)
+		{
+		}
+	return null;
 }
 
 ExifInfo readExif(string path)
@@ -116,6 +220,7 @@ ExifInfo readExif(string path)
 		if (e)
 			g_error_free(e);
 	}
+	info.keywords = readSubjects(meta);
 	return info;
 }
 

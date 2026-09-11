@@ -7,9 +7,11 @@ import std.json;
 import photowagon.core.ipc.protocol;
 import photowagon.core.library.keywords : KeywordService;
 import photowagon.core.library.photos : PhotoRepo;
+import photowagon.core.metadata.filetags : FileTagWriter;
 import photowagon.core.library.scenes : SceneService;
 
-void registerTagsApi(Registry r, SceneService scenes, KeywordService keywords = null, PhotoRepo photos = null)
+void registerTagsApi(Registry r, SceneService scenes, KeywordService keywords = null, PhotoRepo photos = null,
+		FileTagWriter fileTags = null)
 {
 	string[] stringsOf(JSONValue p, string key)
 	{
@@ -107,5 +109,23 @@ void registerTagsApi(Registry r, SceneService scenes, KeywordService keywords = 
 	r.add("keywords.rename", (JSONValue p) {
 		keywords.rename(requireString(p, "from"), requireString(p, "to"));
 		return obj();
+	});
+
+	if (fileTags is null)
+		return;
+
+	// {ids?} → {queued}: writes the library's tags (keywords, scene, mood, weather, holiday,
+	// place) into the files' XMP / IPTC keywords; every tagged local photo when ids is omitted
+	r.add("files.writeTags", (JSONValue p) {
+		auto ids = getLongArray(p, "ids");
+		long queued;
+		if (ids.length)
+		{
+			fileTags.enqueue(ids);
+			queued = ids.length;
+		}
+		else
+			queued = fileTags.enqueueAll();
+		return JSONValue(["queued": JSONValue(queued)]);
 	});
 }

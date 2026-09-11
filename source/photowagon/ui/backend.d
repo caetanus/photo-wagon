@@ -322,6 +322,22 @@ import photowagon.ui.transport : Bridge;
         reload(0, pageLimit);
     }
 
+    /// Writes the library's tags into these files ("[]" = every tagged photo).
+    @Slot void writeTagsToFiles(string photoIdsJson)
+    {
+        JSONValue ids;
+        try
+            ids = parseJSON(photoIdsJson);
+        catch (JSONException)
+            ids = JSONValue.emptyArray;
+        JSONValue params = JSONValue.emptyObject;
+        params["ids"] = ids;
+        client.request("files.writeTags", params, (r, e) {
+            if (e.type != JSONType.null_) { report("files.writeTags", e); return; }
+            setStatus(true, true, "writing tags into " ~ r["queued"].integer.to!string ~ " files…");
+        });
+    }
+
     @Slot void loadKeywords()
     {
         client.request("keywords.list", (r, e) {
@@ -678,6 +694,8 @@ import photowagon.ui.transport : Bridge;
             sp["limit"] = 120;
             client.request("photo.similar", sp, (r, e) {
                 if (e.type != JSONType.null_) { report("photo.similar", e); return; }
+                if (!fSimilar) return;
+                items.length = 0;   // one answer, not the sum of two in flight
                 foreach (it; r["items"].array)
                     items ~= it;
                 JSONValue pg = JSONValue.emptyObject;
@@ -1197,6 +1215,13 @@ import photowagon.ui.transport : Bridge;
             break;
         case "tags.done":
             setStatus(true, indexing, data["tagged"].integer.to!string ~ " of " ~ data["photos"].integer.to!string ~ " photos got a scene or mood");
+            break;
+        case "files.tags":
+            setStatus(true, true, "writing tags into files: " ~ data["done"].integer.to!string ~ " / " ~ data["total"].integer.to!string);
+            break;
+        case "files.tags.done":
+            setStatus(true, indexing, "tags written into " ~ data["written"].integer.to!string ~ " files"
+                ~ (data["failed"].integer ? ", " ~ data["failed"].integer.to!string ~ " failed" : ""));
             break;
         case "keywords.changed":
             loadKeywords();

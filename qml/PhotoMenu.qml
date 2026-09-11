@@ -20,6 +20,7 @@ Menu {
     signal addToAlbum(var ids)
     signal setPlace(var ids)
     signal addTags(var ids)
+    signal writeTags(var ids)
     signal setTag(var ids, string group, string tag)
     signal setKind(var ids, string kind)
     signal remove(var ids, bool permanent)
@@ -34,6 +35,7 @@ Menu {
     MenuItem { text: "Add to Album…" + menu.suffix; onTriggered: menu.addToAlbum(menu.ids) }
     MenuItem { text: "Set Place…" + menu.suffix; onTriggered: menu.setPlace(menu.ids) }
     MenuItem { text: "Add Tags…" + menu.suffix; onTriggered: menu.addTags(menu.ids) }
+    MenuItem { text: "Write Tags to File" + (menu.ids.length === 1 ? "" : "s") + menu.suffix; onTriggered: menu.writeTags(menu.ids) }
     MenuSeparator { }
     MenuItem { text: "Move to Trash" + menu.suffix; onTriggered: menu.remove(menu.ids, false) }
     MenuItem { text: "Delete Permanently…" + menu.suffix; onTriggered: menu.remove(menu.ids, true) }

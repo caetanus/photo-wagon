@@ -167,6 +167,8 @@ final class SceneService
 	private bool running, again, closed;
 	/// False when the model file is missing: the library gets no tags, nothing else changes.
 	bool available;
+	/// Called with the photos whose tags the user changed (the file tag writer listens).
+	void delegate(const(long)[] ids) onUserChange;
 
 	this(Config cfg, Database db, PhotoRepo photos, ContentStore store, Events events)
 	{
@@ -178,14 +180,14 @@ final class SceneService
 		vocab = builtinVocabulary();
 		if (getSetting(db, "tags_version") != tagsVersion.to!string)
 		{
-			db.exec("DELETE FROM photo_tags WHERE tag_by = 'auto' OR tag_by = 'date'");
+			db.exec("DELETE FROM photo_tags WHERE tag_by IN ('auto', 'date', 'file')");
 			setSetting(db, "tags_version", tagsVersion.to!string);
 		}
 		if (getSetting(db, "clip_version") != clipVersion.to!string)
 		{
 			db.exec("DELETE FROM photo_clip");
 			db.exec("DELETE FROM photo_vec");
-			db.exec("DELETE FROM photo_tags WHERE tag_by = 'auto' OR tag_by = 'date'");
+			db.exec("DELETE FROM photo_tags WHERE tag_by IN ('auto', 'date', 'file')");
 			setSetting(db, "clip_version", clipVersion.to!string);
 		}
 		// the model (350 MB) is loaded by the first pass, on a worker — not while the UI waits for the core
@@ -571,6 +573,8 @@ final class SceneService
 		});
 		if (events !is null)
 			events.emit("tags.changed", JSONValue.emptyObject);
+		if (onUserChange !is null)
+			onUserChange(ids);
 	}
 }
 

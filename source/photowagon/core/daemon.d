@@ -44,6 +44,7 @@ import photowagon.core.library.photos : PhotoRepo;
 import photowagon.core.library.places : Geocoder, PlaceService;
 import photowagon.core.library.scenes : SceneService;
 import photowagon.core.library.keywords : KeywordService;
+import photowagon.core.metadata.filetags : FileTagWriter, applyFileSubjects;
 import photowagon.core.library.roots : RootRepo;
 import photowagon.core.p2p.identity : loadOrCreateIdentity;
 import photowagon.core.p2p.node : Node;
@@ -74,6 +75,7 @@ final class Daemon : ServerControl
 	private KindService kinds;
 	private PlaceService places;
 	private SceneService scenes;
+	private FileTagWriter fileTags;
 	private Node node;
 	private Sharing sharing;
 	private bool stopped;
@@ -157,7 +159,15 @@ final class Daemon : ServerControl
 		registerFaceApi(registry, faceRepo, facesService, store, events);
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerPlacesApi(registry, places);
-		registerTagsApi(registry, scenes, new KeywordService(db, store, events), photos);
+		// tags in the files: what the user says goes into the XMP / IPTC keywords, what a
+		// file brings along comes into the library
+		fileTags = new FileTagWriter(db, events);
+		auto keywords = new KeywordService(db, store, events);
+		keywords.onUserChange = (const(long)[] ids) { fileTags.enqueue(ids); };
+		scenes.onUserChange = (const(long)[] ids) { fileTags.enqueue(ids); };
+		places.onUserChange = (const(long)[] ids) { fileTags.enqueue(ids); };
+		indexer.onFileSubjects = (long id, string[] subjects) { applyFileSubjects(db, id, subjects); };
+		registerTagsApi(registry, scenes, keywords, photos, fileTags);
 		registerEditApi(registry, cfg, photos, store, events, (string path) {
 			import std.string : startsWith;
 			foreach (root; roots.list())

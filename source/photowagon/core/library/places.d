@@ -165,6 +165,8 @@ final class PlaceService
 	private Geocoder geo;
 	private ContentStore store;
 	private Events events;
+	/// Called with the photos whose place the user set (the file tag writer listens).
+	void delegate(const(long)[] ids) onUserChange;
 
 	this(Database db, Geocoder geo, ContentStore store, Events events)
 	{
@@ -277,6 +279,8 @@ final class PlaceService
 		});
 		if (events !is null)
 			events.emit("places.changed", JSONValue.emptyObject);
+		if (onUserChange !is null)
+			onUserChange(ids);
 	}
 
 	/// `{places: [{place, country}]}` for a name being typed: the library's own

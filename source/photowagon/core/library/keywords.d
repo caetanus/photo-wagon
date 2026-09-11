@@ -21,6 +21,8 @@ final class KeywordService
 	private Database db;
 	private ContentStore store;
 	private Events events;
+	/// Called with the photos whose keywords the user changed (the file tag writer listens).
+	void delegate(const(long)[] ids) onUserChange;
 
 	this(Database db, ContentStore store, Events events)
 	{
@@ -106,6 +108,8 @@ final class KeywordService
 		});
 		if (events !is null)
 			events.emit("keywords.changed", JSONValue.emptyObject);
+		if (onUserChange !is null)
+			onUserChange(ids);
 	}
 
 	void remove(long[] ids, string keyword)
@@ -124,6 +128,8 @@ final class KeywordService
 		});
 		if (events !is null)
 			events.emit("keywords.changed", JSONValue.emptyObject);
+		if (onUserChange !is null)
+			onUserChange(ids);
 	}
 
 	/// Renames a keyword everywhere (merges into an existing one).
@@ -142,6 +148,15 @@ final class KeywordService
 		});
 		if (events !is null)
 			events.emit("keywords.changed", JSONValue.emptyObject);
+		if (onUserChange !is null)
+		{
+			long[] ids;
+			auto q = db.prepare("SELECT photo_id FROM photo_keywords WHERE keyword = ?");
+			q.bind(1, to);
+			while (q.step())
+				ids ~= q.getLong(0);
+			onUserChange(ids);
+		}
 	}
 }
 

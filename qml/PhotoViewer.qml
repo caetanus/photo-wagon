@@ -36,6 +36,55 @@ Item {
     signal fullscreenToggle()
     signal contextMenu(int id, string path, bool favorite)
     signal remove(var ids, bool permanent)
+    signal renamePerson(int personId, string name)
+
+    // Right-click on a face: what to do with the tag.
+    Menu {
+        id: faceMenu
+        property int faceId: 0
+        property int personId: 0
+        property string name: ""
+        MenuItem { text: faceMenu.personId ? "Change who this is…" : "Name…"; onTriggered: { namer.faceId = faceMenu.faceId; namer.currentName = faceMenu.name; namer.personId = faceMenu.personId; namer.open() } }
+        MenuItem { visible: faceMenu.personId > 0; height: visible ? implicitHeight : 0; text: "Rename " + faceMenu.name + "…"; onTriggered: { renamer.personId = faceMenu.personId; renamer.name = faceMenu.name; renamer.open() } }
+        MenuItem { visible: faceMenu.personId > 0; height: visible ? implicitHeight : 0; text: "Use as portrait"; onTriggered: viewer.setCover(faceMenu.personId, faceMenu.faceId) }
+        MenuSeparator { }
+        MenuItem { visible: faceMenu.personId > 0; height: visible ? implicitHeight : 0; text: "Remove tag"; onTriggered: viewer.nameFace(faceMenu.faceId, 0, "") }
+        MenuItem { text: "Not a face"; onTriggered: viewer.notAFace(faceMenu.faceId) }
+    }
+    /// capture hook: the face menu for the first face
+    property alias faceMenuBody: faceMenu.contentItem
+    function openFaceMenu() { if (faces.length) faceMenuFor(faces[0]) }
+    function faceMenuFor(f) { faceMenu.faceId = f.id; faceMenu.personId = f.personId || 0; faceMenu.name = f.name || ""; faceMenu.popup() }
+
+    // "Rename Patricia…": the person's name everywhere.
+    Popup {
+        id: renamer
+        property int personId: 0
+        property string name: ""
+        modal: true
+        anchors.centerIn: parent
+        width: 320
+        padding: 16
+        background: Rectangle { color: theme.panel; border.color: theme.separator; radius: 10 }
+        onOpened: { renameField.text = name; renameField.forceActiveFocus(); renameField.selectAll() }
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 10
+            Label { text: "Rename " + renamer.name; font.bold: true; color: theme.text }
+            TextField {
+                id: renameField
+                Layout.fillWidth: true
+                placeholderText: "Name"
+                onAccepted: { if (text.trim().length) viewer.renamePerson(renamer.personId, text.trim()); renamer.close() }
+            }
+            Label { text: "A name that already exists merges the two people."; color: theme.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            RowLayout {
+                Item { Layout.fillWidth: true }
+                Button { text: "Cancel"; onClicked: renamer.close() }
+                Button { text: "Rename"; highlighted: true; enabled: renameField.text.trim().length > 0; onClicked: renameField.accepted() }
+            }
+        }
+    }
     /// parsed library.candidates, for the naming popup
     property var candidates: ({ faceId: 0, people: [] })
     /// parsed library.region: the visible part at full resolution while zoomed
@@ -223,6 +272,7 @@ Item {
                         }
                     }
                     TapHandler { onTapped: { namer.faceId = fbox.modelData.id; namer.currentName = fbox.modelData.name || ""; namer.personId = fbox.modelData.personId || 0; namer.open() } }
+                    TapHandler { acceptedButtons: Qt.RightButton; onTapped: viewer.faceMenuFor(fbox.modelData) }
                 }
             }
         }
@@ -463,6 +513,7 @@ Item {
                                 }
                                 Rectangle { anchors.fill: parent; radius: width / 2; color: "transparent"; border.color: theme.separator; border.width: 1 }
                                 TapHandler { onTapped: { namer.faceId = pf.modelData.id; namer.currentName = pf.modelData.name || ""; namer.personId = pf.modelData.personId || 0; namer.open() } }
+                                TapHandler { acceptedButtons: Qt.RightButton; onTapped: viewer.faceMenuFor(pf.modelData) }
                             }
                             Label {
                                 anchors.horizontalCenter: parent.horizontalCenter

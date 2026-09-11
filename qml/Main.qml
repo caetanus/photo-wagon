@@ -431,6 +431,7 @@ ApplicationWindow {
                 onSetCover: (personId, faceId) => library.setPersonCover(personId, faceId)
                 onContextMenu: (id, path, fav) => { photoMenu.ids = [id]; photoMenu.path = path; photoMenu.favorite = fav; photoMenu.popup() }
                 onRemove: (ids, permanent) => root.removePhotos(ids, permanent)
+                onRenamePerson: (id, name) => library.renamePerson(id, name)
                 onClosed: library.closePhoto()
                 onOpenIndex: (i) => {
                     if (i < root.pageData.items.length) library.openPhoto(root.pageData.items[i].id)
@@ -587,7 +588,7 @@ ApplicationWindow {
                 const ab = library.shotView.substring(7).split("-")
                 grid.anchor = parseInt(ab[0]); grid.selectRange(parseInt(ab[1]))
             }
-            else if (library.shotView === "menu") {}
+            else if (library.shotView === "menu" || library.shotView === "facemenu") {}
             else root.mode = library.shotView
         }
     }
@@ -608,6 +609,12 @@ ApplicationWindow {
         property bool applied: false
         onTriggered: { if (applied) return; applied = true; viewer.resetZoom(); root.fullscreen = false; console.log("shot: left full screen, visibility", root.visibility, "sidebar", sidebar.visible) }
     }
+    Timer {   // PW_SHOT_VIEW=facemenu with PW_SHOT_OPEN: the face menu of the first face
+        running: library.shotPath.length > 0 && library.shotView === "facemenu" && root.viewing && root.facesData.length > 0
+        interval: 1200
+        property bool applied: false
+        onTriggered: { if (applied) return; applied = true; viewer.openFaceMenu() }
+    }
     Timer {   // PW_SHOT_VIEW=menu: the context menu over the first photo
         running: library.shotPath.length > 0 && library.shotView === "menu" && root.pageData.items.length > 0
         interval: 1500
@@ -616,7 +623,7 @@ ApplicationWindow {
     Timer {
         running: library.shotPath.length > 0
         interval: 3500
-        onTriggered: (library.shotSend ? phonePanel.body : library.shotView.startsWith("name:") ? viewer.namerBody : library.shotView === "menu" ? photoMenu.contentItem : shell).grabToImage(function (r) {
+        onTriggered: (library.shotSend ? phonePanel.body : library.shotView.startsWith("name:") ? viewer.namerBody : library.shotView === "menu" ? photoMenu.contentItem : library.shotView === "facemenu" ? viewer.faceMenuBody : shell).grabToImage(function (r) {
             r.saveToFile(library.shotPath)
             console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length, "source", root.source, "filter", library.filter)
             library.quit()

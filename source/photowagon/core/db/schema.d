@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 9;
+enum currentVersion = 10;
 
 void migrate(Database db)
 {
@@ -31,6 +31,8 @@ void migrate(Database db)
 			db.exec(schemaV8);
 		if (have < 9)
 			db.exec(schemaV9);
+		if (have < 10)
+			db.exec(schemaV10);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -164,6 +166,11 @@ CREATE TABLE photo_keywords (                      -- the user's own tags, any n
     PRIMARY KEY (photo_id, keyword)
 );
 CREATE INDEX photo_keywords_keyword ON photo_keywords(keyword);
+`;
+
+private enum schemaV10 = `
+ALTER TABLE photos ADD COLUMN edits TEXT;          -- edit/edits.d JSON; NULL = untouched
+ALTER TABLE photos ADD COLUMN edited_hash TEXT;    -- the rendered result in the store (full size JPEG)
 `;
 
 /// Small persisted flags (e.g. which clustering rule the faces were grouped by).

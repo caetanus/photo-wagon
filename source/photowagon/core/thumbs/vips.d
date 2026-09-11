@@ -25,6 +25,18 @@ private extern (C) nothrow @nogc
 	int vips_cast_uchar(void* in_, void** out_, ...);
 	int vips_image_get_bands(const void* image);
 	void* vips_image_write_to_memory(void* in_, size_t* size);
+	int vips_rot(void* in_, void** out_, int angle, ...);
+	int vips_flip(void* in_, void** out_, int direction, ...);
+	int vips_cast(void* in_, void** out_, int format, ...);
+	int vips_linear(void* in_, void** out_, const(double)* a, const(double)* b, int n, ...);
+	int vips_recomb(void* in_, void** out_, void* m, ...);
+	int vips_multiply(void* left, void* right, void** out_, ...);
+	int vips_sharpen(void* in_, void** out_, ...);
+	void* vips_image_new_matrix_from_array(int width, int height, const(double)* array, int size);
+	void* vips_image_new_from_memory_copy(const(void)* data, size_t size, int width, int height, int bands, int format);
+	int vips_image_get_format(const void* image);
+	int vips_copy(void* in_, void** out_, ...);
+	void* vips_image_new_from_buffer(const(void)* buf, size_t len, const char* option_string, ...);
 	const(char)* vips_error_buffer();
 	void vips_error_clear();
 	void g_object_unref(void* obj);
@@ -100,6 +112,225 @@ ThumbResult makeThumbnail(string source, string storeRoot, int size)
 	r.hash = storeBytes(storeRoot, (cast(ubyte*) buf)[0 .. len]);
 	r.ok = true;
 	return r;
+}
+
+// ---- edits ---------------------------------------------------------------------
+
+import photowagon.core.edit.edits : Edits;
+
+/// `source` with `edits` applied (edit/edits.d), as a JPEG whose longest edge is at
+/// most `maxEdge` (0 = full size). Rotation and flips first, then the crop in the
+/// rotated frame, then colour. Worker-safe. Throws on failure.
+ubyte[] renderEdited(string source, Edits e, int maxEdge, int quality)
+{
+	import std.algorithm : max, min;
+	import std.math : sqrt;
+
+	void check(int rc, string what)
+	{
+		if (rc != 0)
+			throw new Exception(what ~ ": " ~ vipsError());
+	}
+
+	// 1. load, EXIF-rotated; a preview shrinks while decoding
+	void* img;
+	if (maxEdge > 0)
+	{
+		// the crop can only enlarge what is shown: decode a little bigger than asked
+		immutable decodeEdge = e.hasCrop() ? cast(int) min(maxEdge / max(0.15, min(e.cropW, e.cropH)), 8192.0) : maxEdge;
+		check(vips_thumbnail(source.toStringz, &img, decodeEdge, "height".ptr, decodeEdge, null), "thumbnail");
+	}
+	else
+	{
+		auto raw = vips_image_new_from_file(source.toStringz, null);
+		if (raw is null)
+			throw new Exception("cannot open: " ~ vipsError());
+		scope (exit)
+			g_object_unref(raw);
+		check(vips_autorot(raw, &img, null), "autorot");
+	}
+	void* cur = img; // the current head of the pipeline; each step replaces it
+	void step(int rc, void* next, string what)
+	{
+		if (rc != 0)
+			throw new Exception(what ~ ": " ~ vipsError());
+		g_object_unref(cur);
+		cur = next;
+	}
+
+	scope (exit)
+		g_object_unref(cur);
+
+	// 2. sRGB, no alpha
+	{
+		void* n;
+		step(vips_colourspace(cur, &n, 22 /* VIPS_INTERPRETATION_sRGB */, null), n, "colourspace");
+		if (vips_image_get_bands(cur) == 4)
+			step(vips_flatten(cur, &n, null), n, "flatten");
+	}
+	// 3. geometry
+	if (e.rotate % 360)
+	{
+		void* n;
+		step(vips_rot(cur, &n, e.rotate / 90 /* VIPS_ANGLE_D90 = 1 … */, null), n, "rot");
+	}
+	if (e.flipH)
+	{
+		void* n;
+		step(vips_flip(cur, &n, 0 /* horizontal */, null), n, "flip");
+	}
+	if (e.flipV)
+	{
+		void* n;
+		step(vips_flip(cur, &n, 1 /* vertical */, null), n, "flip");
+	}
+	if (e.hasCrop())
+	{
+		immutable W = vips_image_get_width(cur), H = vips_image_get_height(cur);
+		immutable left = max(0, cast(int)(e.cropX * W)), top = max(0, cast(int)(e.cropY * H));
+		immutable w = min(cast(int)(e.cropW * W + 0.5), W - left), h = min(cast(int)(e.cropH * H + 0.5), H - top);
+		if (w >= 2 && h >= 2)
+		{
+			void* n;
+			step(vips_extract_area(cur, &n, left, top, w, h, null), n, "crop");
+		}
+	}
+	if (maxEdge > 0)
+	{
+		immutable W = vips_image_get_width(cur), H = vips_image_get_height(cur);
+		if (max(W, H) > maxEdge)
+		{
+			void* n;
+			step(vips_resize(cur, &n, cast(double) maxEdge / max(W, H), null), n, "resize");
+		}
+	}
+	// 4. colour, in float
+	if (e.hasColour())
+	{
+		void* n;
+		step(vips_cast(cur, &n, 6 /* VIPS_FORMAT_FLOAT */, null), n, "cast");
+		// saturation, warmth and sepia are one 3×3 matrix: rows = output channels
+		{
+			immutable s = e.saturation >= 0 ? 1 + e.saturation : 1 + e.saturation; // -1 → 0 (grey), 1 → 2
+			immutable lr = 0.2126, lg = 0.7152, lb = 0.0722;
+			double[9] m = [
+				lr + (1 - lr) * s, lg * (1 - s), lb * (1 - s),
+				lr * (1 - s), lg + (1 - lg) * s, lb * (1 - s),
+				lr * (1 - s), lg * (1 - s), lb + (1 - lb) * s,
+			];
+			// warmth: more red and a little green, less blue (and the other way round)
+			immutable wr = 1 + 0.16 * e.warmth, wg = 1 + 0.04 * e.warmth, wb = 1 - 0.16 * e.warmth;
+			foreach (i; 0 .. 3)
+			{
+				m[i] *= wr;
+				m[3 + i] *= wg;
+				m[6 + i] *= wb;
+			}
+			if (e.sepia > 0)
+			{
+				// blend towards the classic sepia matrix
+				immutable double[9] sep = [0.393, 0.769, 0.189, 0.349, 0.686, 0.168, 0.272, 0.534, 0.131];
+				foreach (i; 0 .. 9)
+					m[i] = m[i] * (1 - e.sepia) + sep[i] * e.sepia;
+			}
+			auto mat = vips_image_new_matrix_from_array(3, 3, m.ptr, 9);
+			if (mat is null)
+				throw new Exception("matrix: " ~ vipsError());
+			scope (exit)
+				g_object_unref(mat);
+			step(vips_recomb(cur, &n, mat, null), n, "recomb");
+		}
+		// brightness, contrast, fade: out = a·x + b
+		{
+			immutable c = e.contrast >= 0 ? 1 + e.contrast * 1.2 : 1 + e.contrast * 0.6;
+			double a = c, b = 128 * (1 - c) + 255 * 0.45 * e.brightness;
+			// fade lifts the blacks and softens the whites
+			a *= 1 - 0.35 * e.fade;
+			b += 255 * 0.18 * e.fade;
+			double[3] av = [a, a, a], bv = [b, b, b];
+			step(vips_linear(cur, &n, av.ptr, bv.ptr, 3, null), n, "linear");
+		}
+		if (e.vignette > 0)
+		{
+			// a small radial mask, resized to the picture: 1 in the middle, darker at the corners
+			enum N = 64;
+			float[N * N] mask;
+			foreach (y; 0 .. N)
+				foreach (x; 0 .. N)
+				{
+					immutable dx = (x + 0.5) / N - 0.5, dy = (y + 0.5) / N - 0.5;
+					immutable r = sqrt(dx * dx + dy * dy) / 0.7071; // 0 centre, 1 corner
+					immutable t = r < 0.35 ? 0 : (r - 0.35) / 0.65;
+					mask[y * N + x] = cast(float)(1 - e.vignette * 0.85 * t * t);
+				}
+			auto small = vips_image_new_from_memory_copy(mask.ptr, mask.length * float.sizeof, N, N, 1, 6 /* float */);
+			if (small is null)
+				throw new Exception("mask: " ~ vipsError());
+			scope (exit)
+				g_object_unref(small);
+			immutable W = vips_image_get_width(cur), H = vips_image_get_height(cur);
+			void* big;
+			check(vips_resize(small, &big, cast(double) W / N, "vscale".ptr, cast(double) H / N, null), "mask resize");
+			scope (exit)
+				g_object_unref(big);
+			// the resize may land a pixel off: crop the mask to the picture
+			void* fit;
+			check(vips_extract_area(big, &fit, 0, 0, min(W, vips_image_get_width(big)), min(H, vips_image_get_height(big)), null), "mask fit");
+			scope (exit)
+				g_object_unref(fit);
+			if (vips_image_get_width(fit) == W && vips_image_get_height(fit) == H)
+				step(vips_multiply(cur, fit, &n, null), n, "vignette");
+		}
+		step(vips_cast_uchar(cur, &n, null), n, "cast");
+		if (e.sharpen > 0)
+			step(vips_sharpen(cur, &n, "sigma".ptr, 1.0 + e.sharpen, "m2".ptr, 2.0 + 4.0 * e.sharpen, null), n, "sharpen");
+	}
+	// 5. JPEG
+	void* buf;
+	size_t len;
+	check(vips_jpegsave_buffer(cur, &buf, &len, "Q".ptr, quality, "strip".ptr, 1, null), "jpegsave");
+	scope (exit)
+		g_free(buf);
+	return (cast(ubyte*) buf)[0 .. len].dup;
+}
+
+/// A thumbnail (longest edge `size`) of JPEG bytes, stored; returns the hash and the size.
+ThumbResult thumbnailOfBytes(const(ubyte)[] bytes, string storeRoot, int size)
+{
+	ThumbResult r;
+	void* thumb;
+	if (vips_thumbnail_buffer(cast(void*) bytes.ptr, bytes.length, &thumb, size, "height".ptr, size, null) != 0)
+	{
+		r.error = "thumbnail: " ~ vipsError();
+		return r;
+	}
+	scope (exit)
+		g_object_unref(thumb);
+	r.width = vips_image_get_width(thumb);
+	r.height = vips_image_get_height(thumb);
+	void* buf;
+	size_t len;
+	if (vips_jpegsave_buffer(thumb, &buf, &len, "Q".ptr, 84, "strip".ptr, 1, null) != 0)
+	{
+		r.error = "jpegsave: " ~ vipsError();
+		return r;
+	}
+	scope (exit)
+		g_free(buf);
+	r.hash = storeBytes(storeRoot, (cast(ubyte*) buf)[0 .. len]);
+	r.ok = true;
+	return r;
+}
+
+/// Width and height of a JPEG in memory (header only).
+int[2] jpegSize(const(ubyte)[] bytes)
+{
+	auto img = vips_image_new_from_buffer(bytes.ptr, bytes.length, "".ptr, null);
+	if (img is null)
+		throw new Exception("size: " ~ vipsError());
+	scope (exit)
+		g_object_unref(img);
+	return [vips_image_get_width(img), vips_image_get_height(img)];
 }
 
 /// A JPEG of `source` whose longest edge is at most `maxEdge`, EXIF-rotated,

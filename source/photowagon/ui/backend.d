@@ -26,6 +26,9 @@ import photowagon.ui.transport : Bridge;
     Signal!() placesChanged;
     Signal!() tagsChanged;
     Signal!() keywordsChanged;
+    Signal!() presetsChanged;
+    Signal!() previewChanged;
+    Signal!() presetPreviewsChanged;
     Signal!() tagLabelsChanged;
     Signal!() photoTagsChanged;
     Signal!() placeSuggestionsChanged;
@@ -87,6 +90,12 @@ import photowagon.ui.transport : Bridge;
     @Property("tagLabelsChanged") string tagLabels = `{"scene":[],"mood":[],"weather":[],"holiday":[]}`;
     /// keywords.list: {"keywords":[{keyword,count,cover}]} — the user's own tags, most photos first
     @Property("keywordsChanged") string keywords = `{"keywords":[]}`;
+    /// edit.presets: {"presets":[{name, edits}]} — the filters of the edit panel
+    @Property("presetsChanged") string presets = `{"presets":[]}`;
+    /// the last photo.preview: {"id","url","width","height","seq"}
+    @Property("previewChanged") string preview = `{"id":0}`;
+    /// photo.presetPreviews of the photo being edited: {"id","items":[{name,url,edits}]}
+    @Property("presetPreviewsChanged") string presetPreviews = `{"id":0,"items":[]}`;
     /// photo.tags of the open photo: {"id", <group>: tag, "by": {group: auto|date|user}, "scores": {group: [{tag,prob}]}}
     @Property("photoTagsChanged") string photoTags = `{"id":0}`;
     /// {"photoId":N,"faces":[{id,x,y,w,h,personId,name,thumbUrl}]} for the open photo.
@@ -341,6 +350,101 @@ import photowagon.ui.transport : Bridge;
         params["keyword"] = keyword;
         client.request("photo.removeKeyword", params, (r, e) {
             if (e.type != JSONType.null_) { report("photo.removeKeyword", e); return; }
+        });
+    }
+
+    // ---- editing --------------------------------------------------------------------
+
+    @Slot void loadPresets()
+    {
+        client.request("edit.presets", (r, e) {
+            if (e.type != JSONType.null_) return;
+            presets = r.toString();
+            presetsChanged.emit();
+        });
+    }
+
+    private long previewSeq;
+
+    /// A preview of `editsJson` on photo `id` (≤ 1600 px), answered through `preview`.
+    @Slot void previewEdits(int id, string editsJson)
+    {
+        JSONValue params = JSONValue.emptyObject;
+        params["id"] = id;
+        try
+            params["edits"] = parseJSON(editsJson);
+        catch (JSONException)
+            params["edits"] = JSONValue.emptyObject;
+        immutable seq = ++previewSeq;
+        client.request("photo.preview", params, (r, e) {
+            if (e.type != JSONType.null_) { report("photo.preview", e); return; }
+            if (seq != previewSeq || id != openId) return;   // a newer request is on its way
+            r["id"] = id;
+            r["seq"] = seq;
+            preview = r.toString();
+            previewChanged.emit();
+        });
+    }
+
+    /// Every filter on photo `id`, small, with the geometry of `editsJson` kept.
+    @Slot void loadPresetPreviews(int id, string editsJson)
+    {
+        JSONValue params = JSONValue.emptyObject;
+        params["id"] = id;
+        try
+            params["edits"] = parseJSON(editsJson);
+        catch (JSONException)
+            params["edits"] = JSONValue.emptyObject;
+        params["maxEdge"] = 160;
+        client.request("photo.presetPreviews", params, (r, e) {
+            if (e.type != JSONType.null_) { report("photo.presetPreviews", e); return; }
+            if (id != openId) return;
+            r["id"] = id;
+            presetPreviews = r.toString();
+            presetPreviewsChanged.emit();
+        });
+    }
+
+    /// Keeps the result in the library (the file is untouched).
+    @Slot void applyEdits(int id, string editsJson)
+    {
+        JSONValue params = JSONValue.emptyObject;
+        params["id"] = id;
+        try
+            params["edits"] = parseJSON(editsJson);
+        catch (JSONException)
+            params["edits"] = JSONValue.emptyObject;
+        setStatus(true, true, "saving the edit…");
+        client.request("photo.applyEdits", params, (r, e) {
+            if (e.type != JSONType.null_) { report("photo.applyEdits", e); return; }
+            setStatus(true, indexing, "edit saved");
+            if (id == openId) openPhoto(id);
+        });
+    }
+
+    @Slot void revertEdits(int id)
+    {
+        JSONValue params = ["id": JSONValue(id)];
+        client.request("photo.revertEdits", params, (r, e) {
+            if (e.type != JSONType.null_) { report("photo.revertEdits", e); return; }
+            setStatus(true, indexing, "back to the original");
+            if (id == openId) openPhoto(id);
+        });
+    }
+
+    /// A JPEG next to the original, indexed like any other file.
+    @Slot void saveCopy(int id, string editsJson)
+    {
+        JSONValue params = JSONValue.emptyObject;
+        params["id"] = id;
+        try
+            params["edits"] = parseJSON(editsJson);
+        catch (JSONException)
+            params["edits"] = JSONValue.emptyObject;
+        setStatus(true, true, "writing the copy…");
+        client.request("photo.saveCopy", params, (r, e) {
+            if (e.type != JSONType.null_) { report("photo.saveCopy", e); return; }
+            setStatus(true, indexing, "copy saved: " ~ r["path"].str);
         });
     }
 
@@ -610,6 +714,7 @@ import photowagon.ui.transport : Bridge;
     @Slot void refresh()
     {
         loadPlaces();
+        loadPresets();
         loadKeywords();
         loadTags();
         loadTagLabels();

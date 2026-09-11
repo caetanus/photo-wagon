@@ -16,6 +16,7 @@ import libp2p.util.fibers : FiberGroup;
 
 import photowagon.core.api.album_api : registerAlbumApi;
 import photowagon.core.api.daemon_api : registerDaemonApi;
+import photowagon.core.api.edit_api : registerEditApi;
 import photowagon.core.api.face_api : registerFaceApi;
 import photowagon.core.api.import_api : registerImportApi;
 import photowagon.core.api.library_api : registerLibraryApi;
@@ -157,6 +158,12 @@ final class Daemon : ServerControl
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerPlacesApi(registry, places);
 		registerTagsApi(registry, scenes, new KeywordService(db, store, events));
+		registerEditApi(registry, cfg, photos, store, events, (string path) {
+			import std.string : startsWith;
+			foreach (root; roots.list())
+				if (path.startsWith(root.path))
+					indexer.start(root.id, root.path);
+		});
 		registerP2pApi(registry, node, sharing);
 		if (node !is null)
 			new IpcOverP2p(node.host, registry, events, token);   // the phone's way in over libp2p

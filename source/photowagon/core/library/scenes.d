@@ -187,13 +187,11 @@ final class SceneService
 			db.exec("DELETE FROM photo_tags WHERE tag_by = 'auto' OR tag_by = 'date'");
 			setSetting(db, "clip_version", clipVersion.to!string);
 		}
-		try
-		{
-			initClip(cfg.clipModel);
-			available = true;
-		}
-		catch (Exception e)
-			logWarn("scenes: %s — scenes and moods are off (put the model in %s)", e.msg, cfg.modelsDir);
+		// the model (350 MB) is loaded by the first pass, on a worker — not while the UI waits for the core
+		import std.file : exists;
+		available = cfg.clipModel.exists;
+		if (!available)
+			logWarn("scenes: no model at %s — scenes and moods are off", cfg.clipModel);
 		jobs = new FiberGroup((Exception e) nothrow {
 			try
 				logWarn("scenes: job failed: %s", e.msg);
@@ -249,8 +247,33 @@ final class SceneService
 		return out_;
 	}
 
+	private bool loaded;
+
+	/// `initClip` for `async`, which wants a value back.
+	private static bool loadClip(string path)
+	{
+		initClip(path);
+		return true;
+	}
+
 	private void run()
 	{
+		if (!loaded)
+		{
+			try
+			{
+				auto started = MonoTime.currTime;
+				async(&loadClip, cfg.clipModel).getResult();
+				loaded = true;
+				logInfo("scenes: CLIP model loaded in %.1fs", (MonoTime.currTime - started).total!"msecs" / 1000.0);
+			}
+			catch (Exception e)
+			{
+				logWarn("scenes: %s — scenes and moods are off", e.msg);
+				available = false;
+				return;
+			}
+		}
 		// 1. embeddings for the new photos
 		auto ids = pending();
 		auto started = MonoTime.currTime, lastReport = started;

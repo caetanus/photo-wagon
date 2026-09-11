@@ -173,6 +173,25 @@ Father's, Children's and Valentine's Day on the Brazilian dates; `by: "date"`). 
 | `photo.removeKeyword` | `{ids, keyword}` | `{}` (case-insensitive) |
 | `keywords.rename` | `{from, to}` | `{}` — everywhere; merges into `to` when it exists |
 
+### editing (filters, adjustments, rotation, crop)
+
+Edits are a small JSON value (`{rotate, flipH, flipV, crop: [x, y, w, h] | null, brightness,
+contrast, saturation, warmth, fade, vignette, sharpen, sepia, preset}`; geometry first, crop
+as fractions of the rotated picture, colours −1..1 or 0..1). The core renders them with
+libvips; the original file is never written to.
+
+| method | params | result |
+|---|---|---|
+| `edit.presets` | — | `{presets: [{name, edits}]}` — the filters of the panel (Original, Vivid, Warm, Cool, Bright, Fade, Vintage, Drama, Chrome, Mono, Noir, Sepia) |
+| `photo.preview` | `{id, edits, maxEdge?}` | `{url, width, height}` — a JPEG (≤ 1600 px by default) in the runtime dir; the previous preview of the photo is dropped |
+| `photo.presetPreviews` | `{id, edits?, maxEdge?}` | `{items: [{name, url, edits}]}` — every filter on this photo, small, the geometry of `edits` kept |
+| `photo.applyEdits` | `{id, edits}` | `Photo` — renders the result at full size into the store (`editedUrl`), re-thumbnails, keeps `edits`; identity edits revert |
+| `photo.revertEdits` | `{id}` | `Photo` — back to the original |
+| `photo.saveCopy` | `{id, edits?}` | `{path}` — a JPEG next to the original (`name-edited.jpg`), indexed like any file |
+
+`Photo` carries `edits` (or null) and `editedUrl`; the viewer shows `editedUrl` when it is
+there, and `photo.region` reads the edited result too.
+
 ### albums
 
 | method | params | result |

@@ -58,6 +58,75 @@ Item {
     signal filterKeyword(string keyword)
     signal addKeywords(int id, string text)
     signal removeKeyword(int id, string keyword)
+    /// Editing: previews and results come back through `preview` / `presetPreviews` / the photo.
+    signal previewRequest(int id, string editsJson)
+    signal presetPreviewRequest(int id, string editsJson)
+    signal applyEdits(int id, string editsJson)
+    signal revertEdits(int id)
+    signal saveCopy(int id, string editsJson)
+
+    // ---- editing state -----------------------------------------------------------------
+    property bool editing: false
+    property int editingId: 0
+    property string tool: "filters"
+    property var edits: ({})
+    property var presets: []
+    property var preview: ({ id: 0 })
+    property var presetPreviews: ({ id: 0, items: [] })
+    property real cropAspect: 0
+    readonly property var emptyEdits: ({ rotate: 0, flipH: false, flipV: false, crop: null, brightness: 0, contrast: 0,
+                                         saturation: 0, warmth: 0, fade: 0, vignette: 0, sharpen: 0, sepia: 0, preset: null })
+    function startEdit() {
+        if (!viewer.photo || !viewer.photo.fileUrl) return
+        viewer.resetZoom()
+        viewer.edits = Object.assign({}, emptyEdits, viewer.photo.edits || {})
+        viewer.editingId = viewer.photo.id
+        viewer.editing = true
+        viewer.requestPreview()
+        viewer.presetPreviewRequest(viewer.photo.id, JSON.stringify(viewer.edits))
+    }
+    function endEdit() { viewer.editing = false; viewer.forceActiveFocus() }
+    /// The edits the preview shows: while cropping, the whole rotated picture (the frame is drawn on top).
+    function previewEdits() {
+        const e = Object.assign({}, viewer.edits)
+        if (viewer.tool === "crop") e.crop = null
+        return e
+    }
+    function requestPreview() { previewDebounce.restart() }
+    Timer { id: previewDebounce; interval: 120; onTriggered: if (viewer.editing && viewer.photo) viewer.previewRequest(viewer.photo.id, JSON.stringify(viewer.previewEdits())) }
+    function setEdits(e) { viewer.edits = e; viewer.requestPreview() }
+    onToolChanged: if (editing) requestPreview()
+    /// Rotation swaps the crop frame's axes so it keeps framing the same pixels.
+    function rotateBy(deg) {
+        const e = Object.assign({}, viewer.edits)
+        e.rotate = (((e.rotate || 0) + deg) % 360 + 360) % 360
+        if (e.crop) {
+            const c = e.crop
+            e.crop = deg > 0 ? [1 - c[1] - c[3], c[0], c[3], c[2]] : [c[1], 1 - c[0] - c[2], c[3], c[2]]
+        }
+        viewer.setEdits(e)
+        viewer.presetPreviewRequest(viewer.photo.id, JSON.stringify(e))
+    }
+    function flipBy(axis) {
+        const e = Object.assign({}, viewer.edits)
+        if (axis === "h") { e.flipH = !e.flipH; if (e.crop) e.crop = [1 - e.crop[0] - e.crop[2], e.crop[1], e.crop[2], e.crop[3]] }
+        else { e.flipV = !e.flipV; if (e.crop) e.crop = [e.crop[0], 1 - e.crop[1] - e.crop[3], e.crop[2], e.crop[3]] }
+        viewer.setEdits(e)
+        viewer.presetPreviewRequest(viewer.photo.id, JSON.stringify(e))
+    }
+    /// A crop of the given aspect (0 = free), centred, as large as fits.
+    function cropToAspect(ratio) {
+        viewer.cropAspect = ratio
+        const e = Object.assign({}, viewer.edits)
+        if (ratio <= 0) { viewer.setEdits(e); return }
+        const pw = viewer.paintedW, ph = viewer.paintedH
+        if (pw <= 0 || ph <= 0) return
+        let w = 1, h = 1
+        if (pw / ph > ratio) w = (ph * ratio) / pw; else h = (pw / ratio) / ph
+        e.crop = [(1 - w) / 2, (1 - h) / 2, w, h]
+        viewer.setEdits(e)
+    }
+    function resetCrop() { const e = Object.assign({}, viewer.edits); e.crop = null; viewer.cropAspect = 0; viewer.setEdits(e) }
 
     // Right-click on a face: what to do with the tag.
     Menu {
@@ -122,7 +191,7 @@ Item {
         if (zoom === 1) { panX = 0; panY = 0 }
     }
     function resetZoom() { zoom = 1; panX = 0; panY = 0 }
-    onPhotoChanged: resetZoom()
+    onPhotoChanged: { if (editing && photo && photo.id === editingId) return; resetZoom(); if (editing) endEdit() }
     onZoomChanged: regionTimer.restart()
     onPanXChanged: regionTimer.restart()
     onPanYChanged: regionTimer.restart()
@@ -160,8 +229,10 @@ Item {
 
     focus: visible
     Keys.onPressed: (event) => {
+        if (event.key === Qt.Key_E && !viewer.editing && viewer.photo) { viewer.startEdit(); event.accepted = true; return }
         if (event.key === Qt.Key_Escape) {
-            if (viewer.zoom !== 1) viewer.resetZoom()
+            if (viewer.editing) viewer.endEdit()
+            else if (viewer.zoom !== 1) viewer.resetZoom()
             else if (viewer.fullscreen) viewer.fullscreenToggle()
             else viewer.closed()
             event.accepted = true
@@ -186,7 +257,7 @@ Item {
         id: stage
         anchors.top: parent.top
         anchors.left: parent.left
-        anchors.right: info.visible ? info.left : parent.right
+        anchors.right: info.visible ? info.left : editPanel.visible ? editPanel.left : parent.right
         anchors.bottom: caption.top
 
         Image {
@@ -197,7 +268,10 @@ Item {
             y: 12 + viewer.panY
             scale: viewer.zoom
             transformOrigin: Item.Center
-            source: viewer.photo ? viewer.photo.fileUrl : ""
+            // while editing: the core's preview of the current edits; otherwise the saved result, or the file
+            source: viewer.editing ? (viewer.preview.id === (viewer.photo ? viewer.photo.id : -1) ? viewer.preview.url : "")
+                                   : (viewer.photo ? (viewer.photo.editedUrl || viewer.photo.fileUrl) : "")
+            cache: !viewer.editing
             asynchronous: true
             fillMode: Image.PreserveAspectFit
             autoTransform: true
@@ -213,7 +287,7 @@ Item {
         Image {
             id: regionImage
             readonly property var r: viewer.region
-            visible: viewer.zoom > 1.05 && viewer.photo && r.id === viewer.photo.id && status === Image.Ready
+            visible: !viewer.editing && viewer.zoom > 1.05 && viewer.photo && r.id === viewer.photo.id && status === Image.Ready
             x: viewer.paintedX + (r.x || 0) * viewer.paintedW
             y: viewer.paintedY + (r.y || 0) * viewer.paintedH
             width: (r.w || 0) * viewer.paintedW
@@ -256,10 +330,83 @@ Item {
             }
         }
 
+        // the crop frame: dimmed outside, draggable corners and body
+        Item {
+            id: cropFrame
+            visible: viewer.editing && viewer.tool === "crop" && image.status === Image.Ready
+            x: viewer.paintedX; y: viewer.paintedY
+            width: viewer.paintedW; height: viewer.paintedH
+            readonly property var c: viewer.edits.crop || [0, 0, 1, 1]
+            readonly property real fx: c[0] * width
+            readonly property real fy: c[1] * height
+            readonly property real fw: c[2] * width
+            readonly property real fh: c[3] * height
+            function setCrop(x, y, w, h) {
+                const minW = 0.05, minH = 0.05
+                w = Math.max(minW, Math.min(1, w)); h = Math.max(minH, Math.min(1, h))
+                x = Math.max(0, Math.min(1 - w, x)); y = Math.max(0, Math.min(1 - h, y))
+                const e = Object.assign({}, viewer.edits)
+                e.crop = (x < 0.002 && y < 0.002 && w > 0.998 && h > 0.998) ? null : [x, y, w, h]
+                viewer.edits = e   // no preview request: the frame is drawn here
+            }
+            Rectangle { x: 0; y: 0; width: parent.width; height: cropFrame.fy; color: Qt.rgba(0, 0, 0, 0.55) }
+            Rectangle { x: 0; y: cropFrame.fy + cropFrame.fh; width: parent.width; height: parent.height - y; color: Qt.rgba(0, 0, 0, 0.55) }
+            Rectangle { x: 0; y: cropFrame.fy; width: cropFrame.fx; height: cropFrame.fh; color: Qt.rgba(0, 0, 0, 0.55) }
+            Rectangle { x: cropFrame.fx + cropFrame.fw; y: cropFrame.fy; width: parent.width - x; height: cropFrame.fh; color: Qt.rgba(0, 0, 0, 0.55) }
+            Rectangle {
+                id: frameRect
+                x: cropFrame.fx; y: cropFrame.fy; width: cropFrame.fw; height: cropFrame.fh
+                color: "transparent"
+                border.color: "white"; border.width: 1.5
+                // thirds
+                Rectangle { x: parent.width / 3; width: 1; height: parent.height; color: Qt.rgba(1, 1, 1, 0.35) }
+                Rectangle { x: parent.width * 2 / 3; width: 1; height: parent.height; color: Qt.rgba(1, 1, 1, 0.35) }
+                Rectangle { y: parent.height / 3; height: 1; width: parent.width; color: Qt.rgba(1, 1, 1, 0.35) }
+                Rectangle { y: parent.height * 2 / 3; height: 1; width: parent.width; color: Qt.rgba(1, 1, 1, 0.35) }
+                DragHandler {   // move the frame
+                    target: null
+                    property var start: null
+                    onActiveChanged: start = active ? cropFrame.c.slice() : null
+                    onTranslationChanged: if (start) cropFrame.setCrop(start[0] + translation.x / cropFrame.width, start[1] + translation.y / cropFrame.height, start[2], start[3])
+                }
+            }
+            // corner handles
+            Repeater {
+                model: [ { cx: 0, cy: 0 }, { cx: 1, cy: 0 }, { cx: 0, cy: 1 }, { cx: 1, cy: 1 } ]
+                Rectangle {
+                    required property var modelData
+                    width: 18; height: 18; radius: 3
+                    color: "white"
+                    border.color: Qt.rgba(0, 0, 0, 0.5)
+                    x: cropFrame.fx + modelData.cx * cropFrame.fw - width / 2
+                    y: cropFrame.fy + modelData.cy * cropFrame.fh - height / 2
+                    DragHandler {
+                        target: null
+                        property var start: null
+                        onActiveChanged: start = active ? cropFrame.c.slice() : null
+                        onTranslationChanged: {
+                            if (!start) return
+                            const dx = translation.x / cropFrame.width, dy = translation.y / cropFrame.height
+                            let x = start[0], y = start[1], w = start[2], h = start[3]
+                            if (modelData.cx === 0) { x = start[0] + dx; w = start[2] - dx } else w = start[2] + dx
+                            if (modelData.cy === 0) { y = start[1] + dy; h = start[3] - dy } else h = start[3] + dy
+                            if (viewer.cropAspect > 0) {   // keep the ratio: height follows width
+                                const ratioPx = viewer.cropAspect * cropFrame.height / cropFrame.width
+                                const nh = w / ratioPx
+                                if (modelData.cy === 0) y = y + h - nh
+                                h = nh
+                            }
+                            cropFrame.setCrop(x, y, w, h)
+                        }
+                    }
+                }
+            }
+        }
+
         // face circles
         Item {
             id: overlay
-            visible: image.status === Image.Ready && viewer.zoom === 1 && (stageHover.hovered || namer.opened)
+            visible: !viewer.editing && image.status === Image.Ready && viewer.zoom === 1 && (stageHover.hovered || namer.opened)
             readonly property real px: image.x + (image.width - image.paintedWidth) / 2
             readonly property real py: image.y + (image.height - image.paintedHeight) / 2
             Repeater {
@@ -332,7 +479,7 @@ Item {
     Rectangle {
         id: caption
         anchors.left: parent.left
-        anchors.right: info.visible ? info.left : parent.right
+        anchors.right: info.visible ? info.left : editPanel.visible ? editPanel.left : parent.right
         anchors.bottom: tagBar.top
         height: 30
         color: theme.viewerBg
@@ -387,7 +534,7 @@ Item {
     Rectangle {
         id: tagBar
         anchors.left: parent.left
-        anchors.right: info.visible ? info.left : parent.right
+        anchors.right: info.visible ? info.left : editPanel.visible ? editPanel.left : parent.right
         anchors.bottom: strip.visible ? strip.top : parent.bottom
         height: viewer.photo ? 34 : 0
         color: theme.viewerBg
@@ -487,12 +634,38 @@ Item {
         }
     }
 
+    // ---- the edit panel (in place of Info while editing) ----------------------------
+    EditPanel {
+        id: editPanel
+        visible: viewer.editing
+        theme: viewer.theme
+        icons: viewer.icons
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        edits: viewer.edits
+        tool: viewer.tool
+        onToolChanged: viewer.tool = tool
+        presetItems: viewer.photo && viewer.presetPreviews.id === viewer.photo.id ? viewer.presetPreviews.items : []
+        busy: viewer.photo ? viewer.presetPreviews.id !== viewer.photo.id : false
+        hasSavedEdits: viewer.photo && viewer.photo.edits ? true : false
+        onPick: (e) => { viewer.setEdits(Object.assign({}, viewer.emptyEdits, e)) }
+        onRotate: (deg) => viewer.rotateBy(deg)
+        onFlip: (axis) => viewer.flipBy(axis)
+        onAspect: (ratio) => viewer.cropToAspect(ratio)
+        onResetCrop: viewer.resetCrop()
+        onSave: { viewer.applyEdits(viewer.photo.id, JSON.stringify(viewer.edits)); viewer.endEdit() }
+        onSaveCopy: { viewer.saveCopy(viewer.photo.id, JSON.stringify(viewer.edits)); viewer.endEdit() }
+        onRevert: { viewer.revertEdits(viewer.photo.id); viewer.endEdit() }
+        onCancel: viewer.endEdit()
+    }
+
     // ---- filmstrip ------------------------------------------------------------------
     Rectangle {
         id: strip
         visible: viewer.showStrip && viewer.items.length > 1
         anchors.left: parent.left
-        anchors.right: info.visible ? info.left : parent.right
+        anchors.right: info.visible ? info.left : editPanel.visible ? editPanel.left : parent.right
         anchors.bottom: parent.bottom
         height: 72
         color: theme.viewerBg
@@ -537,7 +710,7 @@ Item {
     // ---- info panel -----------------------------------------------------------------
     Rectangle {
         id: info
-        visible: viewer.infoOpen
+        visible: viewer.infoOpen && !viewer.editing
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.right: parent.right

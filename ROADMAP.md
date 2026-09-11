@@ -70,5 +70,6 @@ fetched album are not pulled, only thumbnails.
 - [ ] Phone: the computer found without the QR (LAN beacon / DHT), faces cached for offline
 - [ ] Phone: the libp2p event loop still ends with vibe's "May not process events within an active yieldLock()" once per session on Android; a fresh thread takes over, the cause is open
 - [x] Scenes and moods: CLIP zero-shot tags (2026-09-11)
+- [x] Tags on photos (chips, keywords) and non-destructive editing: filters, adjust, rotate, crop (2026-09-11)
 - [x] Places (city from GPS via an offline GeoNames table, or "Set Place…" by hand); [ ] Memories; [ ] a map view
 - Flatpak / AppImage, caching, startup time

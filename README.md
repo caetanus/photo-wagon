@@ -49,7 +49,13 @@ submenus of the right-click menu to correct them (the vocabulary lives in
 scene, mood, weather, holiday, place and your own **tags** ("+ Tag", any words, comma
 separated; × removes one) — and a click on a chip shows every photo sharing it; the
 grid shows the scene, holiday and weather while you hover. Your tags are a sidebar
-section too, and "Add Tags…" (menu or toolbar) puts them on a whole selection. Light or dark follows the system.
+section too, and "Add Tags…" (menu or toolbar) puts them on a whole selection.
+**Editing** (the sliders icon, or E): twelve Instagram-style filters previewed on the
+photo itself, sliders for brightness, contrast, saturation, warmth, fade, vignette,
+sharpen and sepia, rotate and flip, and a crop frame with draggable corners and aspect
+presets. Everything is rendered by the core (libvips), the original file is never
+written to: Save keeps the result in the library (thumbnail and viewer follow, Revert
+undoes), Save as Copy writes a JPEG next to the original. Light or dark follows the system.
 
 ## Requirements
 

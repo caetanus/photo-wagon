@@ -340,6 +340,7 @@ ApplicationWindow {
                     active: root.current ? root.current.favorite === true : false
                     onClicked: if (root.current) library.toggleFavorite(root.current.id)
                 }
+                ToolIcon { visible: root.viewing; icon_: icons.edit; active: viewer.editing; ToolTip.text: "Edit (E)"; ToolTip.visible: hovered; onClicked: viewer.editing ? viewer.endEdit() : viewer.startEdit() }
                 ToolIcon { visible: root.viewing; icon_: icons.info; active: viewer.infoOpen; onClicked: viewer.infoOpen = !viewer.infoOpen }
                 ToolIcon { visible: root.viewing; icon_: icons.fullscreen; ToolTip.text: "Full screen (F)"; ToolTip.visible: hovered; onClicked: root.fullscreen = true }
 
@@ -475,6 +476,14 @@ ApplicationWindow {
                 id: viewer
                 anchors.fill: parent
                 photoTags: JSON.parse(library.photoTags)
+                presets: JSON.parse(library.presets).presets
+                preview: JSON.parse(library.preview)
+                presetPreviews: JSON.parse(library.presetPreviews)
+                onPreviewRequest: (id, editsJson) => library.previewEdits(id, editsJson)
+                onPresetPreviewRequest: (id, editsJson) => library.loadPresetPreviews(id, editsJson)
+                onApplyEdits: (id, editsJson) => library.applyEdits(id, editsJson)
+                onRevertEdits: (id) => library.revertEdits(id)
+                onSaveCopy: (id, editsJson) => library.saveCopy(id, editsJson)
                 visible: root.viewing
                 theme: root.theme
                 icons: root.icons
@@ -675,6 +684,7 @@ ApplicationWindow {
             else if (library.shotView.startsWith("place:")) root.pickSource(library.shotView)   // place:<name>|<country>
             else if (root.tagGroups.some(g => library.shotView.startsWith(g + ":"))) root.pickSource(library.shotView)
             else if (library.shotView === "info") {}
+            else if (library.shotView.startsWith("edit")) {}   // edit | edit:adjust | edit:crop — see below
             else if (library.shotView.startsWith("keyword:")) root.pickSource(library.shotView)
             else if (library.shotView.startsWith("date:")) {          // date:YYYY[-M[-D]]
                 const p = library.shotView.substring(5).split("-")
@@ -690,6 +700,19 @@ ApplicationWindow {
             }
             else if (library.shotView === "menu" || library.shotView === "facemenu") {}
             else root.mode = library.shotView
+        }
+    }
+    Timer {   // PW_SHOT_VIEW=edit[:tool] with PW_SHOT_OPEN: the edit panel on the open photo
+        running: library.shotPath.length > 0 && library.shotView.startsWith("edit") && root.viewing
+        interval: 1200
+        property bool applied: false
+        onTriggered: {
+            if (applied) return
+            applied = true
+            viewer.infoOpen = false
+            viewer.startEdit()
+            const t = library.shotView.split(":")[1]
+            if (t) viewer.tool = t
         }
     }
     Timer {   // PW_SHOT_VIEW=name:<text> with PW_SHOT_OPEN: the naming popup with <text> typed

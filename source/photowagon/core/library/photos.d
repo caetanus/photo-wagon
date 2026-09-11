@@ -41,6 +41,8 @@ struct Photo
 	string weather;
 	string holiday;
 	string[] keywords; // the user's own tags (core/library/keywords.d)
+	string edits;      // edit/edits.d JSON; null = untouched
+	string editedHash; // the rendered result in the store
 }
 
 /// Restricts a page or a count. Zero means "no restriction" for every field.
@@ -185,6 +187,28 @@ final class PhotoRepo
 		while (s.step())
 			out_[s.getString(0)] = s.getLong(1);
 		return out_;
+	}
+
+	private static JSONValue parseEdits(string json)
+	{
+		try
+			return parseJSON(json);
+		catch (Exception)
+			return JSONValue(null);
+	}
+
+	/// The rendered result of the user's edits (null everywhere = reverted).
+	void setEdits(long id, string editsJson, string editedHash, string thumbHash, int width, int height)
+	{
+		auto s = db.prepare("UPDATE photos SET edits = ?, edited_hash = ?, thumb_hash = ?, width = ?, height = ? WHERE id = ?");
+		s.bind(1, editsJson).bind(2, editedHash).bind(3, thumbHash).bind(4, cast(long) width).bind(5, cast(long) height).bind(6, id);
+		s.run();
+	}
+
+	/// The path the viewer and the region renderer should read: the edited result when there is one.
+	string displayPath(ref const Photo p)
+	{
+		return p.editedHash !is null ? store.pathFor(p.editedHash) : p.path;
 	}
 
 	void setFavorite(long id, bool on)
@@ -334,6 +358,8 @@ final class PhotoRepo
 			"weather": p.weather is null ? JSONValue(null) : JSONValue(p.weather),
 			"holiday": p.holiday is null ? JSONValue(null) : JSONValue(p.holiday),
 			"keywords": JSONValue(p.keywords),
+			"edits": p.edits is null ? JSONValue(null) : parseEdits(p.edits),
+			"editedUrl": p.editedHash is null ? JSONValue(null) : JSONValue(fileUrl(store.pathFor(p.editedHash))),
 		];
 		return j;
 	}
@@ -356,7 +382,8 @@ final class PhotoRepo
 		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'mood' AND t.tag <> ''),
 		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'weather' AND t.tag <> ''),
 		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'holiday' AND t.tag <> ''),
-		(SELECT group_concat(k.keyword, char(31)) FROM (SELECT keyword FROM photo_keywords WHERE photo_id = p.id ORDER BY keyword) k)`;
+		(SELECT group_concat(k.keyword, char(31)) FROM (SELECT keyword FROM photo_keywords WHERE photo_id = p.id ORDER BY keyword) k),
+		p.edits, p.edited_hash`;
 
 	private static Photo readRow(ref Statement s)
 	{
@@ -396,6 +423,8 @@ final class PhotoRepo
 			import std.array : split;
 			p.keywords = s.getString(26).split("\x1f");
 		}
+		p.edits = s.getString(27);
+		p.editedHash = s.getString(28);
 		return p;
 	}
 

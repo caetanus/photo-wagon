@@ -169,10 +169,32 @@ a.call("photo.removeKeyword", {"ids": [first["id"]], "keyword": "praia"})
 a.call("keywords.rename", {"from": "Casa da Vó", "to": "vovó"})
 check(a.call("photo.get", {"id": first["id"]})["keywords"] == ["vovó"], "remove and rename")
 
+# edits: preview, save (non-destructive), revert
+pv = a.call("photo.preview", {"id": first["id"], "edits": {"rotate": 90, "saturation": 0.4, "crop": [0.1, 0.1, 0.5, 0.5]}, "maxEdge": 400})
+check(pv["url"].startswith("file://") and os.path.exists(pv["url"][7:]) and max(pv["width"], pv["height"]) <= 400, f"preview rendered {pv['width']}x{pv['height']}")
+pp = a.call("photo.presetPreviews", {"id": first["id"], "maxEdge": 64})["items"]
+check(len(pp) == 12 and all(os.path.exists(i["url"][7:]) for i in pp), f"{len(pp)} filter previews")
+size_before = os.path.getsize(first["path"])
+ed = a.call("photo.applyEdits", {"id": first["id"], "edits": {"rotate": 90, "preset": "Mono", "saturation": -1}})
+check(ed["editedUrl"] and os.path.exists(ed["editedUrl"][7:]) and ed["edits"]["rotate"] == 90, "edit saved into the store, Photo carries editedUrl and edits")
+check(ed["width"] == first["height"] and ed["height"] == first["width"], f"rotated dimensions {ed['width']}x{ed['height']}")
+check(os.path.getsize(first["path"]) == size_before, "the original file is untouched")
+check(ed["thumbUrl"] != first["thumbUrl"], "thumbnail follows the edit")
+rv = a.call("photo.revertEdits", {"id": first["id"]})
+check(rv["editedUrl"] is None and rv["edits"] is None and rv["width"] == first["width"], "reverted")
 # rescan is incremental: nothing new
 a.call("library.rescan")
 done2 = a.wait_event("index.done", lambda d: d["rootId"] == rid and d is not done)
 check(done2["imported"] == 0 and done2["skipped"] == 9, f"rescan skipped everything: {done2}")
+
+# a saved copy lands next to the original and is indexed like any file
+cp = a.call("photo.saveCopy", {"id": first["id"], "edits": {"sepia": 1}})
+check(os.path.exists(cp["path"]) and cp["path"].endswith("-edited.jpg"), f"copy written: {os.path.basename(cp['path'])}")
+done3 = a.wait_event("index.done", lambda d: d["rootId"] == rid and d["imported"] == 1)
+check(done3["imported"] == 1, "the copy was indexed")
+os.remove(cp["path"])
+a.call("library.rescan")
+a.wait_event("index.done", lambda d: d["rootId"] == rid and d["removed"] == 1)
 
 try:
     a.call("nope.method")

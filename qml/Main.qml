@@ -591,7 +591,7 @@ ApplicationWindow {
     Timer {
         running: library.shotPath.length > 0
         interval: 3500
-        onTriggered: (library.shotSend ? phonePanel.body : library.shotView.startsWith("name:") ? viewer.namerBody : shell).grabToImage(function (r) {
+        onTriggered: (library.shotSend ? phonePanel.body : library.shotView.startsWith("name:") ? viewer.namerBody : library.shotView === "menu" ? photoMenu.contentItem : shell).grabToImage(function (r) {
             r.saveToFile(library.shotPath)
             console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length, "source", root.source, "filter", library.filter)
             library.quit()

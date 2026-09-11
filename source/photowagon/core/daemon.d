@@ -275,6 +275,7 @@ int runCore(Config cfg, InProcessLink link = null)
 	auto daemon = new Daemon(cfg, link);
 	int rc;
 	runTask(() nothrow {
+		quitOnSignal();   // after runEventLoop installed vibe's SIGTERM / SIGINT handlers, which only stop this loop
 		try
 			daemon.start();
 		catch (Exception e)
@@ -333,5 +334,23 @@ final class CoreThread
 	int exitCode() const
 	{
 		return rc;
+	}
+}
+
+/// SIGTERM / SIGINT end the whole process — vibe-core's own handlers (installed by
+/// runEventLoop on this thread) would only stop the core's loop and leave the Qt
+/// window running after a `kill`.
+private void quitOnSignal() nothrow @nogc
+{
+	version (Posix)
+	{
+		import core.sys.posix.signal : sigaction, sigaction_t, SIGTERM, SIGINT;
+		import core.sys.posix.unistd : _exit;
+
+		extern (C) static void quit(int) nothrow @nogc { _exit(0); }
+		sigaction_t sa;
+		sa.sa_handler = &quit;
+		sigaction(SIGTERM, &sa, null);
+		sigaction(SIGINT, &sa, null);
 	}
 }

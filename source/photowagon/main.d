@@ -15,6 +15,7 @@ import photowagon.core.thumbs.vips : initVips;
 
 int main(string[] args)
 {
+	installQuitHandler();   // SIGTERM / SIGINT end the process: vibe's own handlers on the core thread only stop its loop
 	Config cfg;
 	try
 		cfg = parseArgs(args);
@@ -58,4 +59,22 @@ int main(string[] args)
 		}
 	}
 	return runCore(cfg);
+}
+
+/// SIGTERM / SIGINT end the process. vibe-core installs handlers for both on the
+/// thread that runs its event loop (the core thread), which only stop that loop and
+/// would leave the Qt window running after a `kill`. Ours is installed later and wins.
+void installQuitHandler() nothrow @nogc
+{
+	version (Posix)
+	{
+		import core.sys.posix.signal : sigaction, sigaction_t, SIGTERM, SIGINT;
+		import core.sys.posix.unistd : _exit;
+
+		extern (C) static void quit(int) nothrow @nogc { _exit(0); }
+		sigaction_t sa;
+		sa.sa_handler = &quit;
+		sigaction(SIGTERM, &sa, null);
+		sigaction(SIGINT, &sa, null);
+	}
 }

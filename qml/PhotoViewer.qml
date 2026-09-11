@@ -223,11 +223,16 @@ Item {
         }
         TapHandler {
             acceptedButtons: Qt.LeftButton
-            onDoubleTapped: viewer.setZoom(viewer.zoom === 1 ? 2.5 : 1)
+            onDoubleTapped: (point) => { if (!(overlay.visible && overlay.childAt(point.position.x, point.position.y))) viewer.setZoom(viewer.zoom === 1 ? 2.5 : 1) }
         }
         TapHandler {
             acceptedButtons: Qt.RightButton
-            onTapped: if (viewer.photo) viewer.contextMenu(viewer.photo.id, viewer.photo.path || "", viewer.photo.favorite === true)
+            // several TapHandlers all fire on one click: a face under the pointer has its own menu
+            onTapped: (point) => {
+                if (!viewer.photo) return
+                if (overlay.visible && overlay.childAt(point.position.x, point.position.y)) return
+                viewer.contextMenu(viewer.photo.id, viewer.photo.path || "", viewer.photo.favorite === true)
+            }
         }
 
         // face circles

@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 10;
+enum currentVersion = 11;
 
 void migrate(Database db)
 {
@@ -33,6 +33,8 @@ void migrate(Database db)
 			db.exec(schemaV9);
 		if (have < 10)
 			db.exec(schemaV10);
+		if (have < 11)
+			migrateV11(db);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -172,6 +174,52 @@ private enum schemaV10 = `
 ALTER TABLE photos ADD COLUMN edits TEXT;          -- edit/edits.d JSON; NULL = untouched
 ALTER TABLE photos ADD COLUMN edited_hash TEXT;    -- the rendered result in the store (full size JPEG)
 `;
+
+// v11: the vectors move into sqlite-vec tables — nothing keeps them in memory.
+// photo_vec holds the CLIP embeddings (photo_clip keeps the bookkeeping), person_vec the
+// unit centroids of the face clusters (person_centroid the running sums behind them).
+private enum schemaV11 = `
+CREATE VIRTUAL TABLE photo_vec USING vec0(photo_id INTEGER PRIMARY KEY, embedding float[512] distance_metric=cosine);
+CREATE VIRTUAL TABLE person_vec USING vec0(person_id INTEGER PRIMARY KEY, centroid float[128] distance_metric=cosine);
+CREATE TABLE person_centroid (
+    person_id  INTEGER PRIMARY KEY REFERENCES persons(id) ON DELETE CASCADE,
+    sum        BLOB NOT NULL,                      -- 128 float32: the sum of the unit embeddings
+    count      INTEGER NOT NULL DEFAULT 0,
+    named      INTEGER NOT NULL DEFAULT 0
+);
+ALTER TABLE photo_clip ADD COLUMN ok INTEGER NOT NULL DEFAULT 1;   -- 0: the image could not be encoded
+`;
+
+private void migrateV11(Database db)
+{
+	db.exec(schemaV11);
+	// the embeddings stored as blobs so far go into the vec table; all-zero ones were failures
+	auto q = db.prepare("SELECT photo_id, embedding FROM photo_clip");
+	auto ins = db.prepare("INSERT INTO photo_vec (photo_id, embedding) VALUES (?, ?)");
+	auto bad = db.prepare("UPDATE photo_clip SET ok = 0 WHERE photo_id = ?");
+	while (q.step())
+	{
+		auto blob = q.getBlob(1);
+		bool zero = true;
+		foreach (b; blob)
+			if (b != 0)
+			{
+				zero = false;
+				break;
+			}
+		if (zero || blob.length != 512 * 4)
+		{
+			bad.reset();
+			bad.bind(1, q.getLong(0));
+			bad.run();
+			continue;
+		}
+		ins.reset();
+		ins.bind(1, q.getLong(0)).bind(2, blob);
+		ins.run();
+	}
+	db.exec("ALTER TABLE photo_clip DROP COLUMN embedding");
+}
 
 /// Small persisted flags (e.g. which clustering rule the faces were grouped by).
 string getSetting(Database db, string key)

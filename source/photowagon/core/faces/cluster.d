@@ -8,9 +8,15 @@
 /// what chained different people together (measured on a real library:
 /// nearest-neighbour joining at SFace's 0.363 put babies, a bearded man and a
 /// teapot in one person; centroids at 0.45 with a size gate did not).
+///
+/// The vectors live in SQLite: `person_centroid` keeps each person's running sum
+/// and count, `person_vec` (sqlite-vec) the unit centroid, and every "closest
+/// person" question is a KNN query. Nothing is held in memory between calls.
 module photowagon.core.faces.cluster;
 
 import std.math : sqrt;
+
+import photowagon.core.db.sqlite : Database;
 
 /// Centroid cosine needed to join an existing person.
 enum joinThreshold = 0.45f;
@@ -32,26 +38,6 @@ enum clusterVersion = 5;
 bool eligible(float widthPx, float score) pure nothrow @nogc
 {
 	return widthPx >= minFaceWidth && score >= minScore;
-}
-
-struct Centroid
-{
-	long personId;
-	float[128] sum = 0;
-	uint count;
-	bool named; // a named person is never merged away automatically
-
-	float[128] mean() const pure nothrow @nogc
-	{
-		float[128] m = sum;
-		float n = 0;
-		foreach (v; m)
-			n += v * v;
-		n = sqrt(n);
-		if (n > 1e-9)
-			m[] /= n;
-		return m;
-	}
 }
 
 float[128] unit(const ref float[128] e) pure nothrow @nogc
@@ -107,8 +93,7 @@ long[] splitTowards(SplitFace[] facesOfA, const(float[128])[] alreadyInB, const 
 	{
 		auto mA = unit(sumA);
 		auto mB = unit(sumB);
-		float[128] newA = 0, newB = sumB;
-		newB = 0;
+		float[128] newA = 0, newB = 0;
 		// B keeps its seed and prior members
 		newB[] += unit(seed)[];
 		foreach (ref e; alreadyInB)
@@ -133,40 +118,115 @@ long[] splitTowards(SplitFace[] facesOfA, const(float[128])[] alreadyInB, const 
 	return out_;
 }
 
+/// The persons' centroids, in the database. A new index starts empty (the
+/// service rebuilds it from the stored faces); every question is a query.
 final class ClusterIndex
 {
-	private Centroid[] persons;
-	private size_t[long] byId;
+	private Database db;
+
+	this(Database db)
+	{
+		this.db = db;
+		db.exec("DELETE FROM person_vec");
+		db.exec("DELETE FROM person_centroid");
+	}
+
+	private struct Row
+	{
+		bool found;
+		float[128] sum = 0;
+		uint count;
+		bool named;
+	}
+
+	private Row load(long personId)
+	{
+		Row r;
+		auto s = db.prepare("SELECT sum, count, named FROM person_centroid WHERE person_id = ?");
+		s.bind(1, personId);
+		if (!s.step())
+			return r;
+		auto blob = s.getBlob(0);
+		if (blob.length == 128 * float.sizeof)
+			r.sum[] = (cast(const(float)[]) blob)[];
+		r.count = cast(uint) s.getLong(1);
+		r.named = s.getLong(2) != 0;
+		r.found = true;
+		return r;
+	}
+
+	private void save(long personId, const ref Row r)
+	{
+		auto u = db.prepare(`INSERT INTO person_centroid (person_id, sum, count, named) VALUES (?, ?, ?, ?)
+			ON CONFLICT(person_id) DO UPDATE SET sum = excluded.sum, count = excluded.count, named = excluded.named`);
+		u.bind(1, personId).bind(2, cast(const(ubyte)[]) r.sum[]).bind(3, cast(long) r.count).bind(4, cast(long)(r.named ? 1 : 0));
+		u.run();
+		auto d = db.prepare("DELETE FROM person_vec WHERE person_id = ?");
+		d.bind(1, personId);
+		d.run();
+		if (r.count == 0)
+			return;
+		auto m = unit(r.sum);
+		float n = 0;
+		foreach (v; m)
+			n += v * v;
+		if (n < 1e-6)
+			return; // a zero centroid has no direction; it cannot be matched
+		auto i = db.prepare("INSERT INTO person_vec (person_id, centroid) VALUES (?, ?)");
+		i.bind(1, personId).bind(2, cast(const(ubyte)[]) m[]);
+		i.run();
+	}
+
+	private void drop(long personId)
+	{
+		auto d = db.prepare("DELETE FROM person_vec WHERE person_id = ?");
+		d.bind(1, personId);
+		d.run();
+		auto c = db.prepare("DELETE FROM person_centroid WHERE person_id = ?");
+		c.bind(1, personId);
+		c.run();
+	}
+
+	/// The `k` persons closest to `e` (unit), closest first, as (id, cosine).
+	private struct Hit
+	{
+		long personId;
+		float cosine;
+	}
+
+	private Hit[] nearest(const ref float[128] e, long k)
+	{
+		Hit[] out_;
+		if (k <= 0)
+			return out_;
+		auto s = db.prepare("SELECT person_id, distance FROM person_vec WHERE centroid MATCH ? AND k = ? ORDER BY distance");
+		s.bind(1, cast(const(ubyte)[]) e[]).bind(2, k);
+		while (s.step())
+			out_ ~= Hit(s.getLong(0), 1 - cast(float) s.getDouble(1));
+		return out_;
+	}
 
 	void add(long personId, const ref float[128] embedding, bool named = false)
 	{
 		auto u = unit(embedding);
-		if (auto i = personId in byId)
-		{
-			persons[*i].sum[] += u[];
-			persons[*i].count++;
-			persons[*i].named |= named;
-			return;
-		}
-		Centroid c;
-		c.personId = personId;
-		c.sum = u;
-		c.count = 1;
-		c.named = named;
-		byId[personId] = persons.length;
-		persons ~= c;
+		auto r = load(personId);
+		r.sum[] += u[];
+		r.count++;
+		r.named |= named;
+		save(personId, r);
 	}
 
 	void setNamed(long personId, bool named)
 	{
-		if (auto i = personId in byId)
-			persons[*i].named = named;
+		auto s = db.prepare("UPDATE person_centroid SET named = ? WHERE person_id = ?");
+		s.bind(1, cast(long)(named ? 1 : 0)).bind(2, personId);
+		s.run();
 	}
 
 	/// The closest person, and how close; 0 when nobody clears the threshold.
 	/// `taken` lists persons that cannot be the answer: the ones already found
 	/// in the same photo, since nobody appears twice in one picture.
-	long match(const ref float[128] embedding, out float best, const(long)[] taken = null) const
+	long match(const ref float[128] embedding, out float best, const(long)[] taken = null)
 	{
 		bool ambiguous;
 		return match(embedding, best, ambiguous, taken);
@@ -174,7 +234,7 @@ final class ClusterIndex
 
 	/// Same, reporting when the runner-up was too close to call (then 0 is
 	/// returned and `ambiguous` is true: leave the face unassigned).
-	long match(const ref float[128] embedding, out float best, out bool ambiguous, const(long)[] taken = null) const
+	long match(const ref float[128] embedding, out float best, out bool ambiguous, const(long)[] taken = null)
 	{
 		import std.algorithm : canFind;
 
@@ -182,20 +242,18 @@ final class ClusterIndex
 		float second = -1;
 		long person;
 		auto u = unit(embedding);
-		foreach (ref c; persons)
+		foreach (h; nearest(u, cast(long) taken.length + 3))
 		{
-			if (c.count == 0 || taken.canFind(c.personId))
+			if (taken.canFind(h.personId))
 				continue;
-			auto m = c.mean();
-			immutable s = dot(m, u);
-			if (s > best)
+			if (h.cosine > best)
 			{
 				second = best;
-				best = s;
-				person = c.personId;
+				best = h.cosine;
+				person = h.personId;
 			}
-			else if (s > second)
-				second = s;
+			else if (h.cosine > second)
+				second = h.cosine;
 		}
 		ambiguous = best >= joinThreshold && second >= joinThreshold && best - second < minMargin;
 		if (ambiguous)
@@ -206,38 +264,61 @@ final class ClusterIndex
 	/// Pairs (from, into) to merge: centroids closer than `mergeThreshold`.
 	/// Never two named persons, never two persons `apart` says share a photo;
 	/// the smaller (or the unnamed) one goes into the other.
-	long[2][] mergeCandidates(scope bool delegate(long, long) apart = null) const
+	long[2][] mergeCandidates(scope bool delegate(long, long) apart = null)
 	{
 		long[2][] out_;
 		bool[long] gone;
-		auto means = new float[128][](persons.length);
-		foreach (i, ref c; persons)
-			means[i] = c.mean();
-		foreach (i; 0 .. persons.length)
+		struct P
 		{
-			if (persons[i].personId in gone)
+			long id;
+			uint count;
+			bool named;
+		}
+
+		P[] persons;
+		{
+			auto s = db.prepare("SELECT person_id, count, named FROM person_centroid WHERE count > 0 ORDER BY person_id");
+			while (s.step())
+				persons ~= P(s.getLong(0), cast(uint) s.getLong(1), s.getLong(2) != 0);
+		}
+		uint[long] countOf;
+		bool[long] namedOf;
+		foreach (p; persons)
+		{
+			countOf[p.id] = p.count;
+			namedOf[p.id] = p.named;
+		}
+		foreach (p; persons)
+		{
+			if (p.id in gone)
 				continue;
-			foreach (j; i + 1 .. persons.length)
+			auto me = load(p.id);
+			auto m = unit(me.sum);
+			bool dropped;
+			foreach (h; nearest(m, 6))
 			{
-				if (persons[j].personId in gone)
+				if (h.personId == p.id || h.personId in gone || h.personId !in countOf)
 					continue;
-				if (persons[i].named && persons[j].named)
+				if (h.cosine < mergeThreshold)
+					break;
+				if (p.named && namedOf[h.personId])
 					continue;
-				if (dot(means[i], means[j]) < mergeThreshold)
-					continue;
-				if (apart !is null && apart(persons[i].personId, persons[j].personId))
+				if (apart !is null && apart(p.id, h.personId))
 					continue;
 				// keep the named one; else the bigger one
-				size_t keep = i, drop = j;
-				if (persons[j].named || (!persons[i].named && persons[j].count > persons[i].count))
+				long keep = p.id, drop = h.personId;
+				if (namedOf[h.personId] || (!p.named && countOf[h.personId] > p.count))
 				{
-					keep = j;
-					drop = i;
+					keep = h.personId;
+					drop = p.id;
 				}
-				out_ ~= [persons[drop].personId, persons[keep].personId];
-				gone[persons[drop].personId] = true;
-				if (drop == i)
+				out_ ~= [drop, keep];
+				gone[drop] = true;
+				if (drop == p.id)
+				{
+					dropped = true;
 					break;
+				}
 			}
 		}
 		return out_;
@@ -245,64 +326,37 @@ final class ClusterIndex
 
 	/// Every person ranked by how close its centroid is to `embedding`, closest first
 	/// (at most `limit`): who a face most likely is, for the naming popup.
-	long[] rankFor(const ref float[128] embedding, out float[] scores, size_t limit = 8) const
+	long[] rankFor(const ref float[128] embedding, out float[] scores, size_t limit = 8)
 	{
-		// centroids are unit vectors; a raw embedding is not
-		float[128] e = embedding;
-		float n = 0;
-		foreach (v; e)
-			n += v * v;
-		n = sqrt(n);
-		if (n > 1e-9)
-			e[] /= n;
+		auto e = unit(embedding);
 		long[] ids;
 		float[] sims;
-		foreach (ref c; persons)
+		foreach (h; nearest(e, cast(long) limit))
 		{
-			if (c.count == 0)
-				continue;
-			auto m = c.mean();
-			immutable sim = dot(e, m);
-			size_t at = 0;
-			while (at < sims.length && sims[at] >= sim)
-				at++;
-			if (at >= limit)
-				continue;
-			ids = ids[0 .. at] ~ c.personId ~ ids[at .. $];
-			sims = sims[0 .. at] ~ sim ~ sims[at .. $];
-			if (ids.length > limit)
-			{
-				ids.length = limit;
-				sims.length = limit;
-			}
+			ids ~= h.personId;
+			sims ~= h.cosine;
 		}
 		scores = sims;
 		return ids;
 	}
 
 	/// Persons whose centroid is at least `threshold` close to `personId`'s, closest first.
-	long[] similarTo(long personId, float threshold, out float[] scores) const
+	long[] similarTo(long personId, float threshold, out float[] scores)
 	{
-		auto i = personId in byId;
-		if (i is null)
+		auto me = load(personId);
+		if (!me.found || me.count == 0)
 			return null;
-		auto me = persons[*i].mean();
+		auto m = unit(me.sum);
 		long[] ids;
 		float[] sims;
-		foreach (ref c; persons)
+		foreach (h; nearest(m, cast(long) personCount() + 1))
 		{
-			if (c.personId == personId || c.count == 0)
+			if (h.personId == personId)
 				continue;
-			auto m = c.mean();
-			immutable sim = dot(me, m);
-			if (sim < threshold)
-				continue;
-			// insert sorted, best first
-			size_t at = 0;
-			while (at < sims.length && sims[at] >= sim)
-				at++;
-			ids = ids[0 .. at] ~ c.personId ~ ids[at .. $];
-			sims = sims[0 .. at] ~ sim ~ sims[at .. $];
+			if (h.cosine < threshold)
+				break;
+			ids ~= h.personId;
+			sims ~= h.cosine;
 		}
 		scores = sims;
 		return ids;
@@ -311,47 +365,60 @@ final class ClusterIndex
 	/// Applies a merge that the repo performed.
 	void merge(long from, long into)
 	{
-		auto f = from in byId;
-		auto t = into in byId;
-		if (f is null || t is null)
+		auto f = load(from);
+		auto t = load(into);
+		if (!f.found || !t.found)
 			return;
-		persons[*t].sum[] += persons[*f].sum[];
-		persons[*t].count += persons[*f].count;
-		persons[*t].named |= persons[*f].named;
-		persons[*f].count = 0;
-		persons[*f].sum = 0;
-		byId.remove(from);
+		t.sum[] += f.sum[];
+		t.count += f.count;
+		t.named |= f.named;
+		save(into, t);
+		drop(from);
 	}
 
 	/// Drops a face's contribution when the user moves it elsewhere.
 	void remove(long personId, const ref float[128] embedding)
 	{
-		if (auto i = personId in byId)
-		{
-			auto u = unit(embedding);
-			persons[*i].sum[] -= u[];
-			if (persons[*i].count)
-				persons[*i].count--;
-		}
+		auto r = load(personId);
+		if (!r.found)
+			return;
+		auto u = unit(embedding);
+		r.sum[] -= u[];
+		if (r.count)
+			r.count--;
+		save(personId, r);
 	}
 
-	size_t length() const
+	size_t length()
 	{
-		size_t n;
-		foreach (ref c; persons)
-			n += c.count;
-		return n;
+		auto s = db.prepare("SELECT coalesce(sum(count), 0) FROM person_centroid");
+		return s.step() ? cast(size_t) s.getLong(0) : 0;
 	}
 
-	size_t personCount() const
+	size_t personCount()
 	{
-		return byId.length;
+		auto s = db.prepare("SELECT count(*) FROM person_centroid");
+		return s.step() ? cast(size_t) s.getLong(0) : 0;
 	}
+}
+
+version (unittest) private Database testDb()
+{
+	import photowagon.core.db.schema : migrate;
+
+	auto db = new Database(":memory:");
+	migrate(db);
+	// the persons the centroids refer to
+	db.exec("INSERT INTO persons (id, name, created_at) VALUES (10, NULL, 0), (11, NULL, 0), (12, NULL, 0)");
+	return db;
 }
 
 unittest
 {
-	auto idx = new ClusterIndex;
+	auto db = testDb();
+	scope (exit)
+		db.close();
+	auto idx = new ClusterIndex(db);
 	float[128] a = 0, b = 0, c = 0;
 	a[0] = 1;
 	b[0] = 0.9;
@@ -379,6 +446,12 @@ unittest
 	assert(m.length == 1 && (m[0][1] == 11 || m[0][1] == 12));
 	idx.merge(m[0][0], m[0][1]);
 	assert(idx.personCount == 2);
+	assert(idx.length == 3);
+	float[] scores;
+	auto ranked = idx.rankFor(b, scores, 5);
+	assert(ranked.length == 2 && ranked[0] == 10 && scores[0] > 0.9);
+	idx.remove(10, a);
+	assert(idx.length == 2 && idx.match(b, best) == 0);   // person 10 has no faces left
 	assert(eligible(100, 0.9) && !eligible(20, 0.9) && !eligible(100, 0.5));
 }
 

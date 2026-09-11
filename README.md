@@ -55,7 +55,11 @@ photo itself, sliders for brightness, contrast, saturation, warmth, fade, vignet
 sharpen and sepia, rotate and flip, and a crop frame with draggable corners and aspect
 presets. Everything is rendered by the core (libvips), the original file is never
 written to: Save keeps the result in the library (thumbnail and viewer follow, Revert
-undoes), Save as Copy writes a JPEG next to the original. Light or dark follows the system.
+undoes), Save as Copy writes a JPEG next to the original. **Similar photos**: a chip under
+every photo lists the ones that look like it, a nearest-neighbour query over the CLIP
+embeddings — which, like the face clusters' centroids, live in
+[sqlite-vec](https://github.com/asg017/sqlite-vec) tables inside the library database
+(compiled in, `csrc/sqlite-vec.c`), never in memory. Light or dark follows the system.
 
 ## Requirements
 

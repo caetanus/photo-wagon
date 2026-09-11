@@ -130,6 +130,7 @@ import photowagon.ui.transport : Bridge;
     private string fTagGroup;
     private string fTag;
     private string fKeyword;
+    private long fSimilar;   // photos that look like this one (photo.similar), instead of library.page
     /// Screenshots and memes stay out of the library timeline (they have their own
     /// views under Media Types); an album, a search or an explicit kind shows everything.
     private bool onlyPhotos = true;
@@ -310,6 +311,15 @@ import photowagon.ui.transport : Bridge;
         publishFilter();
         reload(0, pageLimit);
         loadDates();
+    }
+
+    /// The photos that look like `id` (CLIP nearest neighbours), as the page.
+    @Slot void filterSimilar(int id)
+    {
+        clearFilters();
+        fSimilar = id;
+        publishFilter();
+        reload(0, pageLimit);
     }
 
     @Slot void loadKeywords()
@@ -583,6 +593,7 @@ import photowagon.ui.transport : Bridge;
         fPlace = fCountry = null;
         fTagGroup = fTag = null;
         fKeyword = null;
+        fSimilar = 0;
     }
 
     private void publishFilter()
@@ -598,6 +609,7 @@ import photowagon.ui.transport : Bridge;
         foreach (g; ["scene", "mood", "weather", "holiday"])
             f[g] = fTagGroup == g && fTag !is null ? fTag : "";
         f["keyword"] = fKeyword is null ? "" : fKeyword;
+        f["similarTo"] = fSimilar;
         filter = f.toString();
         filterChanged.emit();
         if (personFilter != cast(int) fPerson)
@@ -656,6 +668,27 @@ import photowagon.ui.transport : Bridge;
 
     private void reload(int offset, int limit)
     {
+        if (fSimilar)
+        {
+            if (offset > 0)
+                return;   // one page: the nearest neighbours
+            items.length = 0;
+            JSONValue sp = JSONValue.emptyObject;
+            sp["id"] = fSimilar;
+            sp["limit"] = 120;
+            client.request("photo.similar", sp, (r, e) {
+                if (e.type != JSONType.null_) { report("photo.similar", e); return; }
+                foreach (it; r["items"].array)
+                    items ~= it;
+                JSONValue pg = JSONValue.emptyObject;
+                pg["total"] = items.length;
+                pg["offset"] = 0;
+                pg["items"] = JSONValue(items);
+                page = pg.toString();
+                pageChanged.emit();
+            });
+            return;
+        }
         if (offset == 0)
             items.length = 0;
         if (limit > 0)

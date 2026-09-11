@@ -168,6 +168,7 @@ ApplicationWindow {
         if (filterData.place) return filterData.place + (filterData.country ? ", " + filterData.country : "")
         for (const g of tagGroups) if (filterData[g]) return filterData[g]
         if (filterData.keyword) return "#" + filterData.keyword
+        if (filterData.similarTo) return "Similar photos"
         if (filterData.text) return "Results for “" + filterData.text + "”"
         if (source === "person") return personName(filterData.personId)
         if (filterData.favorites) return "Favorites"
@@ -512,6 +513,7 @@ ApplicationWindow {
                 onFilterTag: (group, tag) => { library.closePhoto(); root.pickSource(group + ":" + tag) }
                 onFilterPlace: (place, country) => { library.closePhoto(); root.openPlace(place, country) }
                 onFilterKeyword: (k) => { library.closePhoto(); root.pickSource("keyword:" + k) }
+                onSimilar: (id) => { library.closePhoto(); root.source = "similar"; library.filterSimilar(id); grid.clearSelection() }
                 onAddKeywords: (id, text) => library.addKeywords(JSON.stringify([id]), text)
                 onRemoveKeyword: (id, k) => library.removeKeyword(JSON.stringify([id]), k)
             }
@@ -686,6 +688,7 @@ ApplicationWindow {
             else if (library.shotView === "info") {}
             else if (library.shotView.startsWith("edit")) {}   // edit | edit:adjust | edit:crop — see below
             else if (library.shotView.startsWith("keyword:")) root.pickSource(library.shotView)
+            else if (library.shotView.startsWith("similar:")) { root.source = "similar"; library.filterSimilar(parseInt(library.shotView.substring(8))) }
             else if (library.shotView.startsWith("date:")) {          // date:YYYY[-M[-D]]
                 const p = library.shotView.substring(5).split("-")
                 root.pickDate(parseInt(p[0]), parseInt(p[1] || "0"), parseInt(p[2] || "0"))

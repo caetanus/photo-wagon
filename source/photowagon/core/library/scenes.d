@@ -184,6 +184,7 @@ final class SceneService
 		if (getSetting(db, "clip_version") != clipVersion.to!string)
 		{
 			db.exec("DELETE FROM photo_clip");
+			db.exec("DELETE FROM photo_vec");
 			db.exec("DELETE FROM photo_tags WHERE tag_by = 'auto' OR tag_by = 'date'");
 			setSetting(db, "clip_version", clipVersion.to!string);
 		}
@@ -332,23 +333,33 @@ final class SceneService
 		}
 	}
 
+	/// The embedding goes into the vec table; photo_clip only remembers that it was done.
 	private void storeEmbedding(long id, const float[clipDim] emb)
 	{
-		auto u = db.prepare("INSERT OR REPLACE INTO photo_clip (photo_id, embedding, version) VALUES (?, ?, ?)");
-		u.bind(1, id).bind(2, cast(const(ubyte)[]) emb[]).bind(3, clipVersion);
-		u.run();
+		db.transaction!void({
+			auto d = db.prepare("DELETE FROM photo_vec WHERE photo_id = ?");
+			d.bind(1, id);
+			d.run();
+			auto v = db.prepare("INSERT INTO photo_vec (photo_id, embedding) VALUES (?, ?)");
+			v.bind(1, id).bind(2, cast(const(ubyte)[]) emb[]);
+			v.run();
+			auto u = db.prepare("INSERT OR REPLACE INTO photo_clip (photo_id, version, ok) VALUES (?, ?, 1)");
+			u.bind(1, id).bind(2, clipVersion);
+			u.run();
+		});
 	}
 
-	/// An image that cannot be read gets an all-zero embedding, so it is not retried forever.
+	/// An image that cannot be read is remembered as such, so it is not retried forever.
 	private void markFailed(long id)
 	{
-		float[clipDim] zero = 0;
-		storeEmbedding(id, zero);
+		auto u = db.prepare("INSERT OR REPLACE INTO photo_clip (photo_id, version, ok) VALUES (?, ?, 0)");
+		u.bind(1, id).bind(2, clipVersion);
+		u.run();
 	}
 
 	private bool loadEmbedding(long id, out float[clipDim] emb)
 	{
-		auto s = db.prepare("SELECT embedding FROM photo_clip WHERE photo_id = ?");
+		auto s = db.prepare("SELECT embedding FROM photo_vec WHERE photo_id = ?");
 		s.bind(1, id);
 		if (!s.step())
 			return false;
@@ -359,21 +370,13 @@ final class SceneService
 		return true;
 	}
 
-	private static bool isZero(const float[clipDim] emb)
-	{
-		foreach (v; emb)
-			if (v != 0)
-				return false;
-		return true;
-	}
-
 	/// Automatic tags for every group where the user has said nothing. True when a real tag landed.
 	/// The calendar speaks first for `holiday`; a zero embedding (unreadable image) still gets its date.
-	private bool tagAuto(long id, const float[clipDim] emb)
+	private bool tagAuto(long id, const float[clipDim] emb, bool hasVector = true)
 	{
 		bool any;
 		auto u = db.prepare("INSERT INTO photo_tags (photo_id, grp, tag, score, tag_by) VALUES (?, ?, ?, ?, ?) ON CONFLICT(photo_id, grp) DO NOTHING");
-		immutable zero = isZero(emb);
+		immutable zero = !hasVector;
 		foreach (group; tagGroups)
 		{
 			string tag, by = "auto";
@@ -413,8 +416,8 @@ final class SceneService
 
 	private long rescoreMissing()
 	{
-		auto q = db.prepare(`SELECT c.photo_id, c.embedding FROM photo_clip c
-			WHERE (SELECT count(*) FROM photo_tags t WHERE t.photo_id = c.photo_id) < ?`);
+		auto q = db.prepare(`SELECT c.photo_id, v.embedding FROM photo_clip c JOIN photo_vec v ON v.photo_id = c.photo_id
+			WHERE c.ok = 1 AND (SELECT count(*) FROM photo_tags t WHERE t.photo_id = c.photo_id) < ?`);
 		q.bind(1, cast(long) tagGroups.length);
 		long[] ids;
 		float[clipDim][] embs;
@@ -508,7 +511,7 @@ final class SceneService
 		out_["by"] = by;
 		JSONValue scores = JSONValue.emptyObject;
 		float[clipDim] emb;
-		if (loadEmbedding(id, emb) && !isZero(emb))
+		if (loadEmbedding(id, emb))
 			foreach (group; tagGroups)
 			{
 				auto sc = score(vocab, emb, group);
@@ -519,6 +522,25 @@ final class SceneService
 			}
 		out_["scores"] = scores;
 		return out_;
+	}
+
+	/// The `limit` photos closest to photo `id` in CLIP space, closest first: `[{id, similarity}]`
+	/// (the photo itself left out). Runs as a KNN query in sqlite-vec.
+	JSONValue similar(long id, long limit = 60)
+	{
+		float[clipDim] emb;
+		JSONValue[] out_;
+		if (!loadEmbedding(id, emb))
+			return JSONValue(out_);
+		auto s = db.prepare("SELECT photo_id, distance FROM photo_vec WHERE embedding MATCH ? AND k = ? ORDER BY distance");
+		s.bind(1, cast(const(ubyte)[]) emb[]).bind(2, limit + 1);
+		while (s.step())
+		{
+			if (s.getLong(0) == id)
+				continue;
+			out_ ~= JSONValue(["id": JSONValue(s.getLong(0)), "similarity": JSONValue(1 - s.getDouble(1))]);
+		}
+		return JSONValue(out_);
 	}
 
 	/// The user's word on a group for these photos; `tag` empty = nothing in particular.

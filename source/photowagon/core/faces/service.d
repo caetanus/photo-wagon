@@ -47,7 +47,7 @@ final class FaceService
 		this.photos = photos;
 		this.store = store;
 		this.events = events;
-		cluster = new ClusterIndex;
+		cluster = new ClusterIndex(db);
 		jobs = new FiberGroup((Exception e) nothrow {
 			try
 				logWarn("faces: job failed: %s", e.msg);
@@ -77,7 +77,7 @@ final class FaceService
 
 	private void loadIndex()
 	{
-		cluster = new ClusterIndex;
+		cluster = new ClusterIndex(db);
 		faces.eachFace((ref FaceRepo.StoredFace f) {
 			if (f.personId == 0)
 				return;
@@ -99,7 +99,7 @@ final class FaceService
 		if (weak)
 			logInfo("faces: dropped %s weak detections", weak);
 		faces.clearUnnamedPersons();
-		cluster = new ClusterIndex;
+		cluster = new ClusterIndex(db);
 		struct Pending { long id; float[128] e; long photo; }
 		Pending[] todo;
 		Pending[][long] named; // faces of each named person, to be purified

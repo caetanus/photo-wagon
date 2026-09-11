@@ -34,6 +34,22 @@ extern (C) nothrow @nogc
 	double sqlite3_column_double(sqlite3_stmt* stmt, int col);
 	const(ubyte)* sqlite3_column_text(sqlite3_stmt* stmt, int col);
 	int sqlite3_column_bytes(sqlite3_stmt* stmt, int col);
+	int sqlite3_auto_extension(void* xEntryPoint);
+	/// sqlite-vec (csrc/sqlite-vec.c, compiled in): vec0 virtual tables with KNN search
+	int sqlite3_vec_init(sqlite3* db, char** pzErrMsg, const(void)* pApi);
+}
+
+private shared bool vecRegistered;
+
+/// Registers sqlite-vec for every connection opened afterwards. Idempotent.
+private void registerVec() nothrow @nogc
+{
+	import core.atomic : atomicLoad, atomicStore;
+
+	if (atomicLoad(vecRegistered))
+		return;
+	sqlite3_auto_extension(cast(void*) &sqlite3_vec_init);
+	atomicStore(vecRegistered, true);
 }
 
 private enum SQLITE_OK = 0;
@@ -58,6 +74,7 @@ final class Database
 
 	this(string path)
 	{
+		registerVec();
 		immutable rc = sqlite3_open_v2(path.toStringz, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, null);
 		if (rc != SQLITE_OK)
 		{
@@ -317,4 +334,26 @@ unittest
 	auto c2 = db.prepare("SELECT count(*) FROM t");
 	c2.step();
 	assert(c2.getLong(0) == 4);
+}
+
+unittest
+{
+	// sqlite-vec is in: a vec0 table answers a nearest-neighbour query
+	auto db = new Database(":memory:");
+	scope (exit)
+		db.close();
+	auto v = db.prepare("SELECT vec_version()");
+	assert(v.step() && v.getString(0).length);
+	db.exec("CREATE VIRTUAL TABLE t USING vec0(id INTEGER PRIMARY KEY, e float[4] distance_metric=cosine)");
+	float[4] a = [1, 0, 0, 0], b = [0, 1, 0, 0], q = [0.9, 0.1, 0, 0];
+	auto ins = db.prepare("INSERT INTO t (id, e) VALUES (?, ?)");
+	ins.bind(1, 1L).bind(2, cast(const(ubyte)[]) a[]);
+	ins.run();
+	ins.reset();
+	ins.bind(1, 2L).bind(2, cast(const(ubyte)[]) b[]);
+	ins.run();
+	auto knn = db.prepare("SELECT id, distance FROM t WHERE e MATCH ? AND k = 2 ORDER BY distance");
+	knn.bind(1, cast(const(ubyte)[]) q[]);
+	assert(knn.step() && knn.getLong(0) == 1 && knn.getDouble(1) < 0.02);
+	assert(knn.step() && knn.getLong(0) == 2);
 }

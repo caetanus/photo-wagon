@@ -149,7 +149,7 @@ names one, another face of that person in the same photo becomes unassigned.
 ### scenes, moods, weather, holidays
 
 Every photograph gets a CLIP ViT-B/32 image embedding (from its thumbnail, stored in
-`photo_clip`) and one tag per group — `scene`, `mood`, `weather`, `holiday` — the label
+the sqlite-vec table `photo_vec`; `photo_clip` remembers what was encoded) and one tag per group — `scene`, `mood`, `weather`, `holiday` — the label
 of `data/scenes/labels.tsv` whose text embedding is closest, when it takes at least
 30 % of the group's softmax (logit scale 100) and is not the group's "nothing in
 particular" class (None, Neutral, Indoors). For `holiday` the calendar speaks first
@@ -162,6 +162,7 @@ Father's, Children's and Valentine's Day on the Brazilian dates; `by: "date"`). 
 | `tags.list` | `{inline?}` | `{scene: [{tag, count, cover}], mood: […], weather: […], holiday: […], available}` most photos first |
 | `tags.labels` | — | `{scene: [names], mood: […], weather: […], holiday: […]}` — what `photo.setTag` accepts |
 | `photo.tags` | `{id}` | `{scene, mood, weather, holiday, by: {group: auto|date|user}, scores: {group: [{tag, prob}] ×3}}` |
+| `photo.similar` | `{id, limit?}` | `{items: [Photo + similarity], total, offset}` — the photos that look like this one: a nearest-neighbour query over the CLIP embeddings in sqlite-vec (`photo_vec`) |
 | `photo.setTag` | `{ids, group, tag}` | `{}` — the user's word; `tag: ""` = nothing in particular; sticks through re-scoring |
 
 ### keywords (the user's own tags)

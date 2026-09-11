@@ -6,9 +6,10 @@ import std.json;
 
 import photowagon.core.ipc.protocol;
 import photowagon.core.library.keywords : KeywordService;
+import photowagon.core.library.photos : PhotoRepo;
 import photowagon.core.library.scenes : SceneService;
 
-void registerTagsApi(Registry r, SceneService scenes, KeywordService keywords = null)
+void registerTagsApi(Registry r, SceneService scenes, KeywordService keywords = null, PhotoRepo photos = null)
 {
 	string[] stringsOf(JSONValue p, string key)
 	{
@@ -42,6 +43,27 @@ void registerTagsApi(Registry r, SceneService scenes, KeywordService keywords = 
 
 	// {id} → {scene, mood, by, scores}
 	r.add("photo.tags", (JSONValue p) { return scenes.photoTags(requireLong(p, "id")); });
+
+	// {id, limit?} → {items: [Photo + similarity]}: the photos that look like this one (CLIP KNN)
+	r.add("photo.similar", (JSONValue p) {
+		immutable id = requireLong(p, "id");
+		immutable limit = getLong(p, "limit", 60);
+		JSONValue[] items;
+		foreach (hit; scenes.similar(id, limit < 1 ? 1 : (limit > 500 ? 500 : limit)).array)
+		{
+			try
+			{
+				auto photo = photos.get(hit["id"].integer);
+				auto j = photos.toJson(photo);
+				j["similarity"] = hit["similarity"];
+				items ~= j;
+			}
+			catch (Exception)
+			{
+			}
+		}
+		return JSONValue(["items": JSONValue(items), "total": JSONValue(items.length), "offset": JSONValue(0)]);
+	});
 
 	// {ids, group, tag}: the user's word; tag "" = nothing in particular
 	r.add("photo.setTag", (JSONValue p) {

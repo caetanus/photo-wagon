@@ -24,7 +24,7 @@ fetched album are not pulled, only thumbnails.
 - [x] media types: every picture is a photograph, a screenshot or a meme (camera EXIF, screen sizes,
   folder names, and a small logistic model over pixel statistics fitted on a real library; the user can
   override in Info); faces are only looked for in photographs — 2026-09-09
-- moments grouping, FTS search, natural-language search over the CLIP embeddings (the image side is stored since 2026-09-11) (places: done 2026-09-11, city per photo from GPS or by hand; a map is still open)
+- moments grouping, FTS search, natural-language search over the CLIP embeddings (image side in sqlite-vec since 2026-09-11; photo.similar already runs on it) (places: done 2026-09-11, city per photo from GPS or by hand; a map is still open)
 
 ## M3 — People (done 2026-09-09)
 - [x] face detection + embeddings: YuNet + SFace through `csrc/face_opencv.cpp`, the one C++ file

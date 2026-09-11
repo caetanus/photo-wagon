@@ -58,6 +58,8 @@ Item {
     signal filterKeyword(string keyword)
     signal addKeywords(int id, string text)
     signal removeKeyword(int id, string keyword)
+    /// Show the photos that look like this one.
+    signal similar(int id)
     /// Editing: previews and results come back through `preview` / `presetPreviews` / the photo.
     signal previewRequest(int id, string editsJson)
     signal presetPreviewRequest(int id, string editsJson)
@@ -548,6 +550,7 @@ Item {
             if (p.holiday) out.push({ group: "holiday", text: p.holiday, icon: icons.holiday })
             if (p.place) out.push({ group: "place", text: p.place + (p.country ? ", " + p.country : ""), icon: icons.pin, country: p.country || "" })
             for (const k of (p.keywords || [])) out.push({ group: "keyword", text: k, icon: icons.hash })
+            out.push({ group: "similar", text: "Similar photos", icon: icons.search })
             return out
         }
         component Chip: Rectangle {
@@ -581,13 +584,15 @@ Item {
                 onTapped: {
                     const m = chip.modelData
                     if (m.group === "place") viewer.filterPlace(viewer.photo.place, m.country)
+                    else if (m.group === "similar") viewer.similar(viewer.photo.id)
                     else if (m.group === "keyword") viewer.filterKeyword(m.text)
                     else viewer.filterTag(m.group, m.text)
                 }
             }
             ToolTip.visible: chipHover.hovered
             ToolTip.delay: 600
-            ToolTip.text: chip.modelData.group === "keyword" ? "Your tag — click to see every photo with it, × removes it"
+            ToolTip.text: chip.modelData.group === "similar" ? "The photos that look like this one"
+                        : chip.modelData.group === "keyword" ? "Your tag — click to see every photo with it, × removes it"
                         : chip.modelData.group === "place" ? "Place — click to see every photo taken there"
                         : chip.modelData.group.charAt(0).toUpperCase() + chip.modelData.group.slice(1) + " — click to see every photo tagged " + chip.modelData.text
         }

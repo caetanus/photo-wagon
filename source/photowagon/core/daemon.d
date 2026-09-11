@@ -157,7 +157,7 @@ final class Daemon : ServerControl
 		registerFaceApi(registry, faceRepo, facesService, store, events);
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerPlacesApi(registry, places);
-		registerTagsApi(registry, scenes, new KeywordService(db, store, events));
+		registerTagsApi(registry, scenes, new KeywordService(db, store, events), photos);
 		registerEditApi(registry, cfg, photos, store, events, (string path) {
 			import std.string : startsWith;
 			foreach (root; roots.list())

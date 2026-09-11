@@ -34,7 +34,20 @@ Item {
         if (view.contentY > view.contentHeight - view.height * 3) grid.requestMore()
     }
 
-    onPageChanged: requesting = false
+    // A new page object resets the views' model; put the scroll back where it was.
+    property real keptY: 0
+    property bool restoring: false
+    onPageChanged: {
+        requesting = false
+        const y = keptY
+        restoring = true
+        Qt.callLater(function () {
+            const v = grid.mode === "days" ? daysView : allView
+            v.contentY = Math.max(0, Math.min(y, Math.max(0, v.contentHeight - v.height)))
+            grid.restoring = false
+        })
+    }
+    function remember(view) { if (!restoring) keptY = view.contentY }
     Rectangle { anchors.fill: parent; color: theme.content }
 
     readonly property int gap: 2
@@ -84,7 +97,13 @@ Item {
     Keys.onPressed: (event) => {
         const extend = event.modifiers & Qt.ShiftModifier
         const step = (d) => { if (extend) { if (anchor < 0) anchor = Math.max(0, cursor); selectRange(Math.max(0, Math.min(page.items.length - 1, (cursor < 0 ? 0 : cursor) + d))) } else { moveCursor(d); anchor = cursor } }
+        const view = mode === "days" ? daysView : allView
+        const maxY = Math.max(0, view.contentHeight - view.height)
         switch (event.key) {
+        case Qt.Key_Home: view.contentY = 0; if (page.items.length) { cursor = 0; selectOnly(page.items[0].id) } break
+        case Qt.Key_End: view.contentY = maxY; if (page.items.length) { cursor = page.items.length - 1; selectOnly(page.items[cursor].id) } requestMore(); break
+        case Qt.Key_PageDown: view.contentY = Math.min(maxY, view.contentY + view.height * 0.9); if (view.contentY > view.contentHeight - view.height * 3) requestMore(); break
+        case Qt.Key_PageUp: view.contentY = Math.max(0, view.contentY - view.height * 0.9); break
         case Qt.Key_A: if (event.modifiers & Qt.ControlModifier) { anchor = 0; selectRange(page.items.length - 1); break } return
         case Qt.Key_Left: step(-1); break
         case Qt.Key_Right: step(1); break
@@ -193,7 +212,7 @@ Item {
         ScrollBar.vertical: ScrollBar { }
         delegate: Cell { required property var modelData; required property int index; photo: modelData; cellIndex: index }
         onAtYEndChanged: if (atYEnd && count > 0) grid.requestMore()
-        onContentYChanged: if (count > 0 && contentY > contentHeight - height * 3) grid.requestMore()
+        onContentYChanged: { grid.remember(allView); if (count > 0 && contentY > contentHeight - height * 3) grid.requestMore() }
         footer: Item { width: 1; height: 24 }
         WheelHandler { acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad; onWheel: (ev) => grid.wheel(allView, ev) }
     }
@@ -275,7 +294,7 @@ Item {
             Item { width: 1; height: 12 }
         }
         onAtYEndChanged: if (atYEnd && count > 0) grid.requestMore()
-        onContentYChanged: if (count > 0 && contentY > contentHeight - height * 3) grid.requestMore()
+        onContentYChanged: { grid.remember(daysView); if (count > 0 && contentY > contentHeight - height * 3) grid.requestMore() }
         footer: Item { width: 1; height: 24 }
         WheelHandler { acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad; onWheel: (ev) => grid.wheel(daysView, ev) }
     }

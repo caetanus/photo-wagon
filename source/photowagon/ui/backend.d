@@ -811,7 +811,7 @@ import photowagon.ui.transport : Bridge;
         case "library.changed":
             loadDates();
             loadStats();
-            reload(0, pageLimit);
+            reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));   // keep what was scrolled to
             break;
         case "p2p.peer":
             loadPeers();

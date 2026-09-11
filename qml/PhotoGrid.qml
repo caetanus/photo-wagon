@@ -102,7 +102,7 @@ Item {
         const view = mode === "days" ? daysView : allView
         const maxY = Math.max(0, view.contentHeight - view.height)
         switch (event.key) {
-        case Qt.Key_Delete: case Qt.Key_Backspace:
+        case Qt.Key_Delete:   // Backspace deletes only on a Mac; here it is a text key
             if (selectedIds().length) remove(selectedIds(), (event.modifiers & Qt.ShiftModifier) !== 0); break
         case Qt.Key_Home: view.contentY = 0; if (page.items.length) { cursor = 0; selectOnly(page.items[0].id) } break
         case Qt.Key_End: view.contentY = maxY; if (page.items.length) { cursor = page.items.length - 1; selectOnly(page.items[cursor].id) } requestMore(); break

@@ -24,12 +24,14 @@ Item {
     /// Right-click: the menu for the selection (the clicked photo joins it if it was outside).
     signal contextMenu(var ids, string path, bool favorite)
 
-    /// Mouse wheel: three lines a notch is too timid for a wall of photos.
-    readonly property real wheelStep: 3.2
+    /// Mouse wheel: a notch moves about a row and a half of photos; a touchpad's
+    /// pixel deltas are taken as they come, tripled.
     function wheel(view, ev) {
         const max = Math.max(0, view.contentHeight - view.height)
-        view.contentY = Math.max(0, Math.min(max, view.contentY - ev.angleDelta.y * grid.wheelStep))
+        const dy = ev.pixelDelta.y !== 0 ? ev.pixelDelta.y * 3 : ev.angleDelta.y / 120 * (grid.cell + grid.gap) * 1.5
+        view.contentY = Math.max(0, Math.min(max, view.contentY - dy))
         ev.accepted = true
+        if (view.contentY > view.contentHeight - view.height * 3) grid.requestMore()
     }
 
     onPageChanged: requesting = false
@@ -191,8 +193,9 @@ Item {
         ScrollBar.vertical: ScrollBar { }
         delegate: Cell { required property var modelData; required property int index; photo: modelData; cellIndex: index }
         onAtYEndChanged: if (atYEnd && count > 0) grid.requestMore()
+        onContentYChanged: if (count > 0 && contentY > contentHeight - height * 3) grid.requestMore()
         footer: Item { width: 1; height: 24 }
-        WheelHandler { acceptedDevices: PointerDevice.Mouse; onWheel: (ev) => grid.wheel(allView, ev) }
+        WheelHandler { acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad; onWheel: (ev) => grid.wheel(allView, ev) }
     }
 
     // ---- "days": sections with a date header ---------------------------------------
@@ -272,8 +275,9 @@ Item {
             Item { width: 1; height: 12 }
         }
         onAtYEndChanged: if (atYEnd && count > 0) grid.requestMore()
+        onContentYChanged: if (count > 0 && contentY > contentHeight - height * 3) grid.requestMore()
         footer: Item { width: 1; height: 24 }
-        WheelHandler { acceptedDevices: PointerDevice.Mouse; onWheel: (ev) => grid.wheel(daysView, ev) }
+        WheelHandler { acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad; onWheel: (ev) => grid.wheel(daysView, ev) }
     }
 
     Label {

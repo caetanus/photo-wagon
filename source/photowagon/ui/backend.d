@@ -98,8 +98,18 @@ import photowagon.ui.transport : Bridge;
     private bool fFavorites;
     private string fKind;
     private string fText;
+    /// Screenshots and memes stay out of the library timeline (they have their own
+    /// views under Media Types); an album, a search or an explicit kind shows everything.
+    private bool onlyPhotos = true;
+
+    private string kindParam()
+    {
+        if (fKind.length) return fKind;
+        if (onlyPhotos && !fAlbum && !fText.length) return "photo";
+        return null;
+    }
     private long openId; // photo being opened/shown; faces answers for others are dropped
-    private int pageLimit = 120;
+    private int pageLimit = 240;
     private bool indexing;
     private string progressText;
 
@@ -355,7 +365,7 @@ import photowagon.ui.transport : Bridge;
         if (fAlbum)  params["albumId"] = fAlbum;
         if (fRoot)   params["rootId"] = fRoot;
         if (fFavorites) params["favorites"] = true;
-        if (fKind.length) params["kind"] = fKind;
+        if (kindParam().length) params["kind"] = kindParam();
         if (fText.length) params["q"] = fText;
         immutable off = offset;
         client.request("library.page", params, (r, e) {
@@ -381,7 +391,7 @@ import photowagon.ui.transport : Bridge;
         if (fAlbum)  params["albumId"] = fAlbum;
         if (fRoot)   params["rootId"] = fRoot;
         if (fFavorites) params["favorites"] = true;
-        if (fKind.length) params["kind"] = fKind;
+        if (kindParam().length) params["kind"] = kindParam();
         if (fText.length) params["q"] = fText;
         client.request("library.dates", params, (r, e) {
             if (e.type != JSONType.null_) { report("dates", e); return; }

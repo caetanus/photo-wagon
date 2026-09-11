@@ -63,6 +63,7 @@ fetched album are not pulled, only thumbnails.
 - [x] Phone: the computer's faces on the phone's own photos (by hash), names and corrections both ways — 2026-09-10
 - [x] Desktop: search as you type (people, albums, dates, kinds, file names), folding sidebar sections, a chosen portrait per person and the biggest face by default, "Remove from People", likely people first when naming a face, zoom and full screen in the viewer, a context menu (copy files, copy paths, show in folder, favorite, add to album, mark as photo / screenshot / meme) for one photo or a selection, a stronger mouse wheel — 2026-09-10
 - [x] Phone: an x86_64 build for the emulator (LDC runtime built, DSide binding, libsodium), the adb harness on it; the Back key no longer tears the D runtime down; the DSide holder map is locked (GC finalizers on worker threads) — 2026-09-10
+- [x] Desktop: the library timeline is photographs only (screenshots and memes under Media Types), Shift-click / Shift+arrows / Ctrl+A selection, a row-and-a-half wheel step with touchpad deltas, pages of 240 fetched ahead, full screen leaves again, SIGTERM ends the process — 2026-09-11
 - [ ] Phone: videos from the camera roll (index, thumbnails, playback, sync)
 - [ ] Phone: the computer found without the QR (LAN beacon / DHT), faces cached for offline
 - [ ] Phone: the libp2p event loop still ends with vibe's "May not process events within an active yieldLock()" once per session on Android; a fresh thread takes over, the cause is open

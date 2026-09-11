@@ -8,7 +8,9 @@ an album with a peer you chose.
 
 ## The desktop app
 
-A Photos-style window: a source list (Library, Favorites, People, Imports;
+A Photos-style window — the Library timeline shows photographs; screenshots
+and memes live under Media Types (an album or a search shows everything) — with
+a source list (Library, Favorites, People, Imports;
 the **years → months → days** tree with counts, one click to any day, the same
 node again clears it; the named **people** with portraits and counts; Media
 Types — Photos, Screenshots, Memes — albums, the phone and the peers; the

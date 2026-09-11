@@ -392,7 +392,9 @@ final class PhotoRepo
 		}
 		if (f.favorites)
 			w.where ~= " AND p.favorite = 1";
-		if (f.kind.length)
+		if (f.kind == "photo")
+			w.where ~= " AND (p.kind = 'photo' OR p.kind IS NULL)";   // not classified yet counts as a photograph
+		else if (f.kind.length)
 		{
 			w.where ~= " AND p.kind = ?";
 			w.strings ~= f.kind;

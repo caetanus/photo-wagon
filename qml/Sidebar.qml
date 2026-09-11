@@ -197,7 +197,8 @@ Rectangle {
             id: list
             width: flick.width
             SectionHeader { title: "Library" }
-            Row { key: "all"; title: "Library"; icon: icons.photos; detail: sidebar.stats.total ? String(sidebar.stats.total) : "" }
+            // the library timeline is photographs (screenshots and memes have their own rows below)
+            Row { key: "all"; title: "Library"; icon: icons.photos; detail: sidebar.stats.kinds.photo ? String(sidebar.stats.kinds.photo) : (sidebar.stats.total ? String(sidebar.stats.total) : "") }
             Row { key: "favorites"; title: "Favorites"; icon: icons.heart }
             Row { key: "people"; title: "People"; icon: icons.people; detail: sidebar.namedPeople.length ? String(sidebar.namedPeople.length) : "" }
             Row {

@@ -41,15 +41,15 @@ mood	Adventurous	an adventure|exploring the outdoors|an adventurous trip
 mood	Festive	a festive celebration|a holiday celebration|festivities
 mood	Melancholic	a melancholic scene|a sad and lonely moment|a gloomy mood
 mood	Playful	a playful moment|people goofing around|fun and games
-weather	Indoors	an indoor scene|inside a building|a photo taken indoors|a room
+weather	Indoors	an indoor scene|inside a house|a photo taken indoors|a room with furniture|people indoors|a baby indoors|food on a table indoors|a close-up portrait indoors|a selfie indoors
 weather	Sunny	a sunny day|bright sunshine and blue sky|a clear sunny day outdoors
 weather	Cloudy	a cloudy day|an overcast grey sky|clouds covering the sky
 weather	Rainy	a rainy day|rain falling|people with umbrellas in the rain|wet streets in the rain
 weather	Stormy	a storm|a thunderstorm with dark clouds|lightning in the sky
 weather	Foggy	fog|a foggy morning|mist over the landscape
 weather	Snowy	snow falling|a snowy day|a landscape covered in snow
-weather	Hot	a hot summer day|scorching heat|people cooling off in the heat|a heatwave
-weather	Cold	a cold winter day|people bundled up in coats and scarves|freezing weather
+weather	Hot	a hot sunny summer day outdoors|scorching heat under the sun|people cooling off outdoors in the heat|a heatwave at the beach or pool
+weather	Cold	a cold winter day outdoors|people bundled up in coats and scarves outdoors|freezing weather|frost and cold wind
 holiday	None	an ordinary day|an everyday photo|nothing being celebrated
 holiday	Christmas	Christmas|a Christmas tree with presents|Christmas decorations and lights|a Christmas dinner
 holiday	New Year	New Year's Eve|fireworks at midnight|a New Year celebration with champagne

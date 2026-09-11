@@ -32,14 +32,27 @@ import photowagon.core.store.store : ContentStore;
 
 /// Bump when the vocabulary (data/scenes/prompts.tsv) or the scoring changes:
 /// the automatic tags are redone from the stored embeddings.
-enum tagsVersion = 2;
+enum tagsVersion = 3;
 /// Bump when the image model changes: everything is re-encoded.
-enum clipVersion = 1;
+enum clipVersion = 2;   // 1 stored zero embeddings for photos whose tag insert failed
 
 /// CLIP's logit scale; the softmax over a group's labels uses it.
 enum logitScale = 100.0;
 /// The winner must have this much of the group's probability mass to count.
-enum minProb = 0.30;
+/// Weather and holidays ask for more: an indoor photo is not "Hot", a cake is not
+/// always a birthday.
+double minProbFor(string group) pure nothrow @safe
+{
+	switch (group)
+	{
+	case "weather":
+		return 0.60;
+	case "holiday":
+		return 0.50;
+	default:
+		return 0.30;
+	}
+}
 
 /// The groups, in the order of the vocabulary; each photo gets one tag per group.
 enum string[] tagGroups = ["scene", "mood", "weather", "holiday"];
@@ -135,7 +148,7 @@ Scored score(const Label[] vocab, const float[clipDim] emb, string group)
 	}
 	immutable best = order[0];
 	s.prob = cast(float) probs[best];
-	if (!labels[best].nothing && probs[best] >= minProb)
+	if (!labels[best].nothing && probs[best] >= minProbFor(group))
 		s.tag = labels[best].name;
 	return s;
 }
@@ -246,23 +259,34 @@ final class SceneService
 		{
 			if (closed)
 				return;
+			float[clipDim] emb;
+			bool encoded;
 			try
 			{
 				auto p = photos.get(id);
-				// the stored thumbnail (256 px): CLIP looks at 224 anyway, and no 100 MP decode
+				// the stored thumbnail: CLIP looks at 224 px anyway, and no 100 MP decode
 				immutable src = store.pathFor(p.thumbHash);
-				auto emb = async(&clipEncode, src).getResult();
-				storeEmbedding(id, emb);
-				if (tagAuto(id, emb))
-					tagged++;
+				emb = async(&clipEncode, src).getResult();
+				encoded = true;
 			}
 			catch (InterruptException)
 				throw new InterruptException;
 			catch (Exception e)
 			{
 				logWarn("scenes: photo %s: %s", id, e.msg);
-				markFailed(id);
+				markFailed(id);   // an unreadable image is not retried; the zero embedding says so
 			}
+			if (encoded)
+				try
+				{
+					storeEmbedding(id, emb);
+					if (tagAuto(id, emb))
+						tagged++;
+				}
+				catch (InterruptException)
+					throw new InterruptException;
+				catch (Exception e)
+					logWarn("scenes: photo %s: %s (will be retried)", id, e.msg);
 			done++;
 			if (MonoTime.currTime - lastReport > 300.msecs || done == ids.length)
 			{

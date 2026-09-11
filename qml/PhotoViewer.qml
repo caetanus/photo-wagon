@@ -16,14 +16,18 @@ Item {
     property bool infoOpen: false
     /// parsed library.photoTags: {id, scene, mood, by, scores: {scene: [{tag, prob}], mood: […]}}
     property var photoTags: ({ id: 0 })
-    /// "Beach  ·  Beach 48 %, Group 38 %" — the tag, then the model's top guesses
+    /// "Beach 48 %  (Group 38 %)" — the tag with its confidence, then the runner-up; "—" when nothing fits
     function tagLine(group) {
         if (!viewer.photo) return ""
         const t = viewer.photoTags && viewer.photoTags.id === viewer.photo.id ? viewer.photoTags : null
         const tag = t ? (t[group] || "") : (viewer.photo[group] || "")
-        const guesses = t && t.scores && t.scores[group] ? t.scores[group].slice(0, 3).map(g => g.tag + " " + Math.round(g.prob * 100) + " %").join(", ") : ""
         const by = t && t.by && t.by[group] === "user" ? " (yours)" : t && t.by && t.by[group] === "date" ? " (calendar)" : ""
-        return (tag ? tag + by : "—") + (guesses ? "  ·  " + guesses : "")
+        const sc = t && t.scores && t.scores[group] ? t.scores[group] : []
+        const pct = g => g.tag + " " + Math.round(g.prob * 100) + " %"
+        if (!tag) return sc.length ? "—  (" + pct(sc[0]) + ")" : "—"
+        const own = sc.find(g => g.tag === tag)
+        const other = sc.find(g => g.tag !== tag)
+        return tag + by + (own ? "  " + Math.round(own.prob * 100) + " %" : "") + (other ? "  (" + pct(other) + ")" : "")
     }
     property bool showStrip: true
     /// The naming popup's body (a plain Item: headless captures can grab it).

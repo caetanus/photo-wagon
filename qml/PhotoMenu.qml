@@ -28,7 +28,6 @@ Menu {
     MenuItem { text: (menu.favorite ? "Unfavorite" : "Favorite") + menu.suffix; onTriggered: menu.toggleFavorite(menu.ids) }
     MenuItem { text: "Add to Album…" + menu.suffix; onTriggered: menu.addToAlbum(menu.ids) }
     MenuSeparator { }
-    MenuSeparator { }
     MenuItem { text: "Move to Trash" + menu.suffix; onTriggered: menu.remove(menu.ids, false) }
     MenuItem { text: "Delete Permanently…" + menu.suffix; onTriggered: menu.remove(menu.ids, true) }
     MenuSeparator { }

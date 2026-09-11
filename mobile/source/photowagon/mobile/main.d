@@ -110,6 +110,12 @@ int main()
         environment["QT_LOGGING_RULES"] = "qt.qpa.window=true;qt.qpa.android=true;qt.scenegraph.general=true";   // window expose / hide
     }
     installCrashHandler();
+    {
+        // the user's rule: past 1.5 GB resident the app kills itself with SIGSEGV, so the
+        // crash handler above writes its backtrace and the dump can be read
+        import photowagon.core.jobs.memguard : startMemoryGuard;
+        startMemoryGuard(1536, "photo-wagon-mobile");
+    }
     installQuitHandler();
     logTls("qt thread");
     {

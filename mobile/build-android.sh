@@ -64,7 +64,7 @@ link() {
         ../source/photowagon/ui/backend.d ../source/photowagon/ui/transport.d ../source/photowagon/ui/bridge.d \
         ../source/photowagon/core/ipc/link.d ../source/photowagon/core/p2p/identity.d \
         $P2P_SOURCES -d-version=LibP2P_Lite -d-version=EventcoreEpollDriver $P2P_INCLUDES \
-        ../source/photowagon/core/indexer/scan.d ../source/photowagon/core/library/calendar.d \
+        ../source/photowagon/core/indexer/scan.d ../source/photowagon/core/library/calendar.d ../source/photowagon/core/jobs/memguard.d \
         ../source/photowagon/core/metadata/exifparse.d ../source/photowagon/core/metadata/datefromname.d \
         ../source/photowagon/core/pairingcode.d \
         "$DSIDE/runtime/qrc/qrc.d" \

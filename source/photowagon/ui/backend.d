@@ -706,6 +706,29 @@ import photowagon.ui.transport : Bridge;
             setKind(cast(int) v.integer, kind);
     }
 
+    /// The selection leaves the library: files to the trash, or gone for good.
+    @Slot void deletePhotos(string idsJson, bool permanent)
+    {
+        auto ids = parseJSON(idsJson);
+        JSONValue params = ["ids": ids, "permanent": JSONValue(permanent)];
+        bool currentGone;
+        if (current.length)
+        {
+            immutable cid = parseJSON(current)["id"].integer;
+            foreach (v; ids.array) if (v.integer == cid) currentGone = true;
+        }
+        client.request("photo.delete", params, (r, e) {
+            if (e.type != JSONType.null_) { report("delete", e); return; }
+            immutable n = r["deleted"].integer;
+            immutable failed = r["failed"].array.length;
+            setStatus(true, indexing, (permanent ? "deleted " : "moved to the trash: ") ~ n.to!string ~ (n == 1 ? " photo" : " photos")
+                ~ (failed ? ", " ~ failed.to!string ~ " failed" : ""));
+            if (currentGone) closePhoto();
+            reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));
+            loadDates(); loadStats(); loadPeople();
+        });
+    }
+
     /// Plain text on the clipboard (paths, a name).
     @Slot void copyText(string text)
     {

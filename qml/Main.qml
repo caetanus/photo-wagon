@@ -385,6 +385,7 @@ ApplicationWindow {
                 onOpen: (id) => library.openPhoto(id)
                 onFavorite: (id) => library.toggleFavorite(id)
                 onContextMenu: (ids, path, fav) => { photoMenu.ids = ids; photoMenu.path = path; photoMenu.favorite = fav; photoMenu.popup() }
+                onRemove: (ids, permanent) => root.removePhotos(ids, permanent)
             }
             PeopleView {
                 anchors.fill: parent
@@ -429,6 +430,7 @@ ApplicationWindow {
                 onFullscreenToggle: root.fullscreen = !root.fullscreen
                 onSetCover: (personId, faceId) => library.setPersonCover(personId, faceId)
                 onContextMenu: (id, path, fav) => { photoMenu.ids = [id]; photoMenu.path = path; photoMenu.favorite = fav; photoMenu.popup() }
+                onRemove: (ids, permanent) => root.removePhotos(ids, permanent)
                 onClosed: library.closePhoto()
                 onOpenIndex: (i) => {
                     if (i < root.pageData.items.length) library.openPhoto(root.pageData.items[i].id)
@@ -451,6 +453,25 @@ ApplicationWindow {
         onToggleFavorite: (ids) => { for (const id of ids) library.toggleFavorite(id) }
         onAddToAlbum: (ids) => { albumDialog.photoIds = ids; albumDialog.open() }
         onSetKind: (ids, kind) => library.setKinds(JSON.stringify(ids), kind)
+        onRemove: (ids, permanent) => root.removePhotos(ids, permanent)
+    }
+
+    // Delete → the trash, right away (the desktop's trash can restores). Shift+Delete asks.
+    function removePhotos(ids, permanent) {
+        if (!ids.length) return
+        if (!permanent) { library.deletePhotos(JSON.stringify(ids), false); grid.clearSelection(); return }
+        deleteAsk.ids = ids
+        deleteAsk.open()
+    }
+    Dialog {
+        id: deleteAsk
+        property var ids: []
+        modal: true
+        anchors.centerIn: parent
+        title: ids.length === 1 ? "Delete this photo permanently?" : "Delete " + ids.length + " photos permanently?"
+        standardButtons: Dialog.Cancel | Dialog.Ok
+        Label { text: "The files are removed from the disk, not moved to the trash. This cannot be undone."; color: theme.text; wrapMode: Text.WordWrap; width: 320 }
+        onAccepted: { library.deletePhotos(JSON.stringify(deleteAsk.ids), true); grid.clearSelection() }
     }
 
     MergeSuggestion {

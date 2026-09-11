@@ -17,6 +17,7 @@ Menu {
     signal toggleFavorite(var ids)
     signal addToAlbum(var ids)
     signal setKind(var ids, string kind)
+    signal remove(var ids, bool permanent)
 
     readonly property string suffix: ids.length === 1 ? "" : " (" + ids.length + ")"
 
@@ -26,6 +27,10 @@ Menu {
     MenuSeparator { }
     MenuItem { text: (menu.favorite ? "Unfavorite" : "Favorite") + menu.suffix; onTriggered: menu.toggleFavorite(menu.ids) }
     MenuItem { text: "Add to Album…" + menu.suffix; onTriggered: menu.addToAlbum(menu.ids) }
+    MenuSeparator { }
+    MenuSeparator { }
+    MenuItem { text: "Move to Trash" + menu.suffix; onTriggered: menu.remove(menu.ids, false) }
+    MenuItem { text: "Delete Permanently…" + menu.suffix; onTriggered: menu.remove(menu.ids, true) }
     MenuSeparator { }
     Menu {
         title: "Mark as" + menu.suffix

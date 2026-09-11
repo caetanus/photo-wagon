@@ -183,6 +183,14 @@ final class PhotoRepo
 			throw new ApiError("not_found", "no photo " ~ idString(id));
 	}
 
+	/// The row goes (faces and album entries follow by cascade); the file is the caller's business.
+	void remove(long id)
+	{
+		auto d = db.prepare("DELETE FROM photos WHERE id = ?");
+		d.bind(1, id);
+		d.run();
+	}
+
 	long deleteMissingUnder(long rootId, bool delegate(string path) stillExists)
 	{
 		long[] gone;

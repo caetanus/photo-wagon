@@ -115,6 +115,42 @@ void registerLibraryApi(Registry r, RootRepo roots, PhotoRepo photos, DateTree d
 		return photos.toJson(photo);
 	});
 
+	// {ids: [...], permanent?} → {deleted, failed: [{id, message}]}: the files go to the
+	// desktop's trash (or away for good) and the photos leave the library
+	r.add("photo.delete", (JSONValue p) {
+		import std.file : exists, remove;
+		import photowagon.core.library.trash : moveToTrash;
+
+		if (p.type != JSONType.object || !("ids" in p) || p["ids"].type != JSONType.array)
+			throw new ApiError("bad_params", "ids: [...] wanted");
+		immutable permanent = "permanent" in p && p["permanent"].type == JSONType.true_;
+		long deleted;
+		JSONValue[] failed;
+		foreach (v; p["ids"].array)
+		{
+			immutable id = v.integer;
+			try
+			{
+				auto photo = photos.get(id);
+				if (photo.path.length && photo.path.exists)
+				{
+					if (permanent) remove(photo.path);
+					else moveToTrash(photo.path);
+				}
+				photos.remove(id);
+				deleted++;
+			}
+			catch (Exception e)
+				failed ~= JSONValue(["id": JSONValue(id), "message": JSONValue(e.msg)]);
+		}
+		if (deleted)
+		{
+			events.emit("library.changed", JSONValue.emptyObject);
+			events.emit("people.changed", JSONValue.emptyObject);
+		}
+		return JSONValue(["deleted": JSONValue(deleted), "failed": JSONValue(failed)]);
+	});
+
 	r.add("photo.favorite", (JSONValue p) {
 		immutable id = requireLong(p, "id");
 		bool on = true;

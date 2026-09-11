@@ -23,6 +23,8 @@ Item {
     signal selectionChanged()
     /// Right-click: the menu for the selection (the clicked photo joins it if it was outside).
     signal contextMenu(var ids, string path, bool favorite)
+    /// Delete moves the selection to the trash; Shift+Delete asks and removes for good.
+    signal remove(var ids, bool permanent)
 
     /// Mouse wheel: a notch moves about a row and a half of photos; a touchpad's
     /// pixel deltas are taken as they come, tripled.
@@ -100,6 +102,8 @@ Item {
         const view = mode === "days" ? daysView : allView
         const maxY = Math.max(0, view.contentHeight - view.height)
         switch (event.key) {
+        case Qt.Key_Delete: case Qt.Key_Backspace:
+            if (selectedIds().length) remove(selectedIds(), (event.modifiers & Qt.ShiftModifier) !== 0); break
         case Qt.Key_Home: view.contentY = 0; if (page.items.length) { cursor = 0; selectOnly(page.items[0].id) } break
         case Qt.Key_End: view.contentY = maxY; if (page.items.length) { cursor = page.items.length - 1; selectOnly(page.items[cursor].id) } requestMore(); break
         case Qt.Key_PageDown: view.contentY = Math.min(maxY, view.contentY + view.height * 0.9); if (view.contentY > view.contentHeight - view.height * 3) requestMore(); break

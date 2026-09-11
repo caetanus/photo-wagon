@@ -65,6 +65,7 @@ fetched album are not pulled, only thumbnails.
 - [x] Phone: an x86_64 build for the emulator (LDC runtime built, DSide binding, libsodium), the adb harness on it; the Back key no longer tears the D runtime down; the DSide holder map is locked (GC finalizers on worker threads) — 2026-09-10
 - [x] Desktop: the library timeline is photographs only (screenshots and memes under Media Types), Shift-click / Shift+arrows / Ctrl+A selection, a row-and-a-half wheel step with touchpad deltas, pages of 240 fetched ahead, full screen leaves again, SIGTERM ends the process — 2026-09-11
 - [x] Dates: a photo without EXIF is dated from its name (IMG_20210321_150104, IMG-20200213-WA0000, Screenshot_2020-10-07-…, PXL_…) or its folder (2020/02/13) before the file's mtime; a one-time pass at startup re-dates what was already indexed (2,314 of the user's 2,386 EXIF-less photos left 2026) — 2026-09-11
+- [x] Delete → the desktop's trash, Shift+Delete → gone for good (asked first); also in the context menu; the photos leave the library with their faces and album entries — 2026-09-11
 - [ ] Phone: videos from the camera roll (index, thumbnails, playback, sync)
 - [ ] Phone: the computer found without the QR (LAN beacon / DHT), faces cached for offline
 - [ ] Phone: the libp2p event loop still ends with vibe's "May not process events within an active yieldLock()" once per session on Android; a fresh thread takes over, the cause is open

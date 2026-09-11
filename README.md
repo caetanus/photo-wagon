@@ -26,7 +26,8 @@ portraits, narrowed as you type, ↑/↓ and Return pick one; "Use as portrait"
 makes that face the person's picture), zoom (wheel, double-click, +/−/0,
 drag) and full screen (F), a right-click menu on a photo or a selection
 (copy the files, copy the paths, show in folder, favorite, add to an album,
-mark as photo / screenshot / meme), and a
+mark as photo / screenshot / meme, move to the trash, delete permanently;
+Delete and Shift+Delete do the last two from the keyboard), and a
 People page with round portraits. Light or dark follows the system.
 
 ## Requirements

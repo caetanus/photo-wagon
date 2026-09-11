@@ -35,6 +35,7 @@ Item {
     signal setCover(int personId, int faceId)
     signal fullscreenToggle()
     signal contextMenu(int id, string path, bool favorite)
+    signal remove(var ids, bool permanent)
     /// parsed library.candidates, for the naming popup
     property var candidates: ({ faceId: 0, people: [] })
     /// parsed library.region: the visible part at full resolution while zoomed
@@ -102,6 +103,7 @@ Item {
         else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) { viewer.setZoom(viewer.zoom * 1.25); event.accepted = true }
         else if (event.key === Qt.Key_Minus) { viewer.setZoom(viewer.zoom / 1.25); event.accepted = true }
         else if (event.key === Qt.Key_0) { viewer.resetZoom(); event.accepted = true }
+        else if ((event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace) && viewer.photo) { viewer.remove([viewer.photo.id], (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
     }
 
     function step(delta) {

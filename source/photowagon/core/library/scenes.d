@@ -32,7 +32,7 @@ import photowagon.core.store.store : ContentStore;
 
 /// Bump when the vocabulary (data/scenes/prompts.tsv) or the scoring changes:
 /// the automatic tags are redone from the stored embeddings.
-enum tagsVersion = 4;
+enum tagsVersion = 5;
 /// Bump when the image model changes: everything is re-encoded.
 enum clipVersion = 2;   // 1 stored zero embeddings for photos whose tag insert failed
 
@@ -48,7 +48,7 @@ double minProbFor(string group) pure nothrow @safe
 	case "weather":
 		return 0.60;
 	case "holiday":
-		return 0.50;
+		return 0.70;   // three friends in black dresses were a 'graduation' at 60 %
 	default:
 		return 0.30;
 	}

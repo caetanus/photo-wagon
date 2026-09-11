@@ -1,4 +1,4 @@
-# group	label	prompts (| separated; {} is filled by the templates in make-prompts.py)
+# group	label	prompts (| separated; {} is filled by the templates in make-prompts.py)	[flags: date = the calendar alone assigns it, the picture never does]
 # The first label of each group is its "nothing in particular" class (None, Neutral, Indoors).
 scene	None	a photo|a snapshot|a picture of something|an ordinary photo of everyday life
 scene	Beach	the beach|people at the beach|sand and sea|a seaside beach
@@ -52,15 +52,15 @@ weather	Hot	a hot sunny summer day outdoors|scorching heat under the sun|people 
 weather	Cold	a cold winter day outdoors|people bundled up in coats and scarves outdoors|freezing weather|frost and cold wind
 holiday	None	an ordinary day|an everyday photo|nothing being celebrated
 holiday	Christmas	Christmas|a Christmas tree with presents|Christmas decorations and lights|a Christmas dinner
-holiday	New Year	New Year's Eve|fireworks at midnight|a New Year celebration with champagne
+holiday	New Year	New Year's Eve|fireworks at midnight|a New Year celebration with champagne	date
 holiday	Carnival	Carnival|people in carnival costumes|a carnival parade with confetti and glitter
-holiday	Easter	Easter|Easter eggs|an Easter bunny|an Easter chocolate egg
+holiday	Easter	Easter|Easter eggs|an Easter bunny|an Easter chocolate egg	date
 holiday	Halloween	Halloween|Halloween costumes|carved pumpkins|trick or treating
-holiday	Festa Junina	Festa Junina|a Brazilian June festival with flags and bonfire|people in caipira costumes with straw hats
+holiday	Festa Junina	Festa Junina|a Brazilian June festival with flags and bonfire|people in caipira costumes with straw hats	date
 holiday	Birthday	a birthday party|a birthday cake with candles|a child's birthday party|birthday balloons
 holiday	Wedding	a wedding|a bride and groom|a wedding ceremony|a wedding cake
 holiday	Graduation	a graduation ceremony|graduates in caps and gowns|a graduation party
-holiday	Valentine's Day	Valentine's Day|a romantic dinner with roses|hearts and a bouquet for a lover
-holiday	Mother's Day	Mother's Day|a mother with her children celebrating|flowers for mom
-holiday	Father's Day	Father's Day|a father with his children celebrating|a gift for dad
-holiday	Children's Day	Children's Day|children opening presents|a toy store|kids with new toys
+holiday	Valentine's Day	Valentine's Day|a romantic dinner with roses|hearts and a bouquet for a lover	date
+holiday	Mother's Day	Mother's Day|a mother with her children celebrating|flowers for mom	date
+holiday	Father's Day	Father's Day|a father with his children celebrating|a gift for dad	date
+holiday	Children's Day	Children's Day|children opening presents|a toy store|kids with new toys	date

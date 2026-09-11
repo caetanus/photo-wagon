@@ -34,13 +34,15 @@ rows = []
 for line in open(os.path.join(HERE, "labels.tsv"), encoding="utf-8"):
     if line.startswith("#") or not line.strip():
         continue
-    group, label, phrases = line.rstrip("\n").split("\t")
+    parts = line.rstrip("\n").split("\t")
+    group, label, phrases = parts[:3]
+    flags = parts[3] if len(parts) > 3 else ""
     texts = [t.format(p) for p in phrases.split("|") for t in TEMPLATES]
     e = embed(texts).mean(axis=0)
     e /= np.linalg.norm(e)
-    rows.append((group, label, e))
+    rows.append((group, label, e, flags))
     print(group, label, len(texts), "phrases")
 with open(os.path.join(HERE, "prompts.tsv"), "w", encoding="utf-8") as f:
-    for group, label, e in rows:
-        f.write(group + "\t" + label + "\t" + " ".join("%.5f" % v for v in e) + "\n")
+    for group, label, e, flags in rows:
+        f.write(group + "\t" + label + "\t" + " ".join("%.5f" % v for v in e) + "\t" + flags + "\n")
 print(len(rows), "labels →", os.path.join(HERE, "prompts.tsv"))

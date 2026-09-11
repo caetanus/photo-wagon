@@ -32,7 +32,7 @@ import photowagon.core.store.store : ContentStore;
 
 /// Bump when the vocabulary (data/scenes/prompts.tsv) or the scoring changes:
 /// the automatic tags are redone from the stored embeddings.
-enum tagsVersion = 3;
+enum tagsVersion = 4;
 /// Bump when the image model changes: everything is re-encoded.
 enum clipVersion = 2;   // 1 stored zero embeddings for photos whose tag insert failed
 
@@ -63,6 +63,7 @@ struct Label
 	string name;
 	float[clipDim] embedding;
 	bool nothing; // the "nothing in particular" class of its group
+	bool dateOnly; // holidays the calendar alone assigns (a mother with her baby is not Mother's Day)
 }
 
 /// The vocabulary compiled in from data/scenes/prompts.tsv.
@@ -77,6 +78,7 @@ Label[] parseVocabulary(string tsv)
 		Label l;
 		l.group = f[0];
 		l.name = f[1];
+		l.dateOnly = f.length > 3 && f[3].strip == "date";
 		auto v = f[2].strip.split(' ');
 		if (v.length != clipDim)
 			continue;
@@ -111,7 +113,7 @@ Scored score(const Label[] vocab, const float[clipDim] emb, string group)
 	double[] sims;
 	const(Label)*[] labels;
 	foreach (ref l; vocab)
-		if (l.group == group)
+		if (l.group == group && !l.dateOnly)
 		{
 			double d = 0;
 			foreach (i; 0 .. clipDim)

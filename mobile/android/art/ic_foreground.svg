@@ -6,6 +6,7 @@
     <radialGradient id="glow" cx="0.5" cy="0.5" r="0.55"><stop offset="0" stop-color="#3a2416"/><stop offset="0.7" stop-color="#15100c"/><stop offset="1" stop-color="#0c0908"/></radialGradient>
     <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2c4a86"/><stop offset="0.5" stop-color="#101a3a"/><stop offset="1" stop-color="#3a1d4a"/></linearGradient>
   </defs>
+  <g transform="translate(54 54) scale(0.92) translate(-54 -54)">
   <!-- the dark inside -->
   <rect x="26" y="32" width="56" height="32" fill="url(#glow)"/>
   <!-- the curtains, parted and tied back -->
@@ -48,4 +49,5 @@
   <rect x="26" y="74" width="56" height="4.5" fill="#1f1f24"/>
   <circle cx="38" cy="82" r="7" fill="#1c1c20"/><circle cx="38" cy="82" r="4.4" fill="#3d3d45"/><circle cx="38" cy="82" r="1.6" fill="#8a7448"/>
   <circle cx="70" cy="82" r="7" fill="#1c1c20"/><circle cx="70" cy="82" r="4.4" fill="#3d3d45"/><circle cx="70" cy="82" r="1.6" fill="#8a7448"/>
+  </g>
 </svg>

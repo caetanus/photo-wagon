@@ -8,6 +8,7 @@ import qt.quick.qcoreapplication;
 import qt.quick.qqmlapplicationengine;
 import qt.quick.qqmlcontext;
 import qt.quick.qurl;
+import qt.quick.qicon;
 import qt.quick.qresource;          // QResource, used by the qrcRegister mixin
 import cppq = qt.quick.qobject;     // the C++ QObject; `@QObject` below is qtmoc's UDA
 
@@ -41,6 +42,11 @@ int runUi(Config cfg, InProcessLink link)
     QCoreApplication.setApplicationName(APP_ID);
     QCoreApplication.setApplicationVersion(APP_VERSION);
     QGuiApplication.setApplicationDisplayName(APP_NAME);
+    // The window icon: X11 takes it from here; Wayland compositors look the app_id
+    // ("photo-wagon") up in share/photo-wagon.desktop (share/install-desktop.sh).
+    QGuiApplication.setDesktopFileName(APP_ID);
+    auto icon = QIcon(":/icon.png");
+    QGuiApplication.setWindowIcon(icon);
 
     // newQObject registers the meta-object; only after that may signals be emitted,
     // which is why the bridge is started in a second step.

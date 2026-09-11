@@ -23,6 +23,8 @@ import photowagon.ui.transport : Bridge;
 @QObject class Library
 {
     Signal!() pageChanged;
+    Signal!() placesChanged;
+    Signal!() placeSuggestionsChanged;
     Signal!() datesChanged;
     Signal!() rootsChanged;
     Signal!() albumsChanged;
@@ -71,6 +73,10 @@ import photowagon.ui.transport : Bridge;
     @Property("pairingChanged") string pairing = `{"enabled":false}`;
     /// {"people":[{id,name,faces,coverUrl}]} — clusters of faces, most photos first.
     @Property("peopleChanged") string people = `{"people":[]}`;
+    /// {"places":[{place,country,count,cover}]} — the cities of the library, most photos first
+    @Property("placesChanged") string places = `{"places":[]}`;
+    /// places.suggest for the name being typed in "Set Place…": {"places":[{place,country,own}]}
+    @Property("placeSuggestionsChanged") string placeSuggestions = `{"places":[]}`;
     /// {"photoId":N,"faces":[{id,x,y,w,h,personId,name,thumbUrl}]} for the open photo.
     @Property("facesChanged") string faces = `{"photoId":0,"faces":[]}`;
     /// The person the grid is filtered to (0 = none).
@@ -98,6 +104,8 @@ import photowagon.ui.transport : Bridge;
     private bool fFavorites;
     private string fKind;
     private string fText;
+    private string fPlace;
+    private string fCountry;
     /// Screenshots and memes stay out of the library timeline (they have their own
     /// views under Media Types); an album, a search or an explicit kind shows everything.
     private bool onlyPhotos = true;
@@ -105,7 +113,7 @@ import photowagon.ui.transport : Bridge;
     private string kindParam()
     {
         if (fKind.length) return fKind;
-        if (onlyPhotos && !fAlbum && !fText.length) return "photo";
+        if (onlyPhotos && !fAlbum && !fText.length && !fPlace.length) return "photo";
         return null;
     }
     private long openId; // photo being opened/shown; faces answers for others are dropped
@@ -245,6 +253,58 @@ import photowagon.ui.transport : Bridge;
         loadDates();
     }
 
+    /// Photos of one place ("" clears).
+    @Slot void filterPlace(string place, string country)
+    {
+        import std.string : strip;
+        clearFilters();
+        fPlace = place.strip();
+        fCountry = country.strip();
+        publishFilter();
+        reload(0, pageLimit);
+        loadDates();
+    }
+
+    @Slot void loadPlaces()
+    {
+        client.request("places.list", (r, e) {
+            if (e.type != JSONType.null_) return;
+            places = r.toString();
+            placesChanged.emit();
+        });
+    }
+
+    /// The user's word on where a selection was taken ("" clears).
+    @Slot void setPlace(string photoIdsJson, string place, string country)
+    {
+        JSONValue ids;
+        try
+            ids = parseJSON(photoIdsJson);
+        catch (JSONException)
+            ids = JSONValue.emptyArray;
+        JSONValue params = JSONValue.emptyObject;
+        params["ids"] = ids;
+        params["place"] = place;
+        params["country"] = country;
+        client.request("photo.setPlace", params, (r, e) {
+            if (e.type != JSONType.null_) { report("photo.setPlace", e); return; }
+            setStatus(true, indexing, place.length ? "place set" : "place cleared");
+            reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));
+        });
+    }
+
+    /// Cities for the name being typed → placeSuggestions.
+    @Slot void suggestPlaces(string q)
+    {
+        JSONValue params = JSONValue.emptyObject;
+        params["q"] = q;
+        client.request("places.suggest", params, (r, e) {
+            if (e.type != JSONType.null_) return;
+            placeSuggestions = r.toString();
+            placeSuggestionsChanged.emit();
+        });
+    }
+
     /// The user's word on what a picture is.
     @Slot void setKind(int id, string kind)
     {
@@ -283,6 +343,7 @@ import photowagon.ui.transport : Bridge;
         fFavorites = false;
         fKind = null;
         fText = null;
+        fPlace = fCountry = null;
     }
 
     private void publishFilter()
@@ -293,6 +354,8 @@ import photowagon.ui.transport : Bridge;
         f["favorites"] = fFavorites;
         f["kind"] = fKind is null ? "" : fKind;
         f["text"] = fText is null ? "" : fText;
+        f["place"] = fPlace is null ? "" : fPlace;
+        f["country"] = fCountry is null ? "" : fCountry;
         filter = f.toString();
         filterChanged.emit();
         if (personFilter != cast(int) fPerson)
@@ -367,6 +430,7 @@ import photowagon.ui.transport : Bridge;
         if (fFavorites) params["favorites"] = true;
         if (kindParam().length) params["kind"] = kindParam();
         if (fText.length) params["q"] = fText;
+        if (fPlace.length) { params["place"] = fPlace; if (fCountry.length) params["country"] = fCountry; }
         immutable off = offset;
         client.request("library.page", params, (r, e) {
             if (e.type != JSONType.null_) { report("page", e); return; }
@@ -393,6 +457,7 @@ import photowagon.ui.transport : Bridge;
         if (fFavorites) params["favorites"] = true;
         if (kindParam().length) params["kind"] = kindParam();
         if (fText.length) params["q"] = fText;
+        if (fPlace.length) { params["place"] = fPlace; if (fCountry.length) params["country"] = fCountry; }
         client.request("library.dates", params, (r, e) {
             if (e.type != JSONType.null_) { report("dates", e); return; }
             dates = r.toString();
@@ -402,6 +467,7 @@ import photowagon.ui.transport : Bridge;
 
     @Slot void refresh()
     {
+        loadPlaces();
         loadDates();
         loadRoots();
         loadAlbums();
@@ -835,6 +901,14 @@ import photowagon.ui.transport : Bridge;
             loadDates();
             loadStats();
             reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));   // keep what was scrolled to
+            break;
+        case "places.changed":
+            loadPlaces();
+            if (fPlace.length)
+            {
+                reload(0, pageLimit);
+                loadDates();
+            }
             break;
         case "p2p.peer":
             loadPeers();

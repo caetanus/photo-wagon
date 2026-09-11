@@ -8,11 +8,14 @@
     <file>TileGrid.qml</file>
     <file>PhotoViewer.qml</file>
     <file>PeopleView.qml</file>
+    <file>PlacesView.qml</file>
+    <file>PlaceDialog.qml</file>
     <file>AlbumDialog.qml</file>
     <file>MergeSuggestion.qml</file>
     <file>PhotoMenu.qml</file>
-        <file>PersonMenu.qml</file>
+    <file>PersonMenu.qml</file>
     <file>PeersPanel.qml</file>
     <file>PhonePanel.qml</file>
+    <file>icon.png</file>
   </qresource>
 </RCC>

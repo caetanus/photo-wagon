@@ -12,7 +12,7 @@ Dates come from EXIF, else from the file name or folder (WhatsApp, screenshots,
 camera and Pixel names, `2020/02/13/` folders), and only then from the file's
 modification time. A Photos-style window — the Library timeline shows photographs; screenshots
 and memes live under Media Types (an album or a search shows everything) — with
-a source list (Library, Favorites, People, Imports;
+a source list (Library, Favorites, People, Places, Imports;
 the **years → months → days** tree with counts, one click to any day, the same
 node again clears it; the named **people** with portraits and counts (right-click: show photos, rename, remove from People); Media
 Types — Photos, Screenshots, Memes — albums, the phone and the peers; the
@@ -28,9 +28,15 @@ or rename the person, use the face as portrait, remove the tag, or mark it as
 not a face), zoom (wheel, double-click, +/−/0,
 drag) and full screen (F), a right-click menu on a photo or a selection
 (copy the files, copy the paths, show in folder, favorite, add to an album,
-mark as photo / screenshot / meme, move to the trash, delete permanently;
-Delete and Shift+Delete do the last two from the keyboard), and a
-People page with round portraits. Light or dark follows the system.
+set the place, mark as photo / screenshot / meme, move to the trash, delete permanently;
+Delete and Shift+Delete do the last two from the keyboard), a
+People page with round portraits, and a **Places** page: one card per city with
+its newest photo and count, the cities listed in the sidebar too. A photo with a
+GPS position lands in the nearest city (a compiled-in GeoNames table, offline;
+a 0,0 position from a phone with location tags off counts as none); the others
+get a place by hand — select, right-click, "Set Place…", which suggests your own
+places first and then the world's cities as you type, or keeps any name you
+enter. Light or dark follows the system.
 
 ## Requirements
 
@@ -65,6 +71,10 @@ the port to `$XDG_RUNTIME_DIR/photowagon/daemon.port`:
 ```sh
 printf '{"id":1,"method":"daemon.hello"}\n' | nc 127.0.0.1 "$(cat "$XDG_RUNTIME_DIR/photowagon/daemon.port")"
 ```
+
+The window and launcher icon: `sh share/install-desktop.sh` puts `photo-wagon.desktop`
+and the icon under `~/.local/share` (Wayland compositors take the icon from there,
+by the app id `photo-wagon`; X11 gets it from the binary itself).
 
 ## Phone
 

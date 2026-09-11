@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Photo Wagon
+Comment=Local-first photo manager
+Exec=@EXEC@
+Icon=photo-wagon
+Terminal=false
+Categories=Graphics;Photography;Viewer;
+StartupWMClass=photo-wagon

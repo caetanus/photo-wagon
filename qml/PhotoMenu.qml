@@ -10,8 +10,8 @@ Menu {
     property var ids: []
     property string path: ""
     property bool favorite: false
-    /// parsed library.tagLabels: {scenes: [names], moods: [names]}
-    property var tagLabels: ({ scenes: [], moods: [] })
+    /// parsed library.tagLabels: {scene: [names], mood: [names], weather: [names], holiday: [names]}
+    property var tagLabels: ({ scene: [], mood: [], weather: [], holiday: [] })
 
     signal copy(var ids)
     signal copyPath(var ids)
@@ -36,26 +36,22 @@ Menu {
     MenuItem { text: "Move to Trash" + menu.suffix; onTriggered: menu.remove(menu.ids, false) }
     MenuItem { text: "Delete Permanently…" + menu.suffix; onTriggered: menu.remove(menu.ids, true) }
     MenuSeparator { }
-    Menu {
-        title: "Scene" + menu.suffix
-        enabled: menu.tagLabels.scenes.length > 0
+    // one submenu per tag group, from the vocabulary
+    component TagMenu: Menu {
+        required property string group
+        required property var labels
+        enabled: labels.length > 0
         Repeater {
-            model: menu.tagLabels.scenes
-            MenuItem { required property string modelData; text: modelData; onTriggered: menu.setTag(menu.ids, "scene", modelData) }
+            model: parent.labels
+            MenuItem { required property string modelData; text: modelData; onTriggered: menu.setTag(menu.ids, group, modelData) }
         }
         MenuSeparator { }
-        MenuItem { text: "None"; onTriggered: menu.setTag(menu.ids, "scene", "") }
+        MenuItem { text: "None"; onTriggered: menu.setTag(menu.ids, parent.parent.group, "") }
     }
-    Menu {
-        title: "Mood" + menu.suffix
-        enabled: menu.tagLabels.moods.length > 0
-        Repeater {
-            model: menu.tagLabels.moods
-            MenuItem { required property string modelData; text: modelData; onTriggered: menu.setTag(menu.ids, "mood", modelData) }
-        }
-        MenuSeparator { }
-        MenuItem { text: "None"; onTriggered: menu.setTag(menu.ids, "mood", "") }
-    }
+    TagMenu { title: "Scene" + menu.suffix; group: "scene"; labels: menu.tagLabels.scene || [] }
+    TagMenu { title: "Mood" + menu.suffix; group: "mood"; labels: menu.tagLabels.mood || [] }
+    TagMenu { title: "Weather" + menu.suffix; group: "weather"; labels: menu.tagLabels.weather || [] }
+    TagMenu { title: "Holiday" + menu.suffix; group: "holiday"; labels: menu.tagLabels.holiday || [] }
     Menu {
         title: "Mark as" + menu.suffix
         MenuItem { text: "Photo"; onTriggered: menu.setKind(menu.ids, "photo") }

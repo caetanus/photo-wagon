@@ -58,7 +58,7 @@ created once per library (`<data dir>/pair.token`).
 | `library.addRoot` | `{path}` | `{id}` — starts an index job; progress arrives as events |
 | `library.removeRoot` | `{id}` | `{}` |
 | `library.rescan` | `{id?}` | `{}` — all roots when `id` is omitted |
-| `library.page` | `{offset, limit, year?, month?, day?, rootId?, albumId?, personId?, favorites?, kind?, q?, place?, country?, scene?, mood?}` | `{total, offset, items: [Photo]}` newest first; inside an album, album order |
+| `library.page` | `{offset, limit, year?, month?, day?, rootId?, albumId?, personId?, favorites?, kind?, q?, place?, country?, scene?, mood?, weather?, holiday?}` | `{total, offset, items: [Photo]}` newest first; inside an album, album order |
 | `library.dates` | same filter as `library.page` (dates ignored) | `{years: [{year, count, cover, months: [{month, count, cover, days: [{day, count}]}]}]}` — `cover` is the thumbnail URL of the newest photo of that year/month |
 | `photo.favorite` | `{id, on?}` | `{id, favorite}` (default on) |
 | `library.stats` | — | `{total, kinds: {photo, screenshot, meme, unknown}}` |
@@ -74,11 +74,11 @@ created once per library (`<data dir>/pair.token`).
  "width": 4000, "height": 3000, "orientation": 1, "camera": "Canon EOS R6",
  "lat": null, "lon": null, "size": 3456789, "remote": false, "favorite": false,
  "kind": "photo", "kindBy": "auto", "place": "São Paulo", "country": "Brazil",
- "scene": "Beach", "mood": "Joyful"}
+ "scene": "Beach", "mood": "Joyful", "weather": "Sunny", "holiday": null}
 ```
 
-`scene` and `mood` are zero-shot CLIP tags (see *scenes and moods*); null when nothing
-in particular fits or the photo has not been looked at.
+`scene`, `mood`, `weather` and `holiday` are the tags of *scenes, moods, weather,
+holidays*; null when nothing in particular fits or the photo has not been looked at.
 
 `place` and `country` are the city a photo was taken in: from the GPS, through
 a compiled-in table of the world's cities (nearest one within 100 km; a 0,0
@@ -144,20 +144,23 @@ names one, another face of that person in the same photo becomes unassigned.
 | `places.suggest` | `{q}` | `{places: [{place, country, own}]}` for a name being typed: the library's own places (`own: true`) first, then the world's cities, accents and case aside |
 | `photo.setPlace` | `{ids, place, country?}` | `{}` — the user's word; a known city typed without a country gets its country; an empty `place` clears, and the GPS will not put it back |
 
-### scenes and moods
+### scenes, moods, weather, holidays
 
 Every photograph gets a CLIP ViT-B/32 image embedding (from its thumbnail, stored in
-`photo_clip`) and, per group, the label of `data/scenes/labels.tsv` whose text
-embedding is closest — when that label takes at least 30 % of the group's softmax
-(logit scale 100) and is not the "nothing in particular" class. Needs
+`photo_clip`) and one tag per group — `scene`, `mood`, `weather`, `holiday` — the label
+of `data/scenes/labels.tsv` whose text embedding is closest, when it takes at least
+30 % of the group's softmax (logit scale 100) and is not the group's "nothing in
+particular" class (None, Neutral, Indoors). For `holiday` the calendar speaks first
+(`holidays.d`: Christmas, New Year, Carnival, Easter, Halloween, Festa Junina, Mother's,
+Father's, Children's and Valentine's Day on the Brazilian dates; `by: "date"`). Needs
 `models/clip_vision.onnx`; without it the methods answer with empty lists.
 
 | method | params | result |
 |---|---|---|
-| `tags.list` | `{inline?}` | `{scenes: [{tag, count, cover}], moods: […], available}` most photos first |
-| `tags.labels` | — | `{scenes: [names], moods: [names]}` — what `photo.setTag` accepts |
-| `photo.tags` | `{id}` | `{scene, mood, by: {scene, mood}, scores: {scene: [{tag, prob}] ×3, mood: […]}}` |
-| `photo.setTag` | `{ids, group, tag}` | `{}` — the user's word (`group` is `scene` or `mood`); `tag: ""` = nothing in particular; sticks through re-scoring |
+| `tags.list` | `{inline?}` | `{scene: [{tag, count, cover}], mood: […], weather: […], holiday: […], available}` most photos first |
+| `tags.labels` | — | `{scene: [names], mood: […], weather: […], holiday: […]}` — what `photo.setTag` accepts |
+| `photo.tags` | `{id}` | `{scene, mood, weather, holiday, by: {group: auto|date|user}, scores: {group: [{tag, prob}] ×3}}` |
+| `photo.setTag` | `{ids, group, tag}` | `{}` — the user's word; `tag: ""` = nothing in particular; sticks through re-scoring |
 
 ### albums
 

@@ -62,6 +62,7 @@ ApplicationWindow {
     readonly property var peopleData: JSON.parse(library.people).people
     readonly property var placesData: JSON.parse(library.places).places
     readonly property var tagsData: JSON.parse(library.tags)
+    readonly property var tagGroups: ["scene", "mood", "weather", "holiday"]
     readonly property var tagLabels: JSON.parse(library.tagLabels)
     readonly property var facesData: JSON.parse(library.faces).faces
     readonly property var albumsData: JSON.parse(library.albums).albums
@@ -114,8 +115,8 @@ ApplicationWindow {
         else if (key === "peers") { peersPanel.open(); source = "all" }
         else if (key === "people") library.loadPeople()
         else if (key === "places") library.loadPlaces()
-        else if (key.startsWith("scene:") || key.startsWith("mood:")) {
-            const group = key.startsWith("scene:") ? "scene" : "mood"
+        else if (root.tagGroups.some(g => key.startsWith(g + ":"))) {
+            const group = root.tagGroups.find(g => key.startsWith(g + ":"))
             const tag = key.substring(group.length + 1)
             if (filterData[group] === tag) pickSource("all")   // the same tag again: back to the library
             else { source = group; library.filterTag(group, tag); grid.clearSelection() }
@@ -159,8 +160,7 @@ ApplicationWindow {
         if (source === "people") return "People"
         if (source === "places") return "Places"
         if (filterData.place) return filterData.place + (filterData.country ? ", " + filterData.country : "")
-        if (filterData.scene) return filterData.scene
-        if (filterData.mood) return filterData.mood
+        for (const g of tagGroups) if (filterData[g]) return filterData[g]
         if (filterData.text) return "Results for “" + filterData.text + "”"
         if (source === "person") return personName(filterData.personId)
         if (filterData.favorites) return "Favorites"
@@ -224,8 +224,7 @@ ApplicationWindow {
             status: root.status
             selected: root.source === "person" ? "person:" + root.filterData.personId
                     : root.source === "place" ? "place:" + root.filterData.place + "|" + (root.filterData.country || "")
-                    : root.source === "scene" ? "scene:" + root.filterData.scene
-                    : root.source === "mood" ? "mood:" + root.filterData.mood
+                    : root.tagGroups.indexOf(root.source) >= 0 ? root.source + ":" + root.filterData[root.source]
                     : root.source
             onPick: (key) => root.pickSource(key)
             onPickDate: (y, m, d) => root.pickDate(y, m, d)
@@ -644,7 +643,8 @@ ApplicationWindow {
             if (library.shotView === "people") root.pickSource("people")
             else if (library.shotView === "places") root.pickSource("places")
             else if (library.shotView.startsWith("place:")) root.pickSource(library.shotView)   // place:<name>|<country>
-            else if (library.shotView.startsWith("scene:") || library.shotView.startsWith("mood:")) root.pickSource(library.shotView)
+            else if (root.tagGroups.some(g => library.shotView.startsWith(g + ":"))) root.pickSource(library.shotView)
+            else if (library.shotView === "info") {}
             else if (library.shotView.startsWith("date:")) {          // date:YYYY[-M[-D]]
                 const p = library.shotView.substring(5).split("-")
                 root.pickDate(parseInt(p[0]), parseInt(p[1] || "0"), parseInt(p[2] || "0"))

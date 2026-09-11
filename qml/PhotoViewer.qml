@@ -22,7 +22,7 @@ Item {
         const t = viewer.photoTags && viewer.photoTags.id === viewer.photo.id ? viewer.photoTags : null
         const tag = t ? (t[group] || "") : (viewer.photo[group] || "")
         const guesses = t && t.scores && t.scores[group] ? t.scores[group].slice(0, 3).map(g => g.tag + " " + Math.round(g.prob * 100) + " %").join(", ") : ""
-        const by = t && t.by && t.by[group] === "user" ? " (yours)" : ""
+        const by = t && t.by && t.by[group] === "user" ? " (yours)" : t && t.by && t.by[group] === "date" ? " (calendar)" : ""
         return (tag ? tag + by : "—") + (guesses ? "  ·  " + guesses : "")
     }
     property bool showStrip: true
@@ -494,6 +494,8 @@ Item {
                 InfoRow { label: "Place"; value: viewer.photo && viewer.photo.place ? viewer.photo.place + (viewer.photo.country ? ", " + viewer.photo.country : "") : "" }
                 InfoRow { label: "Scene"; value: viewer.tagLine("scene") }
                 InfoRow { label: "Mood"; value: viewer.tagLine("mood") }
+                InfoRow { label: "Weather"; value: viewer.tagLine("weather") }
+                InfoRow { label: "Holiday"; value: viewer.tagLine("holiday") }
                 InfoRow {
                     label: "Size"
                     value: viewer.photo ? viewer.megapixels(viewer.photo) + "  " + viewer.photo.width + " × " + viewer.photo.height : ""

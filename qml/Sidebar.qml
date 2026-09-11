@@ -21,11 +21,11 @@ Rectangle {
     property var people: []
     /// parsed library.places.places: [{place, country, count, cover}]
     property var places: []
-    /// parsed library.tags: {scenes: [{tag, count, cover}], moods: […]}
-    property var tags: ({ scenes: [], moods: [] })
+    /// parsed library.tags: {scene: [{tag, count, cover}], mood: […], weather: […], holiday: […]}
+    property var tags: ({ scene: [], mood: [], weather: [], holiday: [] })
     /// parsed library.status
     property var status: ({ connected: false, indexing: false, text: "" })
-    /// "all" | "favorites" | "people" | "person:<id>" | "places" | "place:<name>|<country>" | "scene:<name>" | "mood:<name>" | "imports" | "album:<id>" | "kind:<k>" | "phone" | "peers"
+    /// "all" | "favorites" | "people" | "person:<id>" | "places" | "place:<name>|<country>" | "scene:<name>" | "mood:<name>" | "weather:<name>" | "holiday:<name>" | "imports" | "album:<id>" | "kind:<k>" | "phone" | "peers"
     property string selected: "all"
 
     signal pick(string key)
@@ -61,8 +61,8 @@ Rectangle {
     property bool datesOpen: true
     property bool peopleOpen: true
     property bool placesOpen: true
-    property bool scenesOpen: true
-    property bool moodsOpen: true
+    property var tagsOpen: ({ scene: true, mood: true, weather: true, holiday: true })
+    function toggleTags(g) { const o = Object.assign({}, tagsOpen); o[g] = !o[g]; tagsOpen = o }
     property bool albumsOpen: true
 
     component SectionHeader: Item {
@@ -331,35 +331,31 @@ Rectangle {
                 }
             }
 
-            // ---- scenes and moods (CLIP zero-shot tags) --------------------------------------
-            SectionHeader {
-                title: "Scenes"; visible: sidebar.tags.scenes.length > 0
-                collapsible: true; open: sidebar.scenesOpen
-                onToggled: sidebar.scenesOpen = !sidebar.scenesOpen
-            }
+            // ---- scenes, moods, weather, holidays (CLIP zero-shot tags + the calendar) -----------
             Repeater {
-                model: sidebar.scenesOpen ? sidebar.tags.scenes : []
-                delegate: Row {
+                model: [ { group: "scene", title: "Scenes", icon: icons.tag }, { group: "mood", title: "Moods", icon: icons.mood },
+                         { group: "weather", title: "Weather", icon: icons.weather }, { group: "holiday", title: "Holidays", icon: icons.holiday } ]
+                delegate: Column {
+                    id: tagSection
                     required property var modelData
-                    key: "scene:" + modelData.tag
-                    title: modelData.tag
-                    icon: icons.tag
-                    detail: String(modelData.count)
-                }
-            }
-            SectionHeader {
-                title: "Moods"; visible: sidebar.tags.moods.length > 0
-                collapsible: true; open: sidebar.moodsOpen
-                onToggled: sidebar.moodsOpen = !sidebar.moodsOpen
-            }
-            Repeater {
-                model: sidebar.moodsOpen ? sidebar.tags.moods : []
-                delegate: Row {
-                    required property var modelData
-                    key: "mood:" + modelData.tag
-                    title: modelData.tag
-                    icon: icons.mood
-                    detail: String(modelData.count)
+                    width: list.width
+                    readonly property var items: sidebar.tags[modelData.group] || []
+                    readonly property bool open: sidebar.tagsOpen[modelData.group] !== false
+                    SectionHeader {
+                        title: tagSection.modelData.title; visible: tagSection.items.length > 0
+                        collapsible: true; open: tagSection.open
+                        onToggled: sidebar.toggleTags(tagSection.modelData.group)
+                    }
+                    Repeater {
+                        model: tagSection.open ? tagSection.items : []
+                        delegate: Row {
+                            required property var modelData
+                            key: tagSection.modelData.group + ":" + modelData.tag
+                            title: modelData.tag
+                            icon: tagSection.modelData.icon
+                            detail: String(modelData.count)
+                        }
+                    }
                 }
             }
 

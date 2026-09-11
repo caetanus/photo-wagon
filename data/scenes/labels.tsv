@@ -1,4 +1,5 @@
 # group	label	prompts (| separated; {} is filled by the templates in make-prompts.py)
+# The first label of each group is its "nothing in particular" class (None, Neutral, Indoors).
 scene	None	a photo|a snapshot|a picture of something|an ordinary photo of everyday life
 scene	Beach	the beach|people at the beach|sand and sea|a seaside beach
 scene	Pool	a swimming pool|people in a swimming pool|a pool party|a backyard pool
@@ -11,9 +12,6 @@ scene	City	a city street|city buildings|downtown|an urban scene
 scene	Sunset	a sunset|a sunrise|the sky at golden hour
 scene	Night	a night scene|city lights at night|a photo taken at night
 scene	Party	a party|people celebrating at a party|friends partying
-scene	Birthday	a birthday party|a birthday cake with candles|a child's birthday party
-scene	Wedding	a wedding|a bride and groom|a wedding ceremony
-scene	Christmas	Christmas|a Christmas tree|Christmas decorations
 scene	Food	food|a plate of food|a meal on a table|dessert
 scene	Drinks	drinks|beer|cocktails|wine glasses
 scene	Pets	a dog|a cat|a pet animal
@@ -43,3 +41,26 @@ mood	Adventurous	an adventure|exploring the outdoors|an adventurous trip
 mood	Festive	a festive celebration|a holiday celebration|festivities
 mood	Melancholic	a melancholic scene|a sad and lonely moment|a gloomy mood
 mood	Playful	a playful moment|people goofing around|fun and games
+weather	Indoors	an indoor scene|inside a building|a photo taken indoors|a room
+weather	Sunny	a sunny day|bright sunshine and blue sky|a clear sunny day outdoors
+weather	Cloudy	a cloudy day|an overcast grey sky|clouds covering the sky
+weather	Rainy	a rainy day|rain falling|people with umbrellas in the rain|wet streets in the rain
+weather	Stormy	a storm|a thunderstorm with dark clouds|lightning in the sky
+weather	Foggy	fog|a foggy morning|mist over the landscape
+weather	Snowy	snow falling|a snowy day|a landscape covered in snow
+weather	Hot	a hot summer day|scorching heat|people cooling off in the heat|a heatwave
+weather	Cold	a cold winter day|people bundled up in coats and scarves|freezing weather
+holiday	None	an ordinary day|an everyday photo|nothing being celebrated
+holiday	Christmas	Christmas|a Christmas tree with presents|Christmas decorations and lights|a Christmas dinner
+holiday	New Year	New Year's Eve|fireworks at midnight|a New Year celebration with champagne
+holiday	Carnival	Carnival|people in carnival costumes|a carnival parade with confetti and glitter
+holiday	Easter	Easter|Easter eggs|an Easter bunny|an Easter chocolate egg
+holiday	Halloween	Halloween|Halloween costumes|carved pumpkins|trick or treating
+holiday	Festa Junina	Festa Junina|a Brazilian June festival with flags and bonfire|people in caipira costumes with straw hats
+holiday	Birthday	a birthday party|a birthday cake with candles|a child's birthday party|birthday balloons
+holiday	Wedding	a wedding|a bride and groom|a wedding ceremony|a wedding cake
+holiday	Graduation	a graduation ceremony|graduates in caps and gowns|a graduation party
+holiday	Valentine's Day	Valentine's Day|a romantic dinner with roses|hearts and a bouquet for a lover
+holiday	Mother's Day	Mother's Day|a mother with her children celebrating|flowers for mom
+holiday	Father's Day	Father's Day|a father with his children celebrating|a gift for dad
+holiday	Children's Day	Children's Day|children opening presents|a toy store|kids with new toys

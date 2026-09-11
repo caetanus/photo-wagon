@@ -39,9 +39,13 @@ places first and then the world's cities as you type, or keeps any name you
 enter. **Scenes and Moods**: every photograph is tagged by CLIP (ViT-B/32, zero-shot,
 offline) with a scene — Beach, Pool, Snow, Mountains, Party, Birthday, Food, Pets, Baby,
 Selfie, Night… — and a mood — Joyful, Calm, Romantic, Energetic, Nostalgic, Cozy,
-Festive, Melancholic…; both are sections of the sidebar with counts, rows of the ⓘ Info
-panel (with the model's top guesses), and submenus of the right-click menu to correct
-them (the vocabulary lives in `data/scenes/labels.tsv`). Light or dark follows the system.
+Festive, Melancholic…, the weather — Sunny, Cloudy, Rainy, Stormy, Foggy, Snowy, Hot,
+Cold — and the holiday: Christmas, New Year, Carnival, Easter, Halloween, Festa Junina,
+Mother's / Father's / Children's / Valentine's Day come from the calendar (Brazilian
+dates), Birthday, Wedding and Graduation from the picture. All four are sections of the
+sidebar with counts, rows of the ⓘ Info panel (with the model's top guesses), and
+submenus of the right-click menu to correct them (the vocabulary lives in
+`data/scenes/labels.tsv`). Light or dark follows the system.
 
 ## Requirements
 

@@ -140,17 +140,17 @@ check(a.call("places.list")["places"][0]["count"] == 1, "clearing a place")
 
 # scenes and moods: CLIP tags when the model is there, the user's word always
 labels = a.call("tags.labels")
-check("scenes" in labels and "moods" in labels, f"tag vocabulary: {len(labels.get('scenes', []))} scenes, {len(labels.get('moods', []))} moods")
-if labels.get("scenes"):
-    a.call("photo.setTag", {"ids": [first["id"]], "group": "scene", "tag": labels["scenes"][0]})
-    a.call("photo.setTag", {"ids": [first["id"]], "group": "mood", "tag": labels["moods"][0]})
+check(all(g in labels for g in ("scene", "mood", "weather", "holiday")), f"tag vocabulary: {[(g, len(labels.get(g, []))) for g in labels]}")
+if labels.get("scene"):
+    a.call("photo.setTag", {"ids": [first["id"]], "group": "scene", "tag": labels["scene"][0]})
+    a.call("photo.setTag", {"ids": [first["id"]], "group": "mood", "tag": labels["mood"][0]})
     pt = a.call("photo.tags", {"id": first["id"]})
-    check(pt["scene"] == labels["scenes"][0] and pt["by"]["scene"] == "user", f"photo.tags after the user's word: {pt['scene']} by {pt['by']}")
+    check(pt["scene"] == labels["scene"][0] and pt["by"]["scene"] == "user", f"photo.tags after the user's word: {pt['scene']} by {pt['by']}")
     got = a.call("photo.get", {"id": first["id"]})
-    check(got["scene"] == labels["scenes"][0] and got["mood"] == labels["moods"][0], "Photo carries scene and mood")
-    check(a.call("library.page", {"scene": labels["scenes"][0], "limit": 10})["total"] >= 1, "page filtered by scene")
+    check(got["scene"] == labels["scene"][0] and got["mood"] == labels["mood"][0], "Photo carries scene and mood")
+    check(a.call("library.page", {"scene": labels["scene"][0], "limit": 10})["total"] >= 1, "page filtered by scene")
     tl = a.call("tags.list")
-    check(any(t["tag"] == labels["scenes"][0] for t in tl["scenes"]), f"tags.list counts it: {[(t['tag'], t['count']) for t in tl['scenes']][:4]}")
+    check(any(t["tag"] == labels["scene"][0] for t in tl["scene"]), f"tags.list counts it: {[(t['tag'], t['count']) for t in tl['scene']][:4]}")
     try:
         a.call("photo.setTag", {"ids": [first["id"]], "group": "scene", "tag": "Not a label"})
         check(False, "unknown tag rejected")

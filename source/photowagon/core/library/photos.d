@@ -38,6 +38,8 @@ struct Photo
 	string placeBy; // gps | user | none
 	string scene; // zero-shot CLIP tags (core/library/scenes.d); null = none / not looked at
 	string mood;
+	string weather;
+	string holiday;
 }
 
 /// Restricts a page or a count. Zero means "no restriction" for every field.
@@ -54,8 +56,8 @@ struct Filter
 	string text; // a word of the path (file name, folder); null = any
 	string place; // photos of one place (with `country` when given); null = any
 	string country;
-	string scene; // photos tagged with one scene / mood; null = any
-	string mood;
+	string tagGroup; // photos carrying one tag: scene | mood | weather | holiday …
+	string tag;      // … with this value; null = any
 }
 
 struct Neighbours
@@ -327,6 +329,8 @@ final class PhotoRepo
 			"country": p.country is null ? JSONValue(null) : JSONValue(p.country),
 			"scene": p.scene is null ? JSONValue(null) : JSONValue(p.scene),
 			"mood": p.mood is null ? JSONValue(null) : JSONValue(p.mood),
+			"weather": p.weather is null ? JSONValue(null) : JSONValue(p.weather),
+			"holiday": p.holiday is null ? JSONValue(null) : JSONValue(p.holiday),
 		];
 		return j;
 	}
@@ -346,7 +350,9 @@ final class PhotoRepo
 		p.width, p.height, p.orientation, p.camera, p.lat, p.lon, p.thumb_hash, p.origin_peer, p.favorite, p.kind, p.kind_by,
 		p.place, p.country, p.place_by,
 		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'scene' AND t.tag <> ''),
-		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'mood' AND t.tag <> '')`;
+		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'mood' AND t.tag <> ''),
+		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'weather' AND t.tag <> ''),
+		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'holiday' AND t.tag <> '')`;
 
 	private static Photo readRow(ref Statement s)
 	{
@@ -379,6 +385,8 @@ final class PhotoRepo
 		p.placeBy = s.getString(21);
 		p.scene = s.getString(22);
 		p.mood = s.getString(23);
+		p.weather = s.getString(24);
+		p.holiday = s.getString(25);
 		return p;
 	}
 
@@ -461,15 +469,11 @@ final class PhotoRepo
 				w.add(f.country);
 			}
 		}
-		if (f.scene.length)
+		if (f.tag.length && f.tagGroup.length)
 		{
-			w.where ~= " AND EXISTS (SELECT 1 FROM photo_tags ts WHERE ts.photo_id = p.id AND ts.grp = 'scene' AND ts.tag = ?)";
-			w.add(f.scene);
-		}
-		if (f.mood.length)
-		{
-			w.where ~= " AND EXISTS (SELECT 1 FROM photo_tags tm WHERE tm.photo_id = p.id AND tm.grp = 'mood' AND tm.tag = ?)";
-			w.add(f.mood);
+			w.where ~= " AND EXISTS (SELECT 1 FROM photo_tags tg WHERE tg.photo_id = p.id AND tg.grp = ? AND tg.tag = ?)";
+			w.add(f.tagGroup);
+			w.add(f.tag);
 		}
 		return w;
 	}

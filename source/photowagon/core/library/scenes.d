@@ -1,8 +1,9 @@
-/// Scenes and moods: zero-shot tags from CLIP. Every photograph gets one image
-/// embedding (stored, so a new vocabulary costs no re-encoding) and, per group
-/// (scene, mood), the label whose text embedding it is closest to — or nothing,
-/// when "a photo of nothing in particular" wins or the winner is weak. The user's
-/// word (`setTag`) sticks. Vocabulary and text embeddings: data/scenes.
+/// Scenes, moods, weather and holidays: zero-shot tags from CLIP. Every photograph
+/// gets one image embedding (stored, so a new vocabulary costs no re-encoding) and,
+/// per group, the label whose text embedding it is closest to — or nothing, when
+/// "a photo of nothing in particular" wins or the winner is weak. For holidays the
+/// calendar (holidays.d) speaks first. The user's word (`setTag`) sticks.
+/// Vocabulary and text embeddings: data/scenes.
 module photowagon.core.library.scenes;
 
 import core.time : MonoTime, msecs;
@@ -25,12 +26,13 @@ import photowagon.core.db.sqlite : Database;
 import photowagon.core.ipc.events : Events;
 import photowagon.core.library.calendar : fileUrl;
 import photowagon.core.library.clip : clipDim, clipEncode, initClip;
+import photowagon.core.library.holidays : holidayOf;
 import photowagon.core.library.photos : PhotoRepo;
 import photowagon.core.store.store : ContentStore;
 
 /// Bump when the vocabulary (data/scenes/prompts.tsv) or the scoring changes:
 /// the automatic tags are redone from the stored embeddings.
-enum tagsVersion = 1;
+enum tagsVersion = 2;
 /// Bump when the image model changes: everything is re-encoded.
 enum clipVersion = 1;
 
@@ -39,9 +41,12 @@ enum logitScale = 100.0;
 /// The winner must have this much of the group's probability mass to count.
 enum minProb = 0.30;
 
+/// The groups, in the order of the vocabulary; each photo gets one tag per group.
+enum string[] tagGroups = ["scene", "mood", "weather", "holiday"];
+
 struct Label
 {
-	string group; // scene | mood
+	string group; // scene | mood | weather | holiday
 	string name;
 	float[clipDim] embedding;
 	bool nothing; // the "nothing in particular" class of its group
@@ -64,7 +69,11 @@ Label[] parseVocabulary(string tsv)
 			continue;
 		foreach (i, x; v)
 			l.embedding[i] = x.to!float;
-		l.nothing = l.name == "None" || l.name == "Neutral";
+		// the first label of a group is its "nothing in particular" class
+		l.nothing = true;
+		foreach (ref o; out_)
+			if (o.group == l.group)
+				l.nothing = false;
 		out_ ~= l;
 	}
 	return out_;
@@ -154,13 +163,13 @@ final class SceneService
 		vocab = builtinVocabulary();
 		if (getSetting(db, "tags_version") != tagsVersion.to!string)
 		{
-			db.exec("DELETE FROM photo_tags WHERE tag_by = 'auto'");
+			db.exec("DELETE FROM photo_tags WHERE tag_by = 'auto' OR tag_by = 'date'");
 			setSetting(db, "tags_version", tagsVersion.to!string);
 		}
 		if (getSetting(db, "clip_version") != clipVersion.to!string)
 		{
 			db.exec("DELETE FROM photo_clip");
-			db.exec("DELETE FROM photo_tags WHERE tag_by = 'auto'");
+			db.exec("DELETE FROM photo_tags WHERE tag_by = 'auto' OR tag_by = 'date'");
 			setSetting(db, "clip_version", clipVersion.to!string);
 		}
 		try
@@ -309,29 +318,55 @@ final class SceneService
 		return true;
 	}
 
-	/// Automatic tags for both groups where the user has said nothing. True when a real tag landed.
+	/// Automatic tags for every group where the user has said nothing. True when a real tag landed.
+	/// The calendar speaks first for `holiday`; a zero embedding (unreadable image) still gets its date.
 	private bool tagAuto(long id, const float[clipDim] emb)
 	{
-		if (isZero(emb))
-			return false;
 		bool any;
-		auto u = db.prepare("INSERT INTO photo_tags (photo_id, grp, tag, score, tag_by) VALUES (?, ?, ?, ?, 'auto') ON CONFLICT(photo_id, grp) DO NOTHING");
-		foreach (group; ["scene", "mood"])
+		auto u = db.prepare("INSERT INTO photo_tags (photo_id, grp, tag, score, tag_by) VALUES (?, ?, ?, ?, ?) ON CONFLICT(photo_id, grp) DO NOTHING");
+		immutable zero = isZero(emb);
+		foreach (group; tagGroups)
 		{
-			auto s = score(vocab, emb, group);
+			string tag, by = "auto";
+			double prob = 0;
+			if (group == "holiday")
+			{
+				tag = holidayOf(takenTs(id));
+				if (tag.length)
+				{
+					by = "date";
+					prob = 1;
+				}
+			}
+			if (!tag.length && !zero)
+			{
+				auto sc = score(vocab, emb, group);
+				tag = sc.tag;
+				prob = sc.prob;
+			}
+			if (zero && !tag.length)
+				continue;
 			u.reset();
-			u.bind(1, id).bind(2, group).bind(3, s.tag).bind(4, cast(double) s.prob);
+			u.bind(1, id).bind(2, group).bind(3, tag is null ? "" : tag).bind(4, prob).bind(5, by);
 			u.run();
-			if (s.tag.length)
+			if (tag.length)
 				any = true;
 		}
 		return any;
 	}
 
+	private long takenTs(long id)
+	{
+		auto s = db.prepare("SELECT taken_ts FROM photos WHERE id = ?");
+		s.bind(1, id);
+		return s.step() ? s.getLong(0) : 0;
+	}
+
 	private long rescoreMissing()
 	{
 		auto q = db.prepare(`SELECT c.photo_id, c.embedding FROM photo_clip c
-			WHERE (SELECT count(*) FROM photo_tags t WHERE t.photo_id = c.photo_id) < 2`);
+			WHERE (SELECT count(*) FROM photo_tags t WHERE t.photo_id = c.photo_id) < ?`);
+		q.bind(1, cast(long) tagGroups.length);
 		long[] ids;
 		float[clipDim][] embs;
 		while (q.step())
@@ -355,17 +390,19 @@ final class SceneService
 
 	// ---- the API -------------------------------------------------------------------
 
-	/// `{scenes: [names], moods: [names]}` — the vocabulary the user can pick from.
+	/// `{scene: [names], mood: [names], weather: [names], holiday: [names]}` — the vocabulary the user can pick from.
 	JSONValue labels()
 	{
-		JSONValue[] scenes, moods;
+		JSONValue out_ = JSONValue.emptyObject;
+		foreach (g; tagGroups)
+			out_[g] = JSONValue(cast(JSONValue[]) []);
 		foreach (ref l; vocab)
 			if (!l.nothing)
-				(l.group == "scene" ? scenes : moods) ~= JSONValue(l.name);
-		return JSONValue(["scenes": JSONValue(scenes), "moods": JSONValue(moods)]);
+				out_[l.group].array ~= JSONValue(l.name);
+		return out_;
 	}
 
-	/// `{scenes: [{tag, count, cover}], moods: […]}`, most photos first.
+	/// `{scene: [{tag, count, cover}], mood: […], weather: […], holiday: […], available}`, most photos first.
 	JSONValue list(bool inline = false)
 	{
 		JSONValue groupList(string group)
@@ -387,7 +424,11 @@ final class SceneService
 			return JSONValue(out_);
 		}
 
-		return JSONValue(["scenes": groupList("scene"), "moods": groupList("mood"), "available": JSONValue(available)]);
+		JSONValue out_ = JSONValue.emptyObject;
+		foreach (g; tagGroups)
+			out_[g] = groupList(g);
+		out_["available"] = available;
+		return out_;
 	}
 
 	private JSONValue coverUrl(string hash, bool inline)
@@ -400,13 +441,13 @@ final class SceneService
 		return JSONValue("data:image/jpeg;base64," ~ cast(string) Base64.encode(store.get(hash)));
 	}
 
-	/// `{scene, mood, by: {scene, mood}, scores: {scene: [{tag, prob}], mood: […]}}` for one photo.
+	/// `{scene, mood, weather, holiday, by: {group: auto|date|user}, scores: {group: [{tag, prob}] ×3}}` for one photo.
 	JSONValue photoTags(long id)
 	{
 		JSONValue out_ = JSONValue.emptyObject;
 		JSONValue by = JSONValue.emptyObject;
-		out_["scene"] = JSONValue(null);
-		out_["mood"] = JSONValue(null);
+		foreach (g; tagGroups)
+			out_[g] = JSONValue(null);
 		auto s = db.prepare("SELECT grp, tag, tag_by FROM photo_tags WHERE photo_id = ?");
 		s.bind(1, id);
 		while (s.step())
@@ -419,7 +460,7 @@ final class SceneService
 		JSONValue scores = JSONValue.emptyObject;
 		float[clipDim] emb;
 		if (loadEmbedding(id, emb) && !isZero(emb))
-			foreach (group; ["scene", "mood"])
+			foreach (group; tagGroups)
 			{
 				auto sc = score(vocab, emb, group);
 				JSONValue[] arr;
@@ -434,8 +475,9 @@ final class SceneService
 	/// The user's word on a group for these photos; `tag` empty = nothing in particular.
 	void setTag(long[] ids, string group, string tag)
 	{
-		if (group != "scene" && group != "mood")
-			throw new Exception("group must be scene or mood");
+		import std.algorithm : canFind;
+		if (!tagGroups.canFind(group))
+			throw new Exception("group must be one of scene, mood, weather, holiday");
 		tag = tag.strip;
 		if (tag.length)
 		{
@@ -452,7 +494,7 @@ final class SceneService
 			foreach (id; ids)
 			{
 				u.reset();
-				u.bind(1, id).bind(2, group).bind(3, tag);
+				u.bind(1, id).bind(2, group).bind(3, tag is null ? "" : tag);
 				u.run();
 			}
 		});
@@ -468,7 +510,7 @@ unittest
 	a.group = n.group = b.group = c.group = "scene";
 	a.name = "Beach";
 	n.name = "None";
-	n.nothing = true;
+	n.nothing = true;   // (parseVocabulary marks the first of a group; here by hand)
 	b.name = "Snow";
 	c.name = "Pool";
 	a.embedding[] = 0;
@@ -492,8 +534,8 @@ unittest
 	e[0] = e[1] = e[2] = e[3] = 0.02;
 	assert(score(vocab, e, "scene").tag == "");     // a four-way tie: nobody has 30 %
 	assert(score(vocab, e, "mood").tag == "");      // no labels in that group
-	auto v = parseVocabulary("scene\tX\t" ~ "0.1 ".repeatStr(clipDim) ~ "\nmood\tNeutral\t" ~ "0 ".repeatStr(clipDim) ~ "\nbad\tline\n");
-	assert(v.length == 2 && v[1].nothing && !v[0].nothing);
+	auto v = parseVocabulary("scene\tNone\t" ~ "0.1 ".repeatStr(clipDim) ~ "\nscene\tX\t" ~ "0 ".repeatStr(clipDim) ~ "\nbad\tline\n");
+	assert(v.length == 2 && v[0].nothing && !v[1].nothing);   // the first label of a group is its "nothing"
 }
 
 version (unittest) private string repeatStr(string s, size_t n)

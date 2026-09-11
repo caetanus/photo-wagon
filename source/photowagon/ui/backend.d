@@ -80,11 +80,11 @@ import photowagon.ui.transport : Bridge;
     @Property("placesChanged") string places = `{"places":[]}`;
     /// places.suggest for the name being typed in "Set Place…": {"places":[{place,country,own}]}
     @Property("placeSuggestionsChanged") string placeSuggestions = `{"places":[]}`;
-    /// tags.list: {"scenes":[{tag,count,cover}],"moods":[…],"available"} — CLIP zero-shot tags, most photos first
-    @Property("tagsChanged") string tags = `{"scenes":[],"moods":[],"available":false}`;
-    /// tags.labels: {"scenes":[names],"moods":[names]} — what the user can pick in the menu
-    @Property("tagLabelsChanged") string tagLabels = `{"scenes":[],"moods":[]}`;
-    /// photo.tags of the open photo: {"id","scene","mood","by","scores":{scene:[{tag,prob}],mood:[…]}}
+    /// tags.list: {"scene":[{tag,count,cover}],"mood":[…],"weather":[…],"holiday":[…],"available"} — most photos first
+    @Property("tagsChanged") string tags = `{"scene":[],"mood":[],"weather":[],"holiday":[],"available":false}`;
+    /// tags.labels: {"scene":[names],"mood":[names],"weather":[…],"holiday":[…]} — what the user can pick in the menu
+    @Property("tagLabelsChanged") string tagLabels = `{"scene":[],"mood":[],"weather":[],"holiday":[]}`;
+    /// photo.tags of the open photo: {"id", <group>: tag, "by": {group: auto|date|user}, "scores": {group: [{tag,prob}]}}
     @Property("photoTagsChanged") string photoTags = `{"id":0}`;
     /// {"photoId":N,"faces":[{id,x,y,w,h,personId,name,thumbUrl}]} for the open photo.
     @Property("facesChanged") string faces = `{"photoId":0,"faces":[]}`;
@@ -115,8 +115,8 @@ import photowagon.ui.transport : Bridge;
     private string fText;
     private string fPlace;
     private string fCountry;
-    private string fScene;
-    private string fMood;
+    private string fTagGroup;
+    private string fTag;
     /// Screenshots and memes stay out of the library timeline (they have their own
     /// views under Media Types); an album, a search or an explicit kind shows everything.
     private bool onlyPhotos = true;
@@ -124,7 +124,7 @@ import photowagon.ui.transport : Bridge;
     private string kindParam()
     {
         if (fKind.length) return fKind;
-        if (onlyPhotos && !fAlbum && !fText.length && !fPlace.length && !fScene.length && !fMood.length) return "photo";
+        if (onlyPhotos && !fAlbum && !fText.length && !fPlace.length && !fTag.length) return "photo";
         return null;
     }
     private long openId; // photo being opened/shown; faces answers for others are dropped
@@ -281,10 +281,8 @@ import photowagon.ui.transport : Bridge;
     {
         import std.string : strip;
         clearFilters();
-        if (group == "mood")
-            fMood = tag.strip();
-        else
-            fScene = tag.strip();
+        fTagGroup = group;
+        fTag = tag.strip();
         publishFilter();
         reload(0, pageLimit);
         loadDates();
@@ -423,7 +421,7 @@ import photowagon.ui.transport : Bridge;
         fKind = null;
         fText = null;
         fPlace = fCountry = null;
-        fScene = fMood = null;
+        fTagGroup = fTag = null;
     }
 
     private void publishFilter()
@@ -436,8 +434,8 @@ import photowagon.ui.transport : Bridge;
         f["text"] = fText is null ? "" : fText;
         f["place"] = fPlace is null ? "" : fPlace;
         f["country"] = fCountry is null ? "" : fCountry;
-        f["scene"] = fScene is null ? "" : fScene;
-        f["mood"] = fMood is null ? "" : fMood;
+        foreach (g; ["scene", "mood", "weather", "holiday"])
+            f[g] = fTagGroup == g && fTag !is null ? fTag : "";
         filter = f.toString();
         filterChanged.emit();
         if (personFilter != cast(int) fPerson)
@@ -513,8 +511,7 @@ import photowagon.ui.transport : Bridge;
         if (kindParam().length) params["kind"] = kindParam();
         if (fText.length) params["q"] = fText;
         if (fPlace.length) { params["place"] = fPlace; if (fCountry.length) params["country"] = fCountry; }
-        if (fScene.length) params["scene"] = fScene;
-        if (fMood.length) params["mood"] = fMood;
+        if (fTag.length && fTagGroup.length) params[fTagGroup] = fTag;
         immutable off = offset;
         client.request("library.page", params, (r, e) {
             if (e.type != JSONType.null_) { report("page", e); return; }
@@ -542,8 +539,7 @@ import photowagon.ui.transport : Bridge;
         if (kindParam().length) params["kind"] = kindParam();
         if (fText.length) params["q"] = fText;
         if (fPlace.length) { params["place"] = fPlace; if (fCountry.length) params["country"] = fCountry; }
-        if (fScene.length) params["scene"] = fScene;
-        if (fMood.length) params["mood"] = fMood;
+        if (fTag.length && fTagGroup.length) params[fTagGroup] = fTag;
         client.request("library.dates", params, (r, e) {
             if (e.type != JSONType.null_) { report("dates", e); return; }
             dates = r.toString();
@@ -1005,7 +1001,7 @@ import photowagon.ui.transport : Bridge;
             break;
         case "tags.changed":
             loadTags();
-            if (fScene.length || fMood.length)
+            if (fTag.length)
                 reload(0, pageLimit);
             if (openId)
                 loadPhotoTags(cast(int) openId);

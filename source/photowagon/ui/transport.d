@@ -27,6 +27,17 @@ abstract class Bridge
         request(method, JSONValue(null), cb);
     }
 
+    /// A request whose params were serialised elsewhere (a 15 MB base64 photo built on a
+    /// worker thread must not be re-encoded on the Qt thread). Transports that carry
+    /// lines send it as is; the in-process bridge parses it back.
+    void requestRaw(string method, string paramsJson, ResultCb cb)
+    {
+        request(method, parseJSON(paramsJson), cb);
+    }
+
+    /// Drops the current connection and dials again (a request timed out). No-op by default.
+    void reconnect() {}
+
     /// Where the other end is, for transports that have a choice. No-op by default.
     void setEndpoint(string host, ushort port) {}
     string endpoint() const { return ""; }
@@ -50,6 +61,17 @@ abstract class Bridge
             msg["params"] = params;
         pending[id] = cb;
         return msg.toString() ~ "\n";
+    }
+
+    /// Same as `enqueue`, with the params already serialised.
+    protected string enqueueRaw(string method, string paramsJson, ResultCb cb)
+    {
+        import std.conv : to;
+
+        immutable id = nextId++;
+        pending[id] = cb;
+        return `{"id":` ~ id.to!string ~ `,"method":` ~ JSONValue(method).toString() ~ `,"params":`
+            ~ (paramsJson.length ? paramsJson : "null") ~ "}\n";
     }
 
     /// Routes one inbound line to its callback or to `onEvent`.

@@ -63,10 +63,17 @@ final class LocalBridge : Bridge
         string takenAt;
         long mtimeMs;
         string hash;
-        string base64;
+        string paramsJson;   // the whole library.import params, serialised on the worker
         string error;
         bool done;
     }
+
+    // A sync request that gets no answer: the computer or the link is stuck. The
+    // probe is tiny; the upload can be 15 MB over a slow Wi-Fi.
+    private enum probeTimeoutMs = 45_000;
+    private enum uploadTimeoutMs = 300_000;
+    private QTimer syncDeadline;
+    private long syncRequestSeq;   // a late answer to an abandoned request is ignored
 
     // ---- merged paging state --------------------------------------------------------
     private JSONValue pageParams;      // the filter of the current listing (no offset/limit)
@@ -94,6 +101,9 @@ final class LocalBridge : Bridge
         prepPoll = new QTimer(cast(cppq.QObject) null);
         prepPoll.setInterval(50);
         prepPoll.connectTimeout(&onPrepared);
+        syncDeadline = new QTimer(cast(cppq.QObject) null);
+        syncDeadline.setSingleShot(true);
+        syncDeadline.connectTimeout(&onSyncTimeout);
         index.onChanged = () { emit("library.changed", JSONValue.emptyObject); };
         index.onProgress = (long done, long total) {
             emit("index.progress", JSONValue([
@@ -117,7 +127,13 @@ final class LocalBridge : Bridge
                 startSync();
             }
             else
+            {
+                // whatever was in flight is lost with the link; the next connection starts clean
+                syncDeadline.stop();
+                syncRequestSeq++;
+                sending = false;
                 publishSync();
+            }
         };
         computer.onEvent = (string ev, JSONValue data) {
             if (ev == "library.changed" || ev == "index.done")
@@ -822,12 +838,47 @@ final class LocalBridge : Bridge
             auto bytes = cast(ubyte[]) read(path);
             immutable h = knownHash.length ? knownHash : toHexString!(LetterCase.lower)(sha256Of(bytes)).idup;
             pr.hash = h;
-            pr.base64 = cast(string) Base64.encode(bytes);
+            // the JSON is assembled here, once: base64 needs no escaping, so it is spliced
+            // in as text and the Qt thread never touches these megabytes
+            JSONValue head = [
+                "name": JSONValue(cast(string) pr.name),
+                "takenAt": JSONValue(cast(string) pr.takenAt),
+                "mtimeMs": JSONValue(pr.mtimeMs),
+                "sha256": JSONValue(h),
+            ];
+            auto text = head.toString();
+            pr.paramsJson = text[0 .. $ - 1] ~ `,"base64":"` ~ cast(string) Base64.encode(bytes) ~ `"}`;
         }
         catch (Exception e)
             pr.error = e.msg;
         pr.done = true;
     }
+
+    /// Runs `req` with a deadline; a late answer (after the deadline or a new link) is dropped.
+    private void syncRequest(int timeoutMs, void delegate(ResultCb) req, ResultCb cb)
+    {
+        immutable seq = ++syncRequestSeq;
+        syncDeadline.setInterval(timeoutMs);
+        syncDeadline.start();
+        req((JSONValue r, JSONValue e) {
+            if (seq != syncRequestSeq)
+                return;
+            syncDeadline.stop();
+            cb(r, e);
+        });
+    }
+
+    private void onSyncTimeout()
+    {
+        if (!sending)
+            return;
+        syncRequestSeq++;   // the pending callback is now a stranger
+        plog("sync: no answer from the computer in time — reconnecting");
+        finish(inflightId, false, "timeout", null);
+        computer.reconnect();
+    }
+
+    private long inflightId;
 
     /// Qt thread: the file is ready — ask the computer by hash, then send if needed.
     private void onPrepared()
@@ -844,9 +895,10 @@ final class LocalBridge : Bridge
             return;
         }
         immutable hash = cast(string) pr.hash;
+        inflightId = id;
         plog("sync: photo ", id, " ready, asking the computer by hash");
         JSONValue probe = ["name": JSONValue(cast(string) pr.name), "sha256": JSONValue(hash), "probe": JSONValue(true)];
-        computer.request("library.import", probe, (r, e) {
+        syncRequest(probeTimeoutMs, (cb) { computer.request("library.import", probe, cb); }, (r, e) {
             if (e.type == JSONType.null_ && r.type == JSONType.object && "existed" in r && r["existed"].type == JSONType.true_)
             {
                 plog("sync: photo ", id, " already there");
@@ -856,14 +908,13 @@ final class LocalBridge : Bridge
                 pumpSend();
                 return;
             }
-            JSONValue params = [
-                "name": JSONValue(cast(string) pr.name),
-                "takenAt": JSONValue(cast(string) pr.takenAt),
-                "mtimeMs": JSONValue(pr.mtimeMs),
-                "sha256": JSONValue(hash),
-                "base64": JSONValue(cast(string) pr.base64),
-            ];
-            computer.request("library.import", params, (r2, e2) {
+            if (e.type != JSONType.null_)
+            {
+                finish(id, false, e.toString(), hash);
+                return;
+            }
+            immutable paramsJson = cast(string) pr.paramsJson;
+            syncRequest(uploadTimeoutMs, (cb) { computer.requestRaw("library.import", paramsJson, cb); }, (r2, e2) {
                 finish(id, e2.type == JSONType.null_, e2.type == JSONType.null_ ? null : e2.toString(), hash);
             });
         });

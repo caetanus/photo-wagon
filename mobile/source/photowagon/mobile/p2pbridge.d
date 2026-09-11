@@ -178,6 +178,34 @@ final class P2pBridge : Bridge
         }
     }
 
+    override void requestRaw(string method, string paramsJson, ResultCb cb)
+    {
+        if (p2pUp)
+            link.submit(enqueueRaw(method, paramsJson, cb));
+        else if (tcp.connected)
+            tcp.requestRaw(method, paramsJson, cb);
+        else
+        {
+            JSONValue e = ["code": JSONValue("no_computer"), "message": JSONValue("not connected to a computer")];
+            cb(JSONValue(null), e);
+        }
+    }
+
+    /// A request timed out: the libp2p session is dropped (the loop dials the same
+    /// code again) and the TCP link too; whatever was pending is answered with an error.
+    override void reconnect()
+    {
+        if (p2pUp)
+        {
+            plog("p2p: reconnecting after a timeout");
+            synchronized (lock)
+                target.version_++;          // the session sees a new version and ends
+            p2pUp = false;
+            failAll("libp2p link reset after a timeout");
+        }
+        tcp.reconnect();
+    }
+
     // ---- Qt thread: what the vibe thread delivered ------------------------------------
 
     private void drain()

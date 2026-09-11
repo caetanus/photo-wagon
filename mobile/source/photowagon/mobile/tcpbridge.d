@@ -66,7 +66,7 @@ final class TcpBridge : Bridge
         hostIndex = 0;
         applyHost(hosts[0]);
         saveEndpoint();
-        reconnect();
+        redial();
     }
 
     private void applyHost(string hp)
@@ -81,7 +81,7 @@ final class TcpBridge : Bridge
             port = 0;
     }
 
-    private void reconnect()
+    private void redial()
     {
         if (sock is null)
             return;
@@ -138,16 +138,36 @@ final class TcpBridge : Bridge
         hosts = [host ~ ":" ~ port.to!string];
         hostIndex = 0;
         saveEndpoint();
-        reconnect();
+        redial();
     }
 
     override void request(string method, JSONValue params, ResultCb cb)
     {
-        immutable line = enqueue(method, params, cb);
+        sendLine(enqueue(method, params, cb));
+    }
+
+    override void requestRaw(string method, string paramsJson, ResultCb cb)
+    {
+        sendLine(enqueueRaw(method, paramsJson, cb));
+    }
+
+    /// A request line goes out now, or waits for the link.
+    void sendLine(string line)
+    {
         if (up && authed)
             sock.write(line);
         else
             outbox ~= line;
+    }
+
+    /// The connection is suspect (a request timed out): drop it; `tick` dials again.
+    override void reconnect()
+    {
+        if (up)
+        {
+            plog("bridge: reconnecting after a timeout");
+            sock.abort();       // emits disconnected → failAll, then tick reconnects
+        }
     }
 
     // ---- connection lifecycle -------------------------------------------------

@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 7;
+enum currentVersion = 8;
 
 void migrate(Database db)
 {
@@ -27,6 +27,8 @@ void migrate(Database db)
 			db.exec(schemaV6);
 		if (have < 7)
 			db.exec(schemaV7);
+		if (have < 8)
+			db.exec(schemaV8);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -134,6 +136,23 @@ ALTER TABLE photos ADD COLUMN place TEXT;         -- the city, from the GPS or t
 ALTER TABLE photos ADD COLUMN country TEXT;
 ALTER TABLE photos ADD COLUMN place_by TEXT;      -- 'gps' | 'user' | 'none' (GPS, but no city near) | NULL = not looked up yet
 CREATE INDEX photos_place ON photos(place, country);
+`;
+
+private enum schemaV8 = `
+CREATE TABLE photo_clip (                          -- CLIP ViT-B/32 image embedding, unit length
+    photo_id   INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+    embedding  BLOB NOT NULL,                      -- 512 float32
+    version    INTEGER NOT NULL
+);
+CREATE TABLE photo_tags (                          -- one tag per group (scene, mood) per photo
+    photo_id   INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+    grp        TEXT NOT NULL,
+    tag        TEXT NOT NULL,                      -- '' = looked at, nothing in particular
+    score      REAL NOT NULL DEFAULT 0,
+    tag_by     TEXT NOT NULL,                      -- 'auto' | 'user'
+    PRIMARY KEY (photo_id, grp)
+);
+CREATE INDEX photo_tags_tag ON photo_tags(grp, tag);
 `;
 
 /// Small persisted flags (e.g. which clustering rule the faces were grouped by).

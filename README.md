@@ -36,7 +36,12 @@ GPS position lands in the nearest city (a compiled-in GeoNames table, offline;
 a 0,0 position from a phone with location tags off counts as none); the others
 get a place by hand — select, right-click, "Set Place…", which suggests your own
 places first and then the world's cities as you type, or keeps any name you
-enter. Light or dark follows the system.
+enter. **Scenes and Moods**: every photograph is tagged by CLIP (ViT-B/32, zero-shot,
+offline) with a scene — Beach, Pool, Snow, Mountains, Party, Birthday, Food, Pets, Baby,
+Selfie, Night… — and a mood — Joyful, Calm, Romantic, Energetic, Nostalgic, Cozy,
+Festive, Melancholic…; both are sections of the sidebar with counts, rows of the ⓘ Info
+panel (with the model's top guesses), and submenus of the right-click menu to correct
+them (the vocabulary lives in `data/scenes/labels.tsv`). Light or dark follows the system.
 
 ## Requirements
 
@@ -75,6 +80,12 @@ printf '{"id":1,"method":"daemon.hello"}\n' | nc 127.0.0.1 "$(cat "$XDG_RUNTIME_
 The window and launcher icon: `sh share/install-desktop.sh` puts `photo-wagon.desktop`
 and the icon under `~/.local/share` (Wayland compositors take the icon from there,
 by the app id `photo-wagon`; X11 gets it from the binary itself).
+
+The scene and mood tags need the CLIP image encoder next to the face models:
+`models/clip_vision.onnx` is `onnx/vision_model.onnx` of
+[Xenova/clip-vit-base-patch32](https://huggingface.co/Xenova/clip-vit-base-patch32)
+(335 MB, fp32). Without it everything else works and the two sections stay empty.
+`data/scenes/make-prompts.py` regenerates the text side after editing the vocabulary.
 
 ## Phone
 

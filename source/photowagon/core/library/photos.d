@@ -36,6 +36,8 @@ struct Photo
 	string place; // the city; null until looked up (or none near)
 	string country;
 	string placeBy; // gps | user | none
+	string scene; // zero-shot CLIP tags (core/library/scenes.d); null = none / not looked at
+	string mood;
 }
 
 /// Restricts a page or a count. Zero means "no restriction" for every field.
@@ -52,6 +54,8 @@ struct Filter
 	string text; // a word of the path (file name, folder); null = any
 	string place; // photos of one place (with `country` when given); null = any
 	string country;
+	string scene; // photos tagged with one scene / mood; null = any
+	string mood;
 }
 
 struct Neighbours
@@ -321,6 +325,8 @@ final class PhotoRepo
 			"kindBy": p.kindBy is null ? JSONValue(null) : JSONValue(p.kindBy),
 			"place": p.place is null ? JSONValue(null) : JSONValue(p.place),
 			"country": p.country is null ? JSONValue(null) : JSONValue(p.country),
+			"scene": p.scene is null ? JSONValue(null) : JSONValue(p.scene),
+			"mood": p.mood is null ? JSONValue(null) : JSONValue(p.mood),
 		];
 		return j;
 	}
@@ -338,7 +344,9 @@ final class PhotoRepo
 
 	private enum selectColumns = `SELECT p.id, p.hash, p.path, p.root_id, p.size, p.mtime_ms, p.taken_ts, p.taken_at,
 		p.width, p.height, p.orientation, p.camera, p.lat, p.lon, p.thumb_hash, p.origin_peer, p.favorite, p.kind, p.kind_by,
-		p.place, p.country, p.place_by`;
+		p.place, p.country, p.place_by,
+		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'scene' AND t.tag <> ''),
+		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'mood' AND t.tag <> '')`;
 
 	private static Photo readRow(ref Statement s)
 	{
@@ -369,6 +377,8 @@ final class PhotoRepo
 		p.place = s.getString(19);
 		p.country = s.getString(20);
 		p.placeBy = s.getString(21);
+		p.scene = s.getString(22);
+		p.mood = s.getString(23);
 		return p;
 	}
 
@@ -450,6 +460,16 @@ final class PhotoRepo
 				w.where ~= " AND p.country = ?";
 				w.add(f.country);
 			}
+		}
+		if (f.scene.length)
+		{
+			w.where ~= " AND EXISTS (SELECT 1 FROM photo_tags ts WHERE ts.photo_id = p.id AND ts.grp = 'scene' AND ts.tag = ?)";
+			w.add(f.scene);
+		}
+		if (f.mood.length)
+		{
+			w.where ~= " AND EXISTS (SELECT 1 FROM photo_tags tm WHERE tm.photo_id = p.id AND tm.grp = 'mood' AND tm.tag = ?)";
+			w.add(f.mood);
 		}
 		return w;
 	}

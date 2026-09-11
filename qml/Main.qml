@@ -61,6 +61,8 @@ ApplicationWindow {
     readonly property var current: library.current.length ? JSON.parse(library.current) : null
     readonly property var peopleData: JSON.parse(library.people).people
     readonly property var placesData: JSON.parse(library.places).places
+    readonly property var tagsData: JSON.parse(library.tags)
+    readonly property var tagLabels: JSON.parse(library.tagLabels)
     readonly property var facesData: JSON.parse(library.faces).faces
     readonly property var albumsData: JSON.parse(library.albums).albums
     readonly property var rootsData: JSON.parse(library.roots).roots
@@ -112,6 +114,12 @@ ApplicationWindow {
         else if (key === "peers") { peersPanel.open(); source = "all" }
         else if (key === "people") library.loadPeople()
         else if (key === "places") library.loadPlaces()
+        else if (key.startsWith("scene:") || key.startsWith("mood:")) {
+            const group = key.startsWith("scene:") ? "scene" : "mood"
+            const tag = key.substring(group.length + 1)
+            if (filterData[group] === tag) pickSource("all")   // the same tag again: back to the library
+            else { source = group; library.filterTag(group, tag); grid.clearSelection() }
+        }
         else if (key.startsWith("place:")) {
             const pc = key.substring(6).split("|")
             if (filterData.place === pc[0] && (filterData.country || "") === (pc[1] || "")) pickSource("all")
@@ -151,6 +159,8 @@ ApplicationWindow {
         if (source === "people") return "People"
         if (source === "places") return "Places"
         if (filterData.place) return filterData.place + (filterData.country ? ", " + filterData.country : "")
+        if (filterData.scene) return filterData.scene
+        if (filterData.mood) return filterData.mood
         if (filterData.text) return "Results for “" + filterData.text + "”"
         if (source === "person") return personName(filterData.personId)
         if (filterData.favorites) return "Favorites"
@@ -210,9 +220,12 @@ ApplicationWindow {
             filter: root.filterData
             people: root.peopleData
             places: root.placesData
+            tags: root.tagsData
             status: root.status
             selected: root.source === "person" ? "person:" + root.filterData.personId
                     : root.source === "place" ? "place:" + root.filterData.place + "|" + (root.filterData.country || "")
+                    : root.source === "scene" ? "scene:" + root.filterData.scene
+                    : root.source === "mood" ? "mood:" + root.filterData.mood
                     : root.source
             onPick: (key) => root.pickSource(key)
             onPickDate: (y, m, d) => root.pickDate(y, m, d)
@@ -447,6 +460,7 @@ ApplicationWindow {
             PhotoViewer {
                 id: viewer
                 anchors.fill: parent
+                photoTags: JSON.parse(library.photoTags)
                 visible: root.viewing
                 theme: root.theme
                 icons: root.icons
@@ -487,12 +501,14 @@ ApplicationWindow {
     PhotoMenu {
         id: photoMenu
         theme: root.theme
+        tagLabels: root.tagLabels
         onCopy: (ids) => library.copyPhotos(JSON.stringify(ids))
         onCopyPath: (ids) => library.copyText(root.pathsOf(ids).join("\n"))
         onOpenFolder: (path) => Qt.openUrlExternally(root.folderUrl(path))
         onToggleFavorite: (ids) => { for (const id of ids) library.toggleFavorite(id) }
         onAddToAlbum: (ids) => { albumDialog.photoIds = ids; albumDialog.open() }
         onSetPlace: (ids) => { placeDialog.photoIds = ids; placeDialog.open() }
+        onSetTag: (ids, group, tag) => library.setTag(JSON.stringify(ids), group, tag)
         onSetKind: (ids, kind) => library.setKinds(JSON.stringify(ids), kind)
         onRemove: (ids, permanent) => root.removePhotos(ids, permanent)
     }
@@ -628,6 +644,7 @@ ApplicationWindow {
             if (library.shotView === "people") root.pickSource("people")
             else if (library.shotView === "places") root.pickSource("places")
             else if (library.shotView.startsWith("place:")) root.pickSource(library.shotView)   // place:<name>|<country>
+            else if (library.shotView.startsWith("scene:") || library.shotView.startsWith("mood:")) root.pickSource(library.shotView)
             else if (library.shotView.startsWith("date:")) {          // date:YYYY[-M[-D]]
                 const p = library.shotView.substring(5).split("-")
                 root.pickDate(parseInt(p[0]), parseInt(p[1] || "0"), parseInt(p[2] || "0"))

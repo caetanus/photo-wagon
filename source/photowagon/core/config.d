@@ -52,6 +52,12 @@ struct Config
 		return buildPath(modelsDir, "face_detection_yunet_2023mar.onnx");
 	}
 
+	/// the CLIP ViT-B/32 image encoder for scenes and moods (optional: no file, no tags)
+	string clipModel() const
+	{
+		return buildPath(modelsDir, "clip_vision.onnx");
+	}
+
 	string sfaceModel() const
 	{
 		return buildPath(modelsDir, "face_recognition_sface_2021dec.onnx");

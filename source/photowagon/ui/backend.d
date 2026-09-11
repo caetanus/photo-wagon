@@ -24,6 +24,9 @@ import photowagon.ui.transport : Bridge;
 {
     Signal!() pageChanged;
     Signal!() placesChanged;
+    Signal!() tagsChanged;
+    Signal!() tagLabelsChanged;
+    Signal!() photoTagsChanged;
     Signal!() placeSuggestionsChanged;
     Signal!() datesChanged;
     Signal!() rootsChanged;
@@ -77,6 +80,12 @@ import photowagon.ui.transport : Bridge;
     @Property("placesChanged") string places = `{"places":[]}`;
     /// places.suggest for the name being typed in "Set Place…": {"places":[{place,country,own}]}
     @Property("placeSuggestionsChanged") string placeSuggestions = `{"places":[]}`;
+    /// tags.list: {"scenes":[{tag,count,cover}],"moods":[…],"available"} — CLIP zero-shot tags, most photos first
+    @Property("tagsChanged") string tags = `{"scenes":[],"moods":[],"available":false}`;
+    /// tags.labels: {"scenes":[names],"moods":[names]} — what the user can pick in the menu
+    @Property("tagLabelsChanged") string tagLabels = `{"scenes":[],"moods":[]}`;
+    /// photo.tags of the open photo: {"id","scene","mood","by","scores":{scene:[{tag,prob}],mood:[…]}}
+    @Property("photoTagsChanged") string photoTags = `{"id":0}`;
     /// {"photoId":N,"faces":[{id,x,y,w,h,personId,name,thumbUrl}]} for the open photo.
     @Property("facesChanged") string faces = `{"photoId":0,"faces":[]}`;
     /// The person the grid is filtered to (0 = none).
@@ -106,6 +115,8 @@ import photowagon.ui.transport : Bridge;
     private string fText;
     private string fPlace;
     private string fCountry;
+    private string fScene;
+    private string fMood;
     /// Screenshots and memes stay out of the library timeline (they have their own
     /// views under Media Types); an album, a search or an explicit kind shows everything.
     private bool onlyPhotos = true;
@@ -113,7 +124,7 @@ import photowagon.ui.transport : Bridge;
     private string kindParam()
     {
         if (fKind.length) return fKind;
-        if (onlyPhotos && !fAlbum && !fText.length && !fPlace.length) return "photo";
+        if (onlyPhotos && !fAlbum && !fText.length && !fPlace.length && !fScene.length && !fMood.length) return "photo";
         return null;
     }
     private long openId; // photo being opened/shown; faces answers for others are dropped
@@ -265,6 +276,74 @@ import photowagon.ui.transport : Bridge;
         loadDates();
     }
 
+    /// Photos tagged with one scene / mood ("" clears).
+    @Slot void filterTag(string group, string tag)
+    {
+        import std.string : strip;
+        clearFilters();
+        if (group == "mood")
+            fMood = tag.strip();
+        else
+            fScene = tag.strip();
+        publishFilter();
+        reload(0, pageLimit);
+        loadDates();
+    }
+
+    @Slot void loadTags()
+    {
+        client.request("tags.list", (r, e) {
+            if (e.type != JSONType.null_) return;
+            tags = r.toString();
+            tagsChanged.emit();
+        });
+    }
+
+    @Slot void loadTagLabels()
+    {
+        client.request("tags.labels", (r, e) {
+            if (e.type != JSONType.null_) return;
+            tagLabels = r.toString();
+            tagLabelsChanged.emit();
+        });
+    }
+
+    /// The scene / mood of one photo with the runner-up scores, for the info panel.
+    @Slot void loadPhotoTags(int id)
+    {
+        JSONValue params = ["id": JSONValue(id)];
+        client.request("photo.tags", params, (r, e) {
+            if (e.type != JSONType.null_ || id != openId) return;
+            r["id"] = id;
+            photoTags = r.toString();
+            photoTagsChanged.emit();
+        });
+    }
+
+    /// The user's word on the scene or mood of a selection ("" = nothing in particular).
+    @Slot void setTag(string photoIdsJson, string group, string tag)
+    {
+        JSONValue ids;
+        try
+            ids = parseJSON(photoIdsJson);
+        catch (JSONException)
+            ids = JSONValue.emptyArray;
+        JSONValue params = JSONValue.emptyObject;
+        params["ids"] = ids;
+        params["group"] = group;
+        params["tag"] = tag;
+        client.request("photo.setTag", params, (r, e) {
+            if (e.type != JSONType.null_) { report("photo.setTag", e); return; }
+            setStatus(true, indexing, group ~ (tag.length ? " set" : " cleared"));
+            reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));
+            if (openId)
+            {
+                loadPhotoTags(cast(int) openId);
+                openPhoto(cast(int) openId);
+            }
+        });
+    }
+
     @Slot void loadPlaces()
     {
         client.request("places.list", (r, e) {
@@ -344,6 +423,7 @@ import photowagon.ui.transport : Bridge;
         fKind = null;
         fText = null;
         fPlace = fCountry = null;
+        fScene = fMood = null;
     }
 
     private void publishFilter()
@@ -356,6 +436,8 @@ import photowagon.ui.transport : Bridge;
         f["text"] = fText is null ? "" : fText;
         f["place"] = fPlace is null ? "" : fPlace;
         f["country"] = fCountry is null ? "" : fCountry;
+        f["scene"] = fScene is null ? "" : fScene;
+        f["mood"] = fMood is null ? "" : fMood;
         filter = f.toString();
         filterChanged.emit();
         if (personFilter != cast(int) fPerson)
@@ -431,6 +513,8 @@ import photowagon.ui.transport : Bridge;
         if (kindParam().length) params["kind"] = kindParam();
         if (fText.length) params["q"] = fText;
         if (fPlace.length) { params["place"] = fPlace; if (fCountry.length) params["country"] = fCountry; }
+        if (fScene.length) params["scene"] = fScene;
+        if (fMood.length) params["mood"] = fMood;
         immutable off = offset;
         client.request("library.page", params, (r, e) {
             if (e.type != JSONType.null_) { report("page", e); return; }
@@ -458,6 +542,8 @@ import photowagon.ui.transport : Bridge;
         if (kindParam().length) params["kind"] = kindParam();
         if (fText.length) params["q"] = fText;
         if (fPlace.length) { params["place"] = fPlace; if (fCountry.length) params["country"] = fCountry; }
+        if (fScene.length) params["scene"] = fScene;
+        if (fMood.length) params["mood"] = fMood;
         client.request("library.dates", params, (r, e) {
             if (e.type != JSONType.null_) { report("dates", e); return; }
             dates = r.toString();
@@ -468,6 +554,8 @@ import photowagon.ui.transport : Bridge;
     @Slot void refresh()
     {
         loadPlaces();
+        loadTags();
+        loadTagLabels();
         loadDates();
         loadRoots();
         loadAlbums();
@@ -479,6 +567,12 @@ import photowagon.ui.transport : Bridge;
 
     @Slot void openPhoto(int id)
     {
+        if (openId != id)
+        {
+            photoTags = `{"id":0}`;
+            photoTagsChanged.emit();
+            loadPhotoTags(id);
+        }
         openId = id;
         JSONValue params = ["id": JSONValue(id)];
         client.request("photo.get", params, (r, e) {
@@ -901,6 +995,20 @@ import photowagon.ui.transport : Bridge;
             loadDates();
             loadStats();
             reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));   // keep what was scrolled to
+            break;
+        case "tags.progress":
+            setStatus(true, true, "finding scenes and moods: " ~ data["done"].integer.to!string
+                ~ " / " ~ data["total"].integer.to!string);
+            break;
+        case "tags.done":
+            setStatus(true, indexing, data["tagged"].integer.to!string ~ " of " ~ data["photos"].integer.to!string ~ " photos got a scene or mood");
+            break;
+        case "tags.changed":
+            loadTags();
+            if (fScene.length || fMood.length)
+                reload(0, pageLimit);
+            if (openId)
+                loadPhotoTags(cast(int) openId);
             break;
         case "places.changed":
             loadPlaces();

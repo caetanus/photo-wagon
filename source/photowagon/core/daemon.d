@@ -23,6 +23,7 @@ import photowagon.core.api.media_api : registerMediaApi;
 import photowagon.core.api.p2p_api : registerP2pApi;
 import photowagon.core.api.pairing_api : registerPairingApi, ServerControl;
 import photowagon.core.api.places_api : registerPlacesApi;
+import photowagon.core.api.tags_api : registerTagsApi;
 import photowagon.core.config : Config;
 import photowagon.core.db.schema : migrate;
 import photowagon.core.db.sqlite : Database;
@@ -40,6 +41,7 @@ import photowagon.core.library.dates : DateTree;
 import photowagon.core.library.kindjob : KindService;
 import photowagon.core.library.photos : PhotoRepo;
 import photowagon.core.library.places : Geocoder, PlaceService;
+import photowagon.core.library.scenes : SceneService;
 import photowagon.core.library.roots : RootRepo;
 import photowagon.core.p2p.identity : loadOrCreateIdentity;
 import photowagon.core.p2p.node : Node;
@@ -69,6 +71,7 @@ final class Daemon : ServerControl
 	private FaceService facesService;
 	private KindService kinds;
 	private PlaceService places;
+	private SceneService scenes;
 	private Node node;
 	private Sharing sharing;
 	private bool stopped;
@@ -124,7 +127,8 @@ final class Daemon : ServerControl
 				logWarn("places: pass failed: %s", e.msg);
 			kinds.start();
 		};
-		kinds.onDone = () { facesService.start(); };
+		scenes = new SceneService(cfg, db, photos, store, events);
+		kinds.onDone = () { facesService.start(); scenes.start(); };   // both look only at photographs
 
 		if (cfg.p2p)
 		{
@@ -151,6 +155,7 @@ final class Daemon : ServerControl
 		registerFaceApi(registry, faceRepo, facesService, store, events);
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerPlacesApi(registry, places);
+		registerTagsApi(registry, scenes);
 		registerP2pApi(registry, node, sharing);
 		if (node !is null)
 			new IpcOverP2p(node.host, registry, events, token);   // the phone's way in over libp2p

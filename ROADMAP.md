@@ -24,7 +24,7 @@ fetched album are not pulled, only thumbnails.
 - [x] media types: every picture is a photograph, a screenshot or a meme (camera EXIF, screen sizes,
   folder names, and a small logistic model over pixel statistics fitted on a real library; the user can
   override in Info); faces are only looked for in photographs — 2026-09-09
-- moments grouping, FTS search (places: done 2026-09-11, city per photo from GPS or by hand; a map is still open)
+- moments grouping, FTS search, natural-language search over the CLIP embeddings (the image side is stored since 2026-09-11) (places: done 2026-09-11, city per photo from GPS or by hand; a map is still open)
 
 ## M3 — People (done 2026-09-09)
 - [x] face detection + embeddings: YuNet + SFace through `csrc/face_opencv.cpp`, the one C++ file
@@ -69,5 +69,6 @@ fetched album are not pulled, only thumbnails.
 - [ ] Phone: videos from the camera roll (index, thumbnails, playback, sync)
 - [ ] Phone: the computer found without the QR (LAN beacon / DHT), faces cached for offline
 - [ ] Phone: the libp2p event loop still ends with vibe's "May not process events within an active yieldLock()" once per session on Android; a fresh thread takes over, the cause is open
+- [x] Scenes and moods: CLIP zero-shot tags (2026-09-11)
 - [x] Places (city from GPS via an offline GeoNames table, or "Set Place…" by hand); [ ] Memories; [ ] a map view
 - Flatpak / AppImage, caching, startup time

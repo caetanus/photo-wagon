@@ -10,6 +10,8 @@ Menu {
     property var ids: []
     property string path: ""
     property bool favorite: false
+    /// parsed library.tagLabels: {scenes: [names], moods: [names]}
+    property var tagLabels: ({ scenes: [], moods: [] })
 
     signal copy(var ids)
     signal copyPath(var ids)
@@ -17,6 +19,7 @@ Menu {
     signal toggleFavorite(var ids)
     signal addToAlbum(var ids)
     signal setPlace(var ids)
+    signal setTag(var ids, string group, string tag)
     signal setKind(var ids, string kind)
     signal remove(var ids, bool permanent)
 
@@ -33,6 +36,26 @@ Menu {
     MenuItem { text: "Move to Trash" + menu.suffix; onTriggered: menu.remove(menu.ids, false) }
     MenuItem { text: "Delete Permanently…" + menu.suffix; onTriggered: menu.remove(menu.ids, true) }
     MenuSeparator { }
+    Menu {
+        title: "Scene" + menu.suffix
+        enabled: menu.tagLabels.scenes.length > 0
+        Repeater {
+            model: menu.tagLabels.scenes
+            MenuItem { required property string modelData; text: modelData; onTriggered: menu.setTag(menu.ids, "scene", modelData) }
+        }
+        MenuSeparator { }
+        MenuItem { text: "None"; onTriggered: menu.setTag(menu.ids, "scene", "") }
+    }
+    Menu {
+        title: "Mood" + menu.suffix
+        enabled: menu.tagLabels.moods.length > 0
+        Repeater {
+            model: menu.tagLabels.moods
+            MenuItem { required property string modelData; text: modelData; onTriggered: menu.setTag(menu.ids, "mood", modelData) }
+        }
+        MenuSeparator { }
+        MenuItem { text: "None"; onTriggered: menu.setTag(menu.ids, "mood", "") }
+    }
     Menu {
         title: "Mark as" + menu.suffix
         MenuItem { text: "Photo"; onTriggered: menu.setKind(menu.ids, "photo") }

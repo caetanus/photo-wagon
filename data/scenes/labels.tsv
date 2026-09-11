@@ -1,0 +1,45 @@
+# group	label	prompts (| separated; {} is filled by the templates in make-prompts.py)
+scene	None	a photo|a snapshot|a picture of something|an ordinary photo of everyday life
+scene	Beach	the beach|people at the beach|sand and sea|a seaside beach
+scene	Pool	a swimming pool|people in a swimming pool|a pool party|a backyard pool
+scene	Snow	snow|a snowy landscape|people playing in the snow|a ski slope
+scene	Mountains	mountains|a mountain landscape|hiking in the mountains
+scene	Forest	a forest|trees in the woods|a trail in the forest
+scene	Lake or River	a lake|a river|a riverside|a waterfall
+scene	Countryside	the countryside|a farm|a field in the country|a rural landscape
+scene	City	a city street|city buildings|downtown|an urban scene
+scene	Sunset	a sunset|a sunrise|the sky at golden hour
+scene	Night	a night scene|city lights at night|a photo taken at night
+scene	Party	a party|people celebrating at a party|friends partying
+scene	Birthday	a birthday party|a birthday cake with candles|a child's birthday party
+scene	Wedding	a wedding|a bride and groom|a wedding ceremony
+scene	Christmas	Christmas|a Christmas tree|Christmas decorations
+scene	Food	food|a plate of food|a meal on a table|dessert
+scene	Drinks	drinks|beer|cocktails|wine glasses
+scene	Pets	a dog|a cat|a pet animal
+scene	Baby	a baby|a newborn baby|a toddler
+scene	Kids	children playing|kids|a child
+scene	Sports	sports|a football match|people playing sports|a gym
+scene	Concert	a concert|a live music show|a stage with lights
+scene	Museum	a museum|an art exhibition|a gallery
+scene	Church	a church|a cathedral|a religious ceremony
+scene	Travel	an airport|an airplane|a hotel room|a tourist landmark
+scene	Car	a car|inside a car|a road trip
+scene	Boat	a boat|sailing|people on a boat
+scene	Selfie	a selfie|a person taking a selfie|a close-up selfie of a face
+scene	Group	a group photo|friends posing for a photo|a family portrait
+scene	Home	a living room|a kitchen|inside a home|a bedroom
+scene	Garden	a garden|flowers|plants in a garden
+scene	Work	an office|people working at desks|a meeting room
+scene	Text	a document|a screen with text|a page of text|a receipt
+mood	Neutral	an ordinary moment|a plain everyday scene|a neutral photo
+mood	Joyful	a joyful moment|people laughing and smiling|pure happiness
+mood	Calm	a calm and peaceful scene|serenity|a quiet moment
+mood	Romantic	a romantic moment|a couple in love|a romantic dinner
+mood	Energetic	an energetic scene|action and movement|people dancing
+mood	Nostalgic	a nostalgic photo|an old memory|a vintage looking photo
+mood	Cozy	a cozy scene|warm and comfortable|a cozy evening at home
+mood	Adventurous	an adventure|exploring the outdoors|an adventurous trip
+mood	Festive	a festive celebration|a holiday celebration|festivities
+mood	Melancholic	a melancholic scene|a sad and lonely moment|a gloomy mood
+mood	Playful	a playful moment|people goofing around|fun and games

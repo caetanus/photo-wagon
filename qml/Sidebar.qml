@@ -21,9 +21,11 @@ Rectangle {
     property var people: []
     /// parsed library.places.places: [{place, country, count, cover}]
     property var places: []
+    /// parsed library.tags: {scenes: [{tag, count, cover}], moods: […]}
+    property var tags: ({ scenes: [], moods: [] })
     /// parsed library.status
     property var status: ({ connected: false, indexing: false, text: "" })
-    /// "all" | "favorites" | "people" | "person:<id>" | "places" | "place:<name>|<country>" | "imports" | "album:<id>" | "kind:<k>" | "phone" | "peers"
+    /// "all" | "favorites" | "people" | "person:<id>" | "places" | "place:<name>|<country>" | "scene:<name>" | "mood:<name>" | "imports" | "album:<id>" | "kind:<k>" | "phone" | "peers"
     property string selected: "all"
 
     signal pick(string key)
@@ -59,6 +61,8 @@ Rectangle {
     property bool datesOpen: true
     property bool peopleOpen: true
     property bool placesOpen: true
+    property bool scenesOpen: true
+    property bool moodsOpen: true
     property bool albumsOpen: true
 
     component SectionHeader: Item {
@@ -323,6 +327,38 @@ Rectangle {
                     key: "place:" + modelData.place + "|" + (modelData.country || "")
                     title: modelData.place
                     icon: icons.pin
+                    detail: String(modelData.count)
+                }
+            }
+
+            // ---- scenes and moods (CLIP zero-shot tags) --------------------------------------
+            SectionHeader {
+                title: "Scenes"; visible: sidebar.tags.scenes.length > 0
+                collapsible: true; open: sidebar.scenesOpen
+                onToggled: sidebar.scenesOpen = !sidebar.scenesOpen
+            }
+            Repeater {
+                model: sidebar.scenesOpen ? sidebar.tags.scenes : []
+                delegate: Row {
+                    required property var modelData
+                    key: "scene:" + modelData.tag
+                    title: modelData.tag
+                    icon: icons.tag
+                    detail: String(modelData.count)
+                }
+            }
+            SectionHeader {
+                title: "Moods"; visible: sidebar.tags.moods.length > 0
+                collapsible: true; open: sidebar.moodsOpen
+                onToggled: sidebar.moodsOpen = !sidebar.moodsOpen
+            }
+            Repeater {
+                model: sidebar.moodsOpen ? sidebar.tags.moods : []
+                delegate: Row {
+                    required property var modelData
+                    key: "mood:" + modelData.tag
+                    title: modelData.tag
+                    icon: icons.mood
                     detail: String(modelData.count)
                 }
             }

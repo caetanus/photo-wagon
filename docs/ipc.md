@@ -58,7 +58,7 @@ created once per library (`<data dir>/pair.token`).
 | `library.addRoot` | `{path}` | `{id}` — starts an index job; progress arrives as events |
 | `library.removeRoot` | `{id}` | `{}` |
 | `library.rescan` | `{id?}` | `{}` — all roots when `id` is omitted |
-| `library.page` | `{offset, limit, year?, month?, day?, rootId?, albumId?, personId?, favorites?, kind?}` | `{total, offset, items: [Photo]}` newest first; inside an album, album order |
+| `library.page` | `{offset, limit, year?, month?, day?, rootId?, albumId?, personId?, favorites?, kind?, q?, place?, country?}` | `{total, offset, items: [Photo]}` newest first; inside an album, album order |
 | `library.dates` | same filter as `library.page` (dates ignored) | `{years: [{year, count, cover, months: [{month, count, cover, days: [{day, count}]}]}]}` — `cover` is the thumbnail URL of the newest photo of that year/month |
 | `photo.favorite` | `{id, on?}` | `{id, favorite}` (default on) |
 | `library.stats` | — | `{total, kinds: {photo, screenshot, meme, unknown}}` |
@@ -73,8 +73,13 @@ created once per library (`<data dir>/pair.token`).
  "thumbUrl": "file:///.../store/ab/cdef...", "takenAt": "2024-05-01T12:00:00Z", "takenTs": 1714564800,
  "width": 4000, "height": 3000, "orientation": 1, "camera": "Canon EOS R6",
  "lat": null, "lon": null, "size": 3456789, "remote": false, "favorite": false,
- "kind": "photo", "kindBy": "auto"}
+ "kind": "photo", "kindBy": "auto", "place": "São Paulo", "country": "Brazil"}
 ```
+
+`place` and `country` are the city a photo was taken in: from the GPS, through
+a compiled-in table of the world's cities (nearest one within 100 km; a 0,0
+position counts as no fix), or the user's own word (`photo.setPlace`). Null
+until known.
 
 `kind` is `photo`, `screenshot` or `meme` (null until classified): a camera in
 the EXIF makes a photograph; a screen-sized image, a "Screenshots" folder or a
@@ -127,6 +132,14 @@ names one, another face of that person in the same photo becomes unassigned.
 
 `library.page` and `photo.neighbours` accept `personId` to restrict to one person.
 
+### places
+
+| method | params | result |
+|---|---|---|
+| `places.list` | `{inline?}` | `{places: [{place, country, count, cover}]}` most photos first; `cover` is the newest photo's thumbnail URL (a data: URL with `inline: true`) |
+| `places.suggest` | `{q}` | `{places: [{place, country, own}]}` for a name being typed: the library's own places (`own: true`) first, then the world's cities, accents and case aside |
+| `photo.setPlace` | `{ids, place, country?}` | `{}` — the user's word; a known city typed without a country gets its country; an empty `place` clears, and the GPS will not put it back |
+
 ### albums
 
 | method | params | result |
@@ -161,4 +174,5 @@ Methods that need the node answer `{"error": {"code": "p2p_off"}}` when it is no
 | `faces.progress` | `{done, total, faces}` |
 | `faces.done` | `{photos, faces, seconds}` |
 | `people.changed` | `{}` — people or face assignments changed |
+| `places.changed` | `{}` | places were assigned (a GPS pass or `photo.setPlace`); re-list them |
 | `log` | `{level, message}` |

@@ -20,6 +20,8 @@ QtObject {
             '" fill-rule="evenodd" d="M0 0h100v100H0z M50 0a50 50 0 1 0 0.01 0z"/></svg>')
     }
 
+    readonly property string pin:
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6-5.3-6-11a6 6 0 0 1 12 0c0 5.7-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/></svg>'
     readonly property string photos:
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="M21 16l-5.2-5.2a1 1 0 0 0-1.4 0L7 18"/></svg>'
     readonly property string heart:

@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 6;
+enum currentVersion = 7;
 
 void migrate(Database db)
 {
@@ -25,6 +25,8 @@ void migrate(Database db)
 			db.exec(schemaV5);
 		if (have < 6)
 			db.exec(schemaV6);
+		if (have < 7)
+			db.exec(schemaV7);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -125,6 +127,13 @@ CREATE INDEX photos_kind ON photos(kind);
 
 private enum schemaV6 = `
 ALTER TABLE persons ADD COLUMN cover_face INTEGER;   -- the face the user picked as the portrait, or NULL
+`;
+
+private enum schemaV7 = `
+ALTER TABLE photos ADD COLUMN place TEXT;         -- the city, from the GPS or the user
+ALTER TABLE photos ADD COLUMN country TEXT;
+ALTER TABLE photos ADD COLUMN place_by TEXT;      -- 'gps' | 'user' | 'none' (GPS, but no city near) | NULL = not looked up yet
+CREATE INDEX photos_place ON photos(place, country);
 `;
 
 /// Small persisted flags (e.g. which clustering rule the faces were grouped by).

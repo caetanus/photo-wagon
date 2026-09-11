@@ -3,7 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 // The source list on the left, as in Photos: Library, Favorites, People,
-// Imports; then the years → months → days tree, the named people, the media
+// Imports, Places; then the years → months → days tree, the named people, the places, the media
 // types, the albums and the devices. The connection / indexing status lives
 // in the footer, always visible.
 Rectangle {
@@ -19,9 +19,11 @@ Rectangle {
     property var filter: ({ year: 0, month: 0, day: 0, personId: 0 })
     /// parsed library.people.people; only the named ones are listed
     property var people: []
+    /// parsed library.places.places: [{place, country, count, cover}]
+    property var places: []
     /// parsed library.status
     property var status: ({ connected: false, indexing: false, text: "" })
-    /// "all" | "favorites" | "people" | "person:<id>" | "imports" | "album:<id>" | "kind:<k>" | "phone" | "peers"
+    /// "all" | "favorites" | "people" | "person:<id>" | "places" | "place:<name>|<country>" | "imports" | "album:<id>" | "kind:<k>" | "phone" | "peers"
     property string selected: "all"
 
     signal pick(string key)
@@ -56,6 +58,7 @@ Rectangle {
     // Which sections are folded (the user's choice, kept for the session).
     property bool datesOpen: true
     property bool peopleOpen: true
+    property bool placesOpen: true
     property bool albumsOpen: true
 
     component SectionHeader: Item {
@@ -207,6 +210,7 @@ Rectangle {
             Row { key: "all"; title: "Library"; icon: icons.photos; detail: sidebar.stats.kinds.photo ? String(sidebar.stats.kinds.photo) : (sidebar.stats.total ? String(sidebar.stats.total) : "") }
             Row { key: "favorites"; title: "Favorites"; icon: icons.heart }
             Row { key: "people"; title: "People"; icon: icons.people; detail: sidebar.namedPeople.length ? String(sidebar.namedPeople.length) : "" }
+            Row { key: "places"; title: "Places"; icon: icons.pin; detail: sidebar.places.length ? String(sidebar.places.length) : "" }
             Row {
                 key: "imports"; title: "Imports"; icon: icons.imports
                 visible: sidebar.importRoot !== null
@@ -303,6 +307,23 @@ Rectangle {
                     portrait: modelData.coverUrl || ""
                     icon: modelData.coverUrl ? "" : icons.person
                     detail: String(modelData.faces)
+                }
+            }
+
+            // ---- places ------------------------------------------------------------------
+            SectionHeader {
+                title: "Places"; visible: sidebar.places.length > 0
+                collapsible: true; open: sidebar.placesOpen
+                onToggled: sidebar.placesOpen = !sidebar.placesOpen
+            }
+            Repeater {
+                model: sidebar.placesOpen ? sidebar.places : []
+                delegate: Row {
+                    required property var modelData
+                    key: "place:" + modelData.place + "|" + (modelData.country || "")
+                    title: modelData.place
+                    icon: icons.pin
+                    detail: String(modelData.count)
                 }
             }
 

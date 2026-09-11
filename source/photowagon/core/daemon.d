@@ -22,6 +22,7 @@ import photowagon.core.api.library_api : registerLibraryApi;
 import photowagon.core.api.media_api : registerMediaApi;
 import photowagon.core.api.p2p_api : registerP2pApi;
 import photowagon.core.api.pairing_api : registerPairingApi, ServerControl;
+import photowagon.core.api.places_api : registerPlacesApi;
 import photowagon.core.config : Config;
 import photowagon.core.db.schema : migrate;
 import photowagon.core.db.sqlite : Database;
@@ -38,6 +39,7 @@ import photowagon.core.library.albums : AlbumRepo;
 import photowagon.core.library.dates : DateTree;
 import photowagon.core.library.kindjob : KindService;
 import photowagon.core.library.photos : PhotoRepo;
+import photowagon.core.library.places : Geocoder, PlaceService;
 import photowagon.core.library.roots : RootRepo;
 import photowagon.core.p2p.identity : loadOrCreateIdentity;
 import photowagon.core.p2p.node : Node;
@@ -66,6 +68,7 @@ final class Daemon : ServerControl
 	private Indexer indexer;
 	private FaceService facesService;
 	private KindService kinds;
+	private PlaceService places;
 	private Node node;
 	private Sharing sharing;
 	private bool stopped;
@@ -108,7 +111,19 @@ final class Daemon : ServerControl
 		}
 		catch (Exception e)
 			logWarn("dates: pass failed: %s", e.msg);
-		indexer.onDone = () { kinds.start(); };
+		// places: the cities of the photos with GPS, at start and after every index run
+		places = new PlaceService(db, Geocoder.builtin(), store, events);
+		try
+			places.geocodePending();
+		catch (Exception e)
+			logWarn("places: pass failed: %s", e.msg);
+		indexer.onDone = () {
+			try
+				places.geocodePending();
+			catch (Exception e)
+				logWarn("places: pass failed: %s", e.msg);
+			kinds.start();
+		};
 		kinds.onDone = () { facesService.start(); };
 
 		if (cfg.p2p)
@@ -135,6 +150,7 @@ final class Daemon : ServerControl
 		registerImportApi(registry, cfg, roots, photos, indexer);
 		registerFaceApi(registry, faceRepo, facesService, store, events);
 		registerAlbumApi(registry, albums, photos, sharing);
+		registerPlacesApi(registry, places);
 		registerP2pApi(registry, node, sharing);
 		if (node !is null)
 			new IpcOverP2p(node.host, registry, events, token);   // the phone's way in over libp2p

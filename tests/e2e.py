@@ -126,6 +126,18 @@ check(nb["prev"] is None and nb["next"] is not None, f"neighbours of newest: {nb
 got = a.call("photo.get", {"id": nb["next"]})
 check(got["id"] == nb["next"], "photo.get")
 
+# places: none of the test images has GPS, so the user's word is the way in
+a.call("photo.setPlace", {"ids": [first["id"], nb["next"]], "place": "sao paulo"})
+places = a.call("places.list")["places"]
+check(len(places) == 1 and places[0]["place"] == "São Paulo" and places[0]["country"] == "Brazil" and places[0]["count"] == 2,
+      f"a typed city gets its proper name and country: {places}")
+check(places[0]["cover"] and places[0]["cover"].startswith("file://"), "the place card has a cover")
+check(a.call("library.page", {"place": "São Paulo", "country": "Brazil", "limit": 10})["total"] == 2, "page filtered by place")
+sugg = a.call("places.suggest", {"q": "sao"})["places"]
+check(sugg and sugg[0]["place"] == "São Paulo" and sugg[0]["own"], f"suggestions list the library's own place first: {sugg[:2]}")
+a.call("photo.setPlace", {"ids": [first["id"]], "place": ""})
+check(a.call("places.list")["places"][0]["count"] == 1, "clearing a place")
+
 # rescan is incremental: nothing new
 a.call("library.rescan")
 done2 = a.wait_event("index.done", lambda d: d["rootId"] == rid and d is not done)

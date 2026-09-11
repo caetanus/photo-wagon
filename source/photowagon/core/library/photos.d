@@ -33,6 +33,9 @@ struct Photo
 	bool favorite;
 	string kind; // photo | screenshot | meme; null until classified
 	string kindBy; // auto | user
+	string place; // the city; null until looked up (or none near)
+	string country;
+	string placeBy; // gps | user | none
 }
 
 /// Restricts a page or a count. Zero means "no restriction" for every field.
@@ -47,6 +50,8 @@ struct Filter
 	bool favorites;
 	string kind; // restrict to one kind; null = any
 	string text; // a word of the path (file name, folder); null = any
+	string place; // photos of one place (with `country` when given); null = any
+	string country;
 }
 
 struct Neighbours
@@ -314,6 +319,8 @@ final class PhotoRepo
 			"favorite": JSONValue(p.favorite),
 			"kind": p.kind is null ? JSONValue(null) : JSONValue(p.kind),
 			"kindBy": p.kindBy is null ? JSONValue(null) : JSONValue(p.kindBy),
+			"place": p.place is null ? JSONValue(null) : JSONValue(p.place),
+			"country": p.country is null ? JSONValue(null) : JSONValue(p.country),
 		];
 		return j;
 	}
@@ -330,7 +337,8 @@ final class PhotoRepo
 	// ---- internals --------------------------------------------------------------
 
 	private enum selectColumns = `SELECT p.id, p.hash, p.path, p.root_id, p.size, p.mtime_ms, p.taken_ts, p.taken_at,
-		p.width, p.height, p.orientation, p.camera, p.lat, p.lon, p.thumb_hash, p.origin_peer, p.favorite, p.kind, p.kind_by`;
+		p.width, p.height, p.orientation, p.camera, p.lat, p.lon, p.thumb_hash, p.origin_peer, p.favorite, p.kind, p.kind_by,
+		p.place, p.country, p.place_by`;
 
 	private static Photo readRow(ref Statement s)
 	{
@@ -358,6 +366,9 @@ final class PhotoRepo
 		p.favorite = s.getLong(16) != 0;
 		p.kind = s.getString(17);
 		p.kindBy = s.getString(18);
+		p.place = s.getString(19);
+		p.country = s.getString(20);
+		p.placeBy = s.getString(21);
 		return p;
 	}
 
@@ -365,17 +376,27 @@ final class PhotoRepo
 	{
 		string joins;
 		string where = " WHERE 1=1";
-		long[] longs;
-		string[] strings; // bound after the longs (they appear after them in `where`)
+		private Param[] params; // in the order their `?` appear
+
+		private struct Param
+		{
+			bool isText;
+			long number;
+			string text;
+		}
+
+		void add(long v) { params ~= Param(false, v); }
+		void add(string v) { params ~= Param(true, 0, v); }
 
 		/// Binds the collected values starting at 1; returns how many were bound.
 		int bind(ref Statement s)
 		{
 			int i = 0;
-			foreach (v; longs)
-				s.bind(++i, v);
-			foreach (v; strings)
-				s.bind(++i, v);
+			foreach (v; params)
+				if (v.isText)
+					s.bind(++i, v.text);
+				else
+					s.bind(++i, v.number);
 			return i;
 		}
 	}
@@ -386,17 +407,17 @@ final class PhotoRepo
 		if (f.albumId)
 		{
 			w.joins ~= " JOIN album_photos ap ON ap.photo_id = p.id AND ap.album_id = ?";
-			w.longs ~= f.albumId;
+			w.add(f.albumId);
 		}
 		if (f.rootId)
 		{
 			w.where ~= " AND p.root_id = ?";
-			w.longs ~= f.rootId;
+			w.add(f.rootId);
 		}
 		if (f.personId)
 		{
 			w.where ~= " AND EXISTS (SELECT 1 FROM faces fp WHERE fp.photo_id = p.id AND fp.person_id = ?)";
-			w.longs ~= f.personId;
+			w.add(f.personId);
 		}
 		if (f.favorites)
 			w.where ~= " AND p.favorite = 1";
@@ -405,20 +426,30 @@ final class PhotoRepo
 		else if (f.kind.length)
 		{
 			w.where ~= " AND p.kind = ?";
-			w.strings ~= f.kind;
+			w.add(f.kind);
 		}
 		if (f.text.length)
 		{
 			w.where ~= " AND p.path LIKE ? ESCAPE '\\'";
 			import std.string : replace;
-			w.strings ~= "%" ~ f.text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") ~ "%";
+			w.add("%" ~ f.text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") ~ "%");
 		}
 		if (f.year)
 		{
 			auto r = dateRange(f.year, f.month, f.day);
 			w.where ~= " AND p.taken_ts >= ? AND p.taken_ts < ?";
-			w.longs ~= r[0];
-			w.longs ~= r[1];
+			w.add(r[0]);
+			w.add(r[1]);
+		}
+		if (f.place.length)
+		{
+			w.where ~= " AND p.place = ?";
+			w.add(f.place);
+			if (f.country.length)
+			{
+				w.where ~= " AND p.country = ?";
+				w.add(f.country);
+			}
 		}
 		return w;
 	}

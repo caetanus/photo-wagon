@@ -60,6 +60,7 @@ ApplicationWindow {
     readonly property var datesData: JSON.parse(library.dates)
     readonly property var current: library.current.length ? JSON.parse(library.current) : null
     readonly property var peopleData: JSON.parse(library.people).people
+    readonly property var placesData: JSON.parse(library.places).places
     readonly property var facesData: JSON.parse(library.faces).faces
     readonly property var albumsData: JSON.parse(library.albums).albums
     readonly property var rootsData: JSON.parse(library.roots).roots
@@ -110,6 +111,12 @@ ApplicationWindow {
         else if (key === "phone") { phonePanel.open(); source = "all" }
         else if (key === "peers") { peersPanel.open(); source = "all" }
         else if (key === "people") library.loadPeople()
+        else if (key === "places") library.loadPlaces()
+        else if (key.startsWith("place:")) {
+            const pc = key.substring(6).split("|")
+            if (filterData.place === pc[0] && (filterData.country || "") === (pc[1] || "")) pickSource("all")
+            else openPlace(pc[0], pc[1] || "")
+        }
         else if (key.startsWith("person:")) {
             const id = parseInt(key.substring(7))
             if (filterData.personId === id) pickSource("all")   // the same person again: back to the library
@@ -118,12 +125,15 @@ ApplicationWindow {
     }
 
     function openPerson(id) { source = "person"; library.filterPerson(id); grid.clearSelection() }
+    function openPlace(place, country) { source = "place"; library.filterPlace(place, country); grid.clearSelection() }
+    /// The photo grid and its toolbar are shown; People and Places are pages of their own.
+    readonly property bool browsing: source !== "people" && source !== "places"
 
     // A node of the date tree: keeps the person / album / favourites view, shows the photos.
     function pickDate(y, m, d) {
         library.closePhoto()
         grid.clearSelection()
-        if (source === "people") source = "all"
+        if (source === "people" || source === "places") source = "all"
         if (mode === "years" || mode === "months") mode = "days"
         library.filterDate(y, m, d)
     }
@@ -139,6 +149,8 @@ ApplicationWindow {
     readonly property string headerTitle: {
         if (viewing) return "";
         if (source === "people") return "People"
+        if (source === "places") return "Places"
+        if (filterData.place) return filterData.place + (filterData.country ? ", " + filterData.country : "")
         if (filterData.text) return "Results for “" + filterData.text + "”"
         if (source === "person") return personName(filterData.personId)
         if (filterData.favorites) return "Favorites"
@@ -197,8 +209,11 @@ ApplicationWindow {
             dates: root.datesData
             filter: root.filterData
             people: root.peopleData
+            places: root.placesData
             status: root.status
-            selected: root.source === "person" ? "person:" + root.filterData.personId : root.source
+            selected: root.source === "person" ? "person:" + root.filterData.personId
+                    : root.source === "place" ? "place:" + root.filterData.place + "|" + (root.filterData.country || "")
+                    : root.source
             onPick: (key) => root.pickSource(key)
             onPickDate: (y, m, d) => root.pickDate(y, m, d)
             onPersonMenu: (p) => { personMenu.person = p; personMenu.popup() }
@@ -250,7 +265,7 @@ ApplicationWindow {
                     Layout.maximumWidth: 260
                 }
                 Label {
-                    visible: !root.viewing && root.source !== "people" && root.pageData.total > 0
+                    visible: !root.viewing && root.browsing && root.pageData.total > 0
                     text: root.pageData.total + (root.pageData.total === 1 ? " photo" : " photos")
                     color: theme.muted
                     font.pixelSize: 12
@@ -260,7 +275,7 @@ ApplicationWindow {
 
                 // Years / Months / Days / All Photos
                 Rectangle {
-                    visible: !root.viewing && root.source !== "people"
+                    visible: !root.viewing && root.browsing
                     height: 28
                     width: segRow.implicitWidth + 6
                     radius: 7
@@ -288,14 +303,14 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
 
                 // zoom
-                Image { visible: !root.viewing && root.source !== "people"; source: icons.tint(icons.zoomOut, theme.muted); sourceSize.width: 14; sourceSize.height: 14 }
+                Image { visible: !root.viewing && root.browsing; source: icons.tint(icons.zoomOut, theme.muted); sourceSize.width: 14; sourceSize.height: 14 }
                 Slider {
-                    visible: !root.viewing && root.source !== "people"
+                    visible: !root.viewing && root.browsing
                     from: 72; to: 320; value: root.zoom
                     implicitWidth: 120
                     onMoved: root.zoom = value
                 }
-                Image { visible: !root.viewing && root.source !== "people"; source: icons.tint(icons.zoomIn, theme.muted); sourceSize.width: 14; sourceSize.height: 14 }
+                Image { visible: !root.viewing && root.browsing; source: icons.tint(icons.zoomIn, theme.muted); sourceSize.width: 14; sourceSize.height: 14 }
 
                 // viewer actions
                 ToolIcon {
@@ -313,6 +328,12 @@ ApplicationWindow {
                     icon_: icons.folderPlus
                     ToolTip.text: "Add to Album"; ToolTip.visible: hovered
                     onClicked: { albumDialog.photoIds = grid.selectedIds(); albumDialog.open() }
+                }
+                ToolIcon {
+                    visible: !root.viewing && grid.selectedIds().length > 0
+                    icon_: icons.pin
+                    ToolTip.text: "Set Place"; ToolTip.visible: hovered
+                    onClicked: { placeDialog.photoIds = grid.selectedIds(); placeDialog.open() }
                 }
                 ToolIcon {
                     visible: !root.viewing && grid.selectedIds().length > 0
@@ -359,7 +380,7 @@ ApplicationWindow {
 
             TileGrid {
                 anchors.fill: parent
-                visible: !root.viewing && root.source !== "people" && root.mode === "years"
+                visible: !root.viewing && root.browsing && root.mode === "years"
                 theme: root.theme
                 model: root.yearTiles
                 tileWidth: 420; tileHeight: 280
@@ -367,7 +388,7 @@ ApplicationWindow {
             }
             TileGrid {
                 anchors.fill: parent
-                visible: !root.viewing && root.source !== "people" && root.mode === "months"
+                visible: !root.viewing && root.browsing && root.mode === "months"
                 theme: root.theme
                 model: root.monthTiles
                 tileWidth: 300; tileHeight: 210
@@ -376,7 +397,7 @@ ApplicationWindow {
             PhotoGrid {
                 id: grid
                 anchors.fill: parent
-                visible: !root.viewing && root.source !== "people" && (root.mode === "days" || root.mode === "all")
+                visible: !root.viewing && root.browsing && (root.mode === "days" || root.mode === "all")
                 theme: root.theme
                 icons: root.icons
                 page: root.pageData
@@ -399,6 +420,14 @@ ApplicationWindow {
                 onNotAPerson: (id) => library.deletePerson(id)
                 onRemovePerson: (id) => library.removePerson(id)
                 onPersonMenu: (p) => { personMenu.person = p; personMenu.popup() }
+            }
+            PlacesView {
+                anchors.fill: parent
+                visible: !root.viewing && root.source === "places"
+                theme: root.theme
+                icons: root.icons
+                places: root.placesData
+                onOpen: (place, country) => root.openPlace(place, country)
             }
             // a way out of full screen for the mouse, shown while the pointer is near the top
             Rectangle {
@@ -463,6 +492,7 @@ ApplicationWindow {
         onOpenFolder: (path) => Qt.openUrlExternally(root.folderUrl(path))
         onToggleFavorite: (ids) => { for (const id of ids) library.toggleFavorite(id) }
         onAddToAlbum: (ids) => { albumDialog.photoIds = ids; albumDialog.open() }
+        onSetPlace: (ids) => { placeDialog.photoIds = ids; placeDialog.open() }
         onSetKind: (ids, kind) => library.setKinds(JSON.stringify(ids), kind)
         onRemove: (ids, permanent) => root.removePhotos(ids, permanent)
     }
@@ -512,6 +542,16 @@ ApplicationWindow {
         width: 380
         onAddTo: (albumId, ids) => library.addToAlbum(albumId, JSON.stringify(ids))
         onCreateNew: (name, ids) => library.createAlbum(name, JSON.stringify(ids))
+    }
+
+    PlaceDialog {
+        id: placeDialog
+        theme: root.theme
+        suggestions: JSON.parse(library.placeSuggestions).places
+        anchors.centerIn: parent
+        width: 380
+        onTyping: (q) => library.suggestPlaces(q)
+        onSetPlace: (place, country, ids) => library.setPlace(JSON.stringify(ids), place, country)
     }
 
     PhonePanel {
@@ -586,6 +626,8 @@ ApplicationWindow {
             if (applied) return
             applied = true
             if (library.shotView === "people") root.pickSource("people")
+            else if (library.shotView === "places") root.pickSource("places")
+            else if (library.shotView.startsWith("place:")) root.pickSource(library.shotView)   // place:<name>|<country>
             else if (library.shotView.startsWith("date:")) {          // date:YYYY[-M[-D]]
                 const p = library.shotView.substring(5).split("-")
                 root.pickDate(parseInt(p[0]), parseInt(p[1] || "0"), parseInt(p[2] || "0"))

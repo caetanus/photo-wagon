@@ -178,6 +178,8 @@ Filter filterOf(JSONValue p)
 	f.personId = getLong(p, "personId");
 	f.kind = getString(p, "kind");
 	f.text = getString(p, "q");
+	f.place = getString(p, "place");
+	f.country = getString(p, "country");
 	if (f.kind.length && f.kind != "photo" && f.kind != "screenshot" && f.kind != "meme")
 		throw new ApiError("bad_params", "kind must be photo, screenshot or meme");
 	if (p.type == JSONType.object)

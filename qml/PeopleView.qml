@@ -15,6 +15,7 @@ Item {
     signal notAPerson(int personId)
     /// A named person leaves People; the faces stay, unnamed.
     signal removePerson(int personId)
+    signal personMenu(var person)
 
     /// Automatic groups this small stay behind "Show more" (mostly strangers and mistakes).
     property int minUnnamedFaces: 3
@@ -64,6 +65,7 @@ Item {
                 onTapped: view.open(portrait.person.id)
                 onDoubleTapped: portrait.edit()
             }
+            TapHandler { acceptedButtons: Qt.RightButton; onTapped: view.personMenu(portrait.person) }
             // "not a person" for automatic groups, "remove from People" for named ones
             Rectangle {
                 visible: hover.hovered

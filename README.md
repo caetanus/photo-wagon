@@ -14,7 +14,7 @@ modification time. A Photos-style window — the Library timeline shows photogra
 and memes live under Media Types (an album or a search shows everything) — with
 a source list (Library, Favorites, People, Imports;
 the **years → months → days** tree with counts, one click to any day, the same
-node again clears it; the named **people** with portraits and counts; Media
+node again clears it; the named **people** with portraits and counts (right-click: show photos, rename, remove from People); Media
 Types — Photos, Screenshots, Memes — albums, the phone and the peers; the
 connection / indexing status in the footer), a toolbar with **Years / Months / Days / All
 Photos**, a zoom slider and search, the grid (click selects, ⌘/Ctrl-click

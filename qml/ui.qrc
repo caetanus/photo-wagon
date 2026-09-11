@@ -11,6 +11,7 @@
     <file>AlbumDialog.qml</file>
     <file>MergeSuggestion.qml</file>
     <file>PhotoMenu.qml</file>
+        <file>PersonMenu.qml</file>
     <file>PeersPanel.qml</file>
     <file>PhonePanel.qml</file>
   </qresource>

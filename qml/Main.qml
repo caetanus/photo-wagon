@@ -201,6 +201,7 @@ ApplicationWindow {
             selected: root.source === "person" ? "person:" + root.filterData.personId : root.source
             onPick: (key) => root.pickSource(key)
             onPickDate: (y, m, d) => root.pickDate(y, m, d)
+            onPersonMenu: (p) => { personMenu.person = p; personMenu.popup() }
         }
 
         // toolbar
@@ -397,6 +398,7 @@ ApplicationWindow {
                 onRename: (id, name) => library.renamePerson(id, name)
                 onNotAPerson: (id) => library.deletePerson(id)
                 onRemovePerson: (id) => library.removePerson(id)
+                onPersonMenu: (p) => { personMenu.person = p; personMenu.popup() }
             }
             // a way out of full screen for the mouse, shown while the pointer is near the top
             Rectangle {
@@ -444,6 +446,14 @@ ApplicationWindow {
             }
         }
     } // shell
+
+    PersonMenu {
+        id: personMenu
+        theme: root.theme
+        onOpen: (id) => root.openPerson(id)
+        onRename: (id, name) => library.renamePerson(id, name)
+        onRemove: (id) => { library.removePerson(id); if (root.source === "person") root.pickSource("all") }
+    }
 
     PhotoMenu {
         id: photoMenu

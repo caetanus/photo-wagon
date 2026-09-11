@@ -25,6 +25,8 @@ Rectangle {
     property string selected: "all"
 
     signal pick(string key)
+    /// Right-click on a person row.
+    signal personMenu(var person)
     /// A node of the date tree (0 = any); the same node again clears the date filter.
     signal pickDate(int year, int month, int day)
 
@@ -175,6 +177,10 @@ Rectangle {
         active: sidebar.selected === key
         onTapped: sidebar.pick(key)
     }
+    component PersonRow: Row {
+        required property var modelData
+        TapHandler { acceptedButtons: Qt.RightButton; onTapped: sidebar.personMenu(modelData) }
+    }
 
     // A Column, not a ListView over an ObjectModel: the Repeaters of the tree
     // and the people need a positioner as their parent.
@@ -291,8 +297,7 @@ Rectangle {
             }
             Repeater {
                 model: sidebar.peopleOpen ? sidebar.namedPeople : []
-                delegate: Row {
-                    required property var modelData
+                delegate: PersonRow {
                     key: "person:" + modelData.id
                     title: modelData.name
                     portrait: modelData.coverUrl || ""

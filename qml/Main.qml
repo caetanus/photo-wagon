@@ -687,6 +687,7 @@ ApplicationWindow {
             else if (library.shotView.startsWith("place:")) root.pickSource(library.shotView)   // place:<name>|<country>
             else if (root.tagGroups.some(g => library.shotView.startsWith(g + ":"))) root.pickSource(library.shotView)
             else if (library.shotView === "info") {}
+            else if (library.shotView === "copy") { if (root.pageData.items.length) library.copyPhotos(JSON.stringify([root.pageData.items[0].id, root.pageData.items[1].id])) }
             else if (library.shotView.startsWith("edit")) {}   // edit | edit:adjust | edit:crop — see below
             else if (library.shotView.startsWith("keyword:")) root.pickSource(library.shotView)
             else if (library.shotView.startsWith("similar:")) { root.source = "similar"; library.filterSimilar(parseInt(library.shotView.substring(8))) }

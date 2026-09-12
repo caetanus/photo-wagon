@@ -27,6 +27,7 @@ configuration "app" {
 	importPaths "../qt-dlang-gen/generated/qt-6.11/cxx-quick" "../qt-dlang-gen/runtime/qrc"
 	sourceFiles "../qt-dlang-gen/runtime/qrc/qrc.d"
 	stringImportPaths "qml"
+	sourceFiles "csrc/libclipboard_qt.a"   // the clipboard shim (csrc/clipboard_qt.h): QMimeData owned by Qt
 	libs "Qt6Quick" "Qt6QmlModels" "Qt6Qml" "Qt6Gui" "Qt6Network" "Qt6Core" "stdc++"
 	lflags "--start-group" "$PACKAGE_DIR/../qt-dlang-gen/.build/qt-6.11-cxx-quick/libbinding_ldc2.a" \
 	       "$PACKAGE_DIR/../qt-dlang-gen/.build/qt-6.11-cxx-quick/libshims.a" "--end-group" \

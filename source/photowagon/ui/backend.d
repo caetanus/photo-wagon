@@ -20,6 +20,13 @@ import std.datetime.systime : Clock;
 
 import photowagon.ui.transport : Bridge;
 
+version (WithUi)
+{
+	/// csrc/clipboard_qt.h: the QMimeData is created in C++ so the clipboard is its only owner.
+	/// Desktop only: the phone client (no WithUi) has no file clipboard.
+	private extern (C) int pw_clipboard_set_files(const char* uris, const char* gnome, const char* text);
+}
+
 @QObject class Library
 {
     Signal!() pageChanged;
@@ -1114,9 +1121,6 @@ import photowagon.ui.transport : Bridge;
     /// GNOME "copy" form), and as paths as text.
     @Slot void copyPhotos(string idsJson)
     {
-        import qt.quick.qguiapplication : QGuiApplication;
-        import qt.quick.qmimedata : QMimeData;
-        import qt.quick.qclipboard : QClipboard;
         import photowagon.core.library.calendar : fileUrl;
         import std.array : join;
 
@@ -1137,11 +1141,22 @@ import photowagon.ui.transport : Bridge;
         if (!paths.length) return;
         string[] urls;
         foreach (p; paths) urls ~= fileUrl(p);
-        auto md = new QMimeData();
-        md.setData("text/uri-list", urls.join("\r\n") ~ "\r\n");
-        md.setData("x-special/gnome-copied-files", "copy\n" ~ urls.join("\n"));
-        md.setText(paths.join("\n"));
-        QGuiApplication.clipboard().setMimeData(md, QClipboard.Mode.Clipboard);
+        // in C++ (csrc/clipboard_qt): the QMimeData belongs to the clipboard alone — a D-side
+        // one was also freed by the collector, and the app crashed on the next clipboard event
+        version (WithUi)
+        {
+            import std.string : toStringz;
+            if (pw_clipboard_set_files((urls.join("\r\n") ~ "\r\n").toStringz, ("copy\n" ~ urls.join("\n")).toStringz, paths.join("\n").toStringz) != 0)
+            {
+                report("copy", parseJSON(`{"code":"internal","message":"no clipboard"}`));
+                return;
+            }
+        }
+        else
+        {
+            report("copy", parseJSON(`{"code":"internal","message":"no file clipboard on the phone"}`));
+            return;
+        }
         setStatus(true, indexing, paths.length == 1 ? "copied 1 photo" : "copied " ~ paths.length.to!string ~ " photos");
     }
 

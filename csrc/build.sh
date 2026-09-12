@@ -6,7 +6,7 @@ set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 cd "$HERE"
 fresh=1
-for f in face_opencv.cpp face_opencv.h clip_opencv.cpp clip_opencv.h sqlite-vec.c sqlite-vec.h; do
+for f in face_opencv.cpp face_opencv.h clip_opencv.cpp clip_opencv.h sqlite-vec.c sqlite-vec.h clipboard_qt.cpp clipboard_qt.h; do
     [ libface_opencv.a -nt "$f" ] || fresh=0
 done
 [ $fresh = 1 ] && exit 0
@@ -19,4 +19,10 @@ ${CXX:-g++} -std=c++17 -O2 -fPIC $(pkg-config --cflags "$PKG") -c clip_opencv.cp
 ${CC:-gcc} -std=gnu11 -O2 -fPIC -c sqlite-vec.c -o sqlite-vec.o
 rm -f libface_opencv.a
 ar rcs libface_opencv.a face_opencv.o clip_opencv.o sqlite-vec.o
+# the clipboard shim needs Qt: a separate archive, linked by the "app" configuration only
+if pkg-config --exists Qt6Gui; then
+    ${CXX:-g++} -std=c++17 -O2 -fPIC $(pkg-config --cflags Qt6Gui Qt6Core) -c clipboard_qt.cpp -o clipboard_qt.o
+    rm -f libclipboard_qt.a
+    ar rcs libclipboard_qt.a clipboard_qt.o
+fi
 echo "csrc: built libface_opencv.a"

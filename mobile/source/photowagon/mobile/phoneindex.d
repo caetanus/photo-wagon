@@ -17,7 +17,7 @@ import qt.quick.qtimer;
 import cppq = qt.quick.qobject;
 import cxxrt : make;
 
-import std.algorithm : sort, remove, SwapStrategy;
+import std.algorithm : sort, remove, SwapStrategy, startsWith;
 import std.conv : to;
 import std.digest.sha : sha1Of, toHexString, LetterCase;
 import std.file : exists, mkdirRecurse, readText, write, isDir;
@@ -205,7 +205,11 @@ final class PhoneIndex
         {
             seen[c.path] = true;
             auto known = c.path in byPath;
-            if (known && known.size == c.size && known.mtimeMs == c.mtimeMs && known.thumb !is null && known.thumb.exists)
+            // Re-decode unless the thumb is present AND under the persistent thumbDir: an old
+            // entry pointing at the evicted cache dir must be regenerated into files/thumbs,
+            // or the grid shows dark tiles (the "black screen") for images Android deleted.
+            if (known && known.size == c.size && known.mtimeMs == c.mtimeMs && known.thumb !is null
+                && known.thumb.startsWith(thumbDir) && known.thumb.exists)
                 continue;
             todo ~= c;
         }

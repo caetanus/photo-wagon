@@ -105,16 +105,26 @@ int main()
         environment["QT_QUICK_CONTROLS_STYLE"] = "Material";
     version (Android)
     {
-        environment["QSG_INFO"] = "1";           // scene graph setup lines in logcat (tag qt.scenegraph.general)
-        environment["QSG_RENDER_TIMING"] = "1";  // per-frame polish / sync / render times: where a stall is spent
-        environment["QT_LOGGING_RULES"] = "qt.qpa.window=true;qt.qpa.android=true;qt.scenegraph.general=true";   // window expose / hide
+        // Diagnostics OFF by default: QSG_RENDER_TIMING logs the polish/sync/render/swap of
+        // EVERY frame to logcat — at 60 fps that per-frame logging is itself a drag on the
+        // scrolling it is meant to measure. Turn them on only when chasing a stall, by setting
+        // PW_QT_DEBUG=1 in the environment.
+        if ("PW_QT_DEBUG" in environment)
+        {
+            environment["QSG_INFO"] = "1";
+            environment["QSG_RENDER_TIMING"] = "1";
+            environment["QT_LOGGING_RULES"] = "qt.qpa.window=true;qt.qpa.android=true;qt.scenegraph.general=true";
+        }
     }
     installCrashHandler();
     {
-        // the user's rule: past 1.5 GB resident the app kills itself with SIGSEGV, so the
-        // crash handler above writes its backtrace and the dump can be read
-        import photowagon.core.jobs.memguard : startMemoryGuard;
-        startMemoryGuard(1536, "photo-wagon-mobile");
+        // Bound memory, but NEVER dump a core on the phone: a SIGSEGV core dump here is
+        // multi-GB, fills /data, makes Android evict the thumbnail cache, and spirals into
+        // a re-decode + OOM loop. Disable cores outright and, at the limit, exit cleanly —
+        // Android restarts us and the index resumes from its last save.
+        import photowagon.core.jobs.memguard : startMemoryGuard, disableCoreDumps;
+        disableCoreDumps();
+        startMemoryGuard(1536, "photo-wagon-mobile", false);
     }
     installQuitHandler();
     logTls("qt thread");

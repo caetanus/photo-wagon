@@ -17,7 +17,8 @@ import libp2p.util.fibers : FiberGroup;
 import photowagon.core.config : Config;
 import photowagon.core.db.sqlite : Database;
 import photowagon.core.db.schema : getSetting, setSetting;
-import photowagon.core.faces.cluster : ClusterIndex, SplitFace, eligible, clusterVersion, splitTowards, keepScore;
+import photowagon.core.faces.cluster : ClusterIndex, SplitFace, eligible, clusterVersion, splitTowards, keepScore,
+	minScore, minFaceWidth;
 import photowagon.core.faces.detect : FaceHit, detectFaces, initFaces;
 import photowagon.core.faces.repo : FaceRepo;
 import photowagon.core.ipc.events : Events;
@@ -66,6 +67,16 @@ final class FaceService
 			logWarn("faces: disabled: %s", e.msg);
 		import std.conv : to;
 
+		// Repair the per-face vector index. An early build's addFace used an UPSERT that vec0
+		// rejects ("UPSERT not implemented for virtual table"), so every face scanned by that
+		// build is missing from face_vec and cannot be recognised. Rebuild it once from the
+		// stored embeddings; the fix to addFace keeps it correct from here on.
+		if (getSetting(db, "face_vec_build") != "2")
+		{
+			rebuildFaceVec();
+			setSetting(db, "face_vec_build", "2");
+		}
+
 		if (getSetting(db, "cluster_version") != clusterVersion.to!string)
 		{
 			// grouped by an older rule (or never): redo it from the stored embeddings
@@ -86,6 +97,26 @@ final class FaceService
 			float[128] e = f.embedding[0 .. 128];
 			cluster.add(f.personId, e, f.personNamed);
 		});
+	}
+
+	/// Rebuild face_vec (the per-face recognition index) from every eligible face's stored
+	/// embedding. Idempotent; used once to repair the index after the addFace UPSERT bug.
+	private void rebuildFaceVec()
+	{
+		db.exec("DELETE FROM face_vec");
+		auto q = db.prepare(`SELECT f.id, f.embedding FROM faces f JOIN photos p ON p.id = f.photo_id
+			WHERE length(f.embedding) = 512 AND f.score >= ? AND f.w * p.width >= ?`);
+		q.bind(1, cast(double) minScore).bind(2, cast(double) minFaceWidth);
+		auto ins = db.prepare("INSERT INTO face_vec (face_id, embedding) VALUES (?, ?)");
+		long n;
+		while (q.step())
+		{
+			ins.reset();
+			ins.bind(1, q.getLong(0)).bind(2, q.getBlob(1));
+			ins.run();
+			n++;
+		}
+		logInfo("faces: recognition index rebuilt with %s faces", n);
 	}
 
 	/// Rebuilds every automatic grouping with the current rule. Named persons
@@ -201,17 +232,30 @@ final class FaceService
 			long ambiguousCount;
 			foreach (ref t; todo)
 			{
-				float best;
-				bool ambiguous;
 				auto taken = t.photo in inPhoto;
-				long person = cluster.match(t.e, best, ambiguous, taken ? *taken : null);
-				if (person == 0 && ambiguous)
+				auto takenList = taken ? *taken : null;
+				// recognise a named person by the face-vote first (this is what pulls a face
+				// that was left unassigned back onto a person the user has since named)
+				bool ambiguousNamed;
+				long person = cluster.matchNamedByFaces(t.e, takenList, ambiguousNamed);
+				if (person == 0 && !ambiguousNamed)
+				{
+					float best;
+					bool ambiguous;
+					person = cluster.match(t.e, best, ambiguous, takenList);
+					if (person == 0 && ambiguous)
+					{
+						ambiguousCount++;
+						continue; // stays unassigned: the user decides
+					}
+					if (person == 0)
+						person = faces.createPerson(null);
+				}
+				else if (person == 0 && ambiguousNamed)
 				{
 					ambiguousCount++;
-					continue; // stays unassigned: the user decides
+					continue; // two named people equally close: the user decides
 				}
-				if (person == 0)
-					person = faces.createPerson(null);
 				faces.setFacePerson(t.id, person);
 				cluster.add(person, t.e);
 				inPhoto[t.photo] ~= person;
@@ -367,19 +411,32 @@ final class FaceService
 			catch (Exception e)
 				logWarn("faces: crop failed for %s: %s", photo.path, e.msg);
 			long person;
-			if (eligible(hit.w * photo.width, hit.score))
+			immutable elig = eligible(hit.w * photo.width, hit.score);
+			if (elig)
 			{
-				float best;
-				bool ambiguous;
-				person = cluster.match(hit.embedding, best, ambiguous, inThisPhoto);
-				if (person == 0 && !ambiguous)
-					person = faces.createPerson(null);
+				// first, recognise a person the user has already named, by a vote of the
+				// nearest faces (catches a known face at a new angle the centroid misses)
+				bool ambiguousNamed;
+				person = cluster.matchNamedByFaces(hit.embedding, inThisPhoto, ambiguousNamed);
+				if (person == 0 && !ambiguousNamed)
+				{
+					// nobody named is near: the usual centroid grouping into automatic people
+					float best;
+					bool ambiguous;
+					person = cluster.match(hit.embedding, best, ambiguous, inThisPhoto);
+					if (person == 0 && !ambiguous)
+						person = faces.createPerson(null);
+					// ambiguous → leave unassigned for the user
+				}
+				// ambiguousNamed → leave unassigned for the user
 				if (person)
 					inThisPhoto ~= person;
 			}
-			faces.insertFace(id, hit.x, hit.y, hit.w, hit.h, hit.score, hit.embedding[], thumb, person);
+			immutable faceId = faces.insertFace(id, hit.x, hit.y, hit.w, hit.h, hit.score, hit.embedding[], thumb, person);
 			if (person)
 				cluster.add(person, hit.embedding);
+			if (elig)
+				cluster.addFace(faceId, hit.embedding); // this face can now vote for later ones
 		}
 		return hits.length;
 	}
@@ -502,11 +559,21 @@ final class FaceService
 		if (ofFrom.length == 0)
 			return 0;
 		auto moved = splitTowards(ofFrom, ofInto, seed);
-		if (moved.length == 0)
-			return 0;
 		bool[long] movedSet;
 		foreach (id; moved)
 			movedSet[id] = true;
+		// Also pull in the faces of `from` that most look like the very face the user just
+		// corrected — its near-twins by direct similarity. The centroid split above misses
+		// these when the two people are confusable (their averages sit almost on top of each
+		// other), which is exactly the "I fixed one, the rest still say Tomás" case.
+		bool[long] fromIds;
+		foreach (ref f; ofFrom)
+			fromIds[f.id] = true;
+		foreach (fid; cluster.facesNear(seed, 0.52f, 150))
+			if (fid in fromIds)
+				movedSet[fid] = true;
+		if (movedSet.length == 0)
+			return 0;
 		// one face per photo: photos where `into` already has a face keep it
 		bool[long] photoTaken;
 		faces.eachFace((ref FaceRepo.StoredFace f) {

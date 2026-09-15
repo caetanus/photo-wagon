@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtMultimedia
 
 // One photo, in the window (the sidebar stays). Arrows on hover, a filmstrip
 // of the current page at the bottom, an Info panel on the right, face circles
@@ -263,16 +264,20 @@ Item {
         anchors.right: info.visible ? info.left : editPanel.visible ? editPanel.left : parent.right
         anchors.bottom: caption.top
 
+        readonly property bool isVideo: viewer.photo && viewer.photo.video === true
         Image {
             id: image
+            visible: !stage.isVideo
             width: stage.width - 24
             height: stage.height - 24
             x: 12 + viewer.panX
             y: 12 + viewer.panY
             scale: viewer.zoom
             transformOrigin: Item.Center
-            // while editing: the core's preview of the current edits; otherwise the saved result, or the file
-            source: viewer.editing ? (viewer.preview.id === (viewer.photo ? viewer.photo.id : -1) ? viewer.preview.url : "")
+            // while editing: the core's preview of the current edits; otherwise the saved result, or the file.
+            // A video is handled by the player below, not here.
+            source: stage.isVideo ? ""
+                                  : viewer.editing ? (viewer.preview.id === (viewer.photo ? viewer.photo.id : -1) ? viewer.preview.url : "")
                                    : (viewer.photo ? (viewer.photo.editedUrl || viewer.photo.fileUrl) : "")
             cache: false   // a 4096² decode is 64 MB; the filmstrip and the grid have their own small copies
             asynchronous: true
@@ -300,6 +305,94 @@ Item {
             cache: false
             fillMode: Image.Stretch
             smooth: true
+        }
+        // Video: a player laid over the same area as the still, with a poster frame, a
+        // play/pause button and a scrub bar. Loaded only for a video, torn down when you
+        // move to a still (which stops playback).
+        Loader {
+            id: videoLoader
+            active: stage.isVideo
+            x: image.x; y: image.y
+            width: image.width; height: image.height
+            sourceComponent: videoComp
+        }
+        Component {
+            id: videoComp
+            Item {
+                id: vplayer
+                function fmt(ms) {
+                    if (!ms || ms < 0) ms = 0
+                    const s = Math.floor(ms / 1000)
+                    return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2)
+                }
+                MediaPlayer {
+                    id: mp
+                    source: viewer.photo ? (viewer.photo.fileUrl || "") : ""
+                    videoOutput: vout
+                    audioOutput: AudioOutput { }
+                }
+                VideoOutput { id: vout; anchors.fill: parent; fillMode: VideoOutput.PreserveAspectFit }
+                Image {   // the frame, until the video is playing
+                    anchors.fill: parent
+                    source: viewer.photo ? (viewer.photo.thumbUrl || "") : ""
+                    fillMode: Image.PreserveAspectFit
+                    visible: mp.playbackState !== MediaPlayer.PlayingState && mp.position === 0
+                }
+                TapHandler { onTapped: mp.playbackState === MediaPlayer.PlayingState ? mp.pause() : mp.play() }
+                Rectangle {   // the big play / pause glyph in the middle
+                    anchors.centerIn: parent
+                    width: 76; height: 76; radius: 38
+                    color: Qt.rgba(0, 0, 0, 0.5)
+                    visible: mp.playbackState !== MediaPlayer.PlayingState
+                    Text {
+                        anchors.centerIn: parent
+                        text: "▶"
+                        color: "white"
+                        font.pixelSize: 34
+                    }
+                    TapHandler { onTapped: mp.play() }
+                }
+                Row {   // playback speed
+                    anchors.top: parent.top; anchors.right: parent.right; anchors.margins: 14
+                    spacing: 6
+                    visible: mp.duration > 0
+                    Repeater {
+                        model: [0.5, 1, 2, 3]
+                        Rectangle {
+                            required property var modelData
+                            width: 42; height: 28; radius: 14
+                            color: Math.abs(mp.playbackRate - modelData) < 0.01 ? viewer.theme.accent : Qt.rgba(0, 0, 0, 0.5)
+                            Label {
+                                anchors.centerIn: parent
+                                text: modelData + "×"
+                                color: "white"
+                                font.pixelSize: 12
+                                font.bold: Math.abs(mp.playbackRate - modelData) < 0.01
+                            }
+                            TapHandler { onTapped: mp.playbackRate = modelData }
+                        }
+                    }
+                }
+                Rectangle {   // scrub bar
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                    anchors.margins: 14
+                    height: 34
+                    radius: 8
+                    color: Qt.rgba(0, 0, 0, 0.5)
+                    visible: mp.duration > 0
+                    RowLayout {
+                        anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12; spacing: 10
+                        Label { text: vplayer.fmt(mp.position); color: "white"; font.pixelSize: 12 }
+                        Slider {
+                            Layout.fillWidth: true
+                            from: 0; to: Math.max(1, mp.duration)
+                            value: mp.position
+                            onMoved: mp.position = value
+                        }
+                        Label { text: vplayer.fmt(mp.duration); color: "white"; font.pixelSize: 12 }
+                    }
+                }
+            }
         }
         HoverHandler { id: stageHover }
         BusyIndicator { anchors.centerIn: parent; running: image.status === Image.Loading; visible: running }

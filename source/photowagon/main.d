@@ -50,6 +50,13 @@ int main(string[] args)
 		import photowagon.core.jobs.memguard : startMemoryGuard;
 		startMemoryGuard(cfg.memoryLimitMb);
 	}
+	if (cfg.p2pRelayMode)
+	{
+		// a pure circuit-relay node for NAT traversal — no library, no models, no vips
+		import photowagon.core.p2p.relaynode : runRelay;
+
+		return runRelay(cfg);
+	}
 	initVips(args[0]);
 	initExif();
 

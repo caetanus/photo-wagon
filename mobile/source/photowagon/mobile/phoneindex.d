@@ -42,8 +42,11 @@ struct PhonePhoto
     int orientation = 1;
     string thumb;   // absolute path of the cached JPEG, or null
     bool sent;      // already delivered to the computer
+    bool declined;  // the computer turned this hash away (deleted there): never offer it again
     string hash;    // sha256 of the file, once computed (for the computer's dedupe)
     int tries;      // failed sends; after `maxTries` the photo waits for a manual retry
+    bool isVideo;   // a camera video: no frame thumbnail here (the computer makes one on sync)
+    long durationMs;
 
     JSONValue toJson() const
     {
@@ -53,6 +56,8 @@ struct PhonePhoto
             "path": JSONValue(path),
             "fileUrl": JSONValue(fileUrl(path)),
             "thumbUrl": thumb is null ? JSONValue(null) : JSONValue(fileUrl(thumb)),
+            "video": JSONValue(isVideo),
+            "duration": JSONValue(durationMs),
             "takenAt": JSONValue(isoTime(takenTs)),
             "takenTs": JSONValue(takenTs),
             "width": JSONValue(width),
@@ -95,7 +100,13 @@ final class PhoneIndex
     {
         this.roots = roots;
         indexFile = buildPath(dataDir, "phone-index.json");
-        thumbDir = buildPath(cacheDir, "thumbs");
+        // Thumbnails live under the PERSISTENT data dir, not the cache dir: Android evicts
+        // CacheLocation under storage pressure, and losing 2,900 thumbnails made every start
+        // re-decode them all — the heap ballooned, the OS OOM-killed the app, it restarted and
+        // re-decoded again, a spiral that also starved the photo sync of CPU. cacheDir is kept
+        // in the signature for callers/tests but no longer holds anything we cannot rebuild.
+        thumbDir = buildPath(dataDir, "thumbs");
+        cast(void) cacheDir;
         mkdirRecurse(dataDir);
         mkdirRecurse(thumbDir);
         lock = new Mutex;
@@ -375,6 +386,8 @@ final class PhoneIndex
         p.width = d.p.width;
         p.height = d.p.height;
         p.thumb = d.p.thumb;
+        p.isVideo = d.p.isVideo;
+        p.durationMs = d.p.durationMs;
         if (d.c.path !in byPath)
         {
             photos ~= p;
@@ -392,6 +405,19 @@ final class PhoneIndex
     private static PhonePhoto decode(Candidate c, string thumbDir, QImageReader reader, QImage img)
     {
         PhonePhoto p;
+        // a video: no EXIF, no frame thumbnail here (no ffmpeg on the phone). It shows a play
+        // placeholder in the grid and plays in the viewer; the computer makes a real frame
+        // thumbnail when it receives it on sync.
+        if (c.isVideo)
+        {
+            import photowagon.core.metadata.datefromname : dateFromPath;
+
+            immutable named = dateFromPath(c.path);
+            p.takenTs = named ? named : c.mtimeMs / 1000;
+            p.isVideo = true;
+            p.thumb = null;
+            return p;
+        }
         auto exif = readExifCore(c.path);
         p.orientation = exif.found ? exif.orientation : 1;
         p.takenTs = exif.found && exif.dateTimeOriginal.length ? parseExifTimestamp(exif.dateTimeOriginal) : 0;
@@ -549,7 +575,7 @@ final class PhoneIndex
     {
         long[] out_;
         foreach_reverse (ref p; photos)
-            if (!p.sent && p.tries < maxTries)
+            if (!p.sent && !p.declined && p.tries < maxTries)
                 out_ ~= p.id;
         return out_;
     }
@@ -558,9 +584,37 @@ final class PhoneIndex
     {
         long n;
         foreach (ref p; photos)
-            if (!p.sent && p.tries < maxTries)
+            if (!p.sent && !p.declined && p.tries < maxTries)
                 n++;
         return n;
+    }
+
+    /// The computer turned this hash away (the user deleted it there): stop offering it.
+    void markDeclined(long id)
+    {
+        foreach (ref p; photos)
+            if (p.id == id)
+            {
+                p.declined = true;
+                byPath[p.path] = p;
+            }
+        dirty = true;
+        save();
+    }
+
+    /// Record a hash computed off-thread, so the next sync negotiation can offer it
+    /// without reading the file again.
+    void setHash(long id, string hash)
+    {
+        if (!hash.length)
+            return;
+        foreach (ref p; photos)
+            if (p.id == id)
+            {
+                p.hash = hash;
+                byPath[p.path] = p;
+            }
+        dirty = true;
     }
 
     void markSent(long id, string hash = null)
@@ -627,8 +681,11 @@ final class PhoneIndex
                 p.orientation = cast(int) e["o"].integer;
                 p.thumb = e["thumb"].type == JSONType.string ? e["thumb"].str : null;
                 p.sent = "sent" in e ? e["sent"].boolean : false;
+                p.declined = "declined" in e ? e["declined"].boolean : false;
                 p.hash = "hash" in e && e["hash"].type == JSONType.string ? e["hash"].str : null;
                 p.tries = "tries" in e ? cast(int) e["tries"].integer : 0;
+                p.isVideo = "video" in e ? e["video"].boolean : false;
+                p.durationMs = "duration" in e ? e["duration"].integer : 0;
                 photos ~= p;
                 byPath[p.path] = p;
             }
@@ -678,7 +735,8 @@ final class PhoneIndex
                 "id": JSONValue(p.id), "path": JSONValue(p.path), "size": JSONValue(p.size),
                 "mtime": JSONValue(p.mtimeMs), "takenTs": JSONValue(p.takenTs), "w": JSONValue(p.width),
                 "h": JSONValue(p.height), "o": JSONValue(p.orientation),
-                "thumb": p.thumb is null ? JSONValue(null) : JSONValue(p.thumb), "sent": JSONValue(p.sent), "hash": p.hash.length ? JSONValue(p.hash) : JSONValue(null), "tries": JSONValue(p.tries),
+                "thumb": p.thumb is null ? JSONValue(null) : JSONValue(p.thumb), "sent": JSONValue(p.sent), "declined": JSONValue(p.declined), "hash": p.hash.length ? JSONValue(p.hash) : JSONValue(null), "tries": JSONValue(p.tries),
+                "video": JSONValue(p.isVideo), "duration": JSONValue(p.durationMs),
             ]);
         JSONValue j = ["nextId": JSONValue(nextId), "photos": JSONValue(arr)];
         try

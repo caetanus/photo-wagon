@@ -26,6 +26,18 @@ struct Config
 	bool serve = false;
 	bool p2p = true;
 	string[] p2pListen;
+	/// A public host or multiaddr to advertise so a phone off the LAN (4G) can dial in:
+	/// "1.2.3.4" (a host — the bound TCP port is appended) or a full "/ip4/1.2.3.4/tcp/5533".
+	/// When empty the node still auto-learns its public address from what peers observe.
+	string p2pAnnounce;
+	/// Run as a libp2p circuit-relay v2 node (on a host with a public address), so two peers
+	/// behind CGNAT — where neither can be dialed directly — can still reach each other. The
+	/// desktop and phone reserve a slot here and dial each other via /p2p-circuit; DCUtR then
+	/// tries to upgrade to a direct connection. `--p2p-relay`.
+	bool p2pRelayMode;
+	/// Circuit-relay addresses this node reserves a slot on, so its /p2p-circuit address can
+	/// be dialed from anywhere. `--p2p-relay-addr /ip4/…/tcp/…/p2p/<relay id>` (repeatable).
+	string[] p2pRelays;
 	/// concurrent import pipelines (each hashes, reads EXIF and thumbnails one file)
 	int workers = 4;
 	/// native operations (decodes, models, renders) allowed at once; background passes
@@ -82,7 +94,15 @@ Config defaultConfig()
 	c.dataDir = buildPath(dataHome, "photowagon");
 	immutable runtime = environment.get("XDG_RUNTIME_DIR", "");
 	c.runtimeDir = runtime.length ? buildPath(runtime, "photowagon") : c.dataDir;
+	// tcp/0 picks a free port; node.d then persists the one it got and reuses it on the
+	// next start, so the address the phone saved from the pairing code stays valid across
+	// restarts (an ephemeral port that changed each time was why it "não reconectava")
+	// without a hardcoded port that two instances would fight over.
 	c.p2pListen = ["/ip4/0.0.0.0/tcp/0"];
+	// Public libp2p nodes to join the DHT through and try as circuit-relay candidates for
+	// hole punching (no relay of our own). The first is a bootstrapper with a direct IP, so
+	// it needs no dnsaddr resolution. Override or extend with --p2p-relay-addr.
+	c.p2pRelays = ["/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ"];
 	c.modelsDir = defaultModelsDir();
 	return c;
 }
@@ -156,6 +176,15 @@ Config parseArgs(string[] args)
 				c.p2pListen = null;
 			listenGiven = true;
 			c.p2pListen ~= next();
+			break;
+		case "--p2p-announce":
+			c.p2pAnnounce = next();
+			break;
+		case "--p2p-relay":
+			c.p2pRelayMode = true;
+			break;
+		case "--p2p-relay-addr":
+			c.p2pRelays ~= next();
 			break;
 		case "--memory-limit":
 			c.memoryLimitMb = next().to!long;

@@ -36,6 +36,35 @@ ApplicationWindow {
     }
     readonly property QtObject icons: Icons { }
 
+    // ---- remembered between sessions: window geometry and which sidebar sections are folded
+    property var _ui: ({})
+    property bool _uiReady: false
+    Timer { id: uiSaveTimer; interval: 500; onTriggered: root._saveUi() }
+    function _scheduleSaveUi() { if (root._uiReady) uiSaveTimer.restart() }
+    function _saveUi() {
+        root._ui.win = { x: root.x, y: root.y, w: root.width, h: root.height }
+        root._ui.folded = sidebar.foldSnapshot()
+        library.saveUiState(JSON.stringify(root._ui))
+    }
+    Component.onCompleted: {
+        try { root._ui = JSON.parse(library.uiState) || {} } catch (e) { root._ui = {} }
+        const w = root._ui.win
+        if (w) {
+            if (w.w > 300) root.width = w.w
+            if (w.h > 300) root.height = w.h
+            if (typeof w.x === "number") root.x = w.x
+            if (typeof w.y === "number") root.y = w.y
+        }
+        if (root._ui.folded) sidebar.restoreFolds(root._ui.folded)
+        root._uiReady = true
+        library.loadDates()
+    }
+    onWidthChanged: root._scheduleSaveUi()
+    onHeightChanged: root._scheduleSaveUi()
+    onXChanged: root._scheduleSaveUi()
+    onYChanged: root._scheduleSaveUi()
+    Connections { target: sidebar; function onFoldsChanged() { root._scheduleSaveUi() } }
+
     palette {
         window: theme.window
         windowText: theme.text
@@ -65,6 +94,43 @@ ApplicationWindow {
     readonly property var keywordsData: JSON.parse(library.keywords).keywords
     readonly property var tagGroups: ["scene", "mood", "weather", "holiday"]
     readonly property var tagLabels: JSON.parse(library.tagLabels)
+    // The auto tags are an English vocabulary; the user searches in Portuguese. This maps each
+    // tag to the words someone would type for it, so "praia" finds Beach, "festa" Party, etc.
+    readonly property var tagAliases: ({
+        "Beach": ["praia", "mar", "litoral", "areia"], "Pool": ["piscina"],
+        "Snow": ["neve", "esqui"], "Mountains": ["montanha", "montanhas", "serra"],
+        "Forest": ["floresta", "mata", "bosque"], "Lake or River": ["lago", "rio", "cachoeira", "represa"],
+        "Countryside": ["campo", "fazenda", "sítio", "sitio", "roça", "roca", "interior"],
+        "City": ["cidade", "urbano", "rua"], "Sunset": ["pôr do sol", "por do sol", "entardecer", "amanhecer", "nascer do sol"],
+        "Night": ["noite", "noturno"], "Party": ["festa", "balada"],
+        "Food": ["comida", "refeição", "refeicao", "prato", "almoço", "almoco", "jantar", "sobremesa"],
+        "Drinks": ["bebida", "bebidas", "cerveja", "drink", "vinho", "coquetel"],
+        "Pets": ["pet", "cachorro", "cão", "cao", "gato", "animal", "bicho"],
+        "Baby": ["bebê", "bebe", "neném", "nenem", "recém-nascido"], "Kids": ["criança", "crianças", "crianca", "criancas", "filhos"],
+        "Sports": ["esporte", "esportes", "futebol", "academia", "ginástica"], "Concert": ["show", "concerto", "música ao vivo"],
+        "Museum": ["museu", "exposição", "galeria"], "Church": ["igreja", "catedral", "missa"],
+        "Travel": ["viagem", "aeroporto", "avião", "aviao", "hotel", "turismo"], "Car": ["carro", "estrada"],
+        "Boat": ["barco", "lancha", "vela"], "Selfie": ["selfie", "autorretrato"],
+        "Group": ["grupo", "turma", "família", "familia", "galera"], "Home": ["casa", "sala", "cozinha", "quarto"],
+        "Garden": ["jardim", "flores", "plantas"], "Work": ["trabalho", "escritório", "escritorio", "reunião"],
+        "Text": ["texto", "documento", "print", "captura", "recibo"],
+        "Joyful": ["feliz", "alegre", "alegria", "sorriso", "risada"], "Calm": ["calmo", "tranquilo", "sereno", "paz"],
+        "Romantic": ["romântico", "romantico", "casal", "amor"], "Energetic": ["energético", "energetico", "dança", "danca"],
+        "Nostalgic": ["nostálgico", "nostalgico", "memória", "antigo", "vintage"], "Cozy": ["aconchegante", "aconchego", "confortável"],
+        "Adventurous": ["aventura", "aventureiro"], "Festive": ["festivo", "comemoração", "comemoracao"],
+        "Melancholic": ["melancólico", "melancolico", "triste", "tristeza"], "Playful": ["brincadeira", "divertido", "diversão", "diversao"],
+        "Indoors": ["dentro", "interno"], "Sunny": ["ensolarado", "sol", "céu azul"],
+        "Cloudy": ["nublado", "nuvens"], "Rainy": ["chuva", "chuvoso", "chovendo", "guarda-chuva"],
+        "Stormy": ["tempestade", "temporal", "raio"], "Foggy": ["neblina", "névoa", "nevoa", "cerração"],
+        "Snowy": ["nevando"], "Hot": ["calor", "quente"], "Cold": ["frio", "inverno"],
+        "Christmas": ["natal"], "New Year": ["ano novo", "réveillon", "reveillon", "virada"],
+        "Carnival": ["carnaval"], "Easter": ["páscoa", "pascoa"], "Halloween": ["dia das bruxas"],
+        "Festa Junina": ["festa junina", "são joão", "sao joao", "arraiá", "arraia"],
+        "Birthday": ["aniversário", "aniversario", "niver"], "Wedding": ["casamento", "noiva", "noivo"],
+        "Graduation": ["formatura"], "Valentine's Day": ["dia dos namorados"],
+        "Mother's Day": ["dia das mães", "dia das maes"], "Father's Day": ["dia dos pais"],
+        "Children's Day": ["dia das crianças", "dia das criancas"]
+    })
     readonly property var facesData: JSON.parse(library.faces).faces
     readonly property var albumsData: JSON.parse(library.albums).albums
     readonly property var rootsData: JSON.parse(library.roots).roots
@@ -619,6 +685,49 @@ ApplicationWindow {
         width: Math.min(460, root.width - 80)
     }
 
+    // A phone is knocking to be paired: type the 4-digit code it shows to allow it.
+    Popup {
+        id: pairingRequestPopup
+        readonly property var pr: { try { return JSON.parse(library.pairingRequest) } catch (e) { return ({}) } }
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        closePolicy: Popup.NoAutoClose
+        visible: pr.peer !== undefined
+        padding: 24
+        onVisibleChanged: if (visible) { codeField.text = ""; codeField.forceActiveFocus() }
+        background: Rectangle { color: theme.panel; border.color: theme.separator; radius: 10 }
+        contentItem: ColumnLayout {
+            spacing: 14
+            Label { text: "Allow this phone?"; font.pixelSize: 18; font.bold: true; color: theme.text }
+            Label {
+                text: (pairingRequestPopup.pr.name || "A phone") + " wants to connect. Type the 4-digit code it shows:"
+                color: theme.muted; wrapMode: Text.WordWrap; Layout.preferredWidth: 320
+            }
+            TextField {
+                id: codeField
+                Layout.alignment: Qt.AlignHCenter
+                horizontalAlignment: TextInput.AlignHCenter
+                font.pixelSize: 30; font.letterSpacing: 8
+                maximumLength: 4
+                inputMethodHints: Qt.ImhDigitsOnly
+                validator: RegularExpressionValidator { regularExpression: /[0-9]{0,4}/ }
+                onAccepted: if (text.length === 4) library.confirmDevice(pairingRequestPopup.pr.peer, text)
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Button { text: "Ignore"; flat: true; onClicked: library.ignorePairing(pairingRequestPopup.pr.peer) }
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "Allow"
+                    highlighted: true
+                    enabled: codeField.text.length === 4
+                    onClicked: library.confirmDevice(pairingRequestPopup.pr.peer, codeField.text)
+                }
+            }
+        }
+    }
+
     PeersPanel {
         id: peersPanel
         theme: root.theme
@@ -631,6 +740,17 @@ ApplicationWindow {
     // "screenshots" / "memes" / "photos"; anything else looks for the words in the
     // file names and folders (the core's `q` filter).
     property string searchText: ""
+    // If the data a search matches against (tags, places, keywords, people, albums) is still
+    // loading when the user searches, the search falls through to a filename match and shows
+    // nothing. Re-run it when that data lands — but only while the search is still the plain
+    // filename fallback, so a real tag/place/person match now takes over. No loop: any match
+    // moves `source` away from "search".
+    function _retrySearch() { if (searchText.length && source === "search") search(searchText) }
+    onTagsDataChanged: _retrySearch()
+    onPlacesDataChanged: _retrySearch()
+    onKeywordsDataChanged: _retrySearch()
+    onPeopleDataChanged: _retrySearch()
+    onAlbumsDataChanged: _retrySearch()
     function search(text) {
         const q = text.trim().toLowerCase()
         searchText = q
@@ -652,6 +772,25 @@ ApplicationWindow {
             const hit = q.match(new RegExp("^" + name + "\\s+(\\d{4})$"))
             if (hit) { source = "all"; library.filterDate(parseInt(hit[1]), m, 0); if (mode === "years" || mode === "months") mode = "days"; return }
         }
+        // content, not just file names: a place, one of your keywords, or a scene / mood /
+        // weather / holiday tag. Match the words the library actually knows (the same ones in
+        // the sidebar), so "casa", "beach", "sunset", a person's dog's name you tagged, all land.
+        const hit = (name) => {
+            if (!name) return false
+            const n = name.toLowerCase()
+            return n === q || n.startsWith(q) || (q.length >= 3 && n.indexOf(q) >= 0)
+        }
+        for (const pl of placesData)
+            if (hit(pl.place)) { pickSource("place:" + pl.place + "|" + (pl.country || "")); return }
+        for (const kw of keywordsData)
+            if (hit(kw.keyword)) { pickSource("keyword:" + kw.keyword); return }
+        const qWords = q.split(/\s+/)
+        const aliasHit = (a) => hit(a) || qWords.indexOf(a) >= 0 || (a.indexOf(" ") >= 0 && q.indexOf(a) >= 0)
+        for (const g of tagGroups)
+            for (const t of (tagsData[g] || []))
+                if (hit(t.tag) || (tagAliases[t.tag] || []).some(aliasHit))
+                    { pickSource(g + ":" + t.tag); return }
+
         source = "search"
         if (mode === "years" || mode === "months") mode = "all"
         library.filterSearch(q)
@@ -758,5 +897,4 @@ ApplicationWindow {
         })
     }
 
-    Component.onCompleted: library.loadDates()
 }

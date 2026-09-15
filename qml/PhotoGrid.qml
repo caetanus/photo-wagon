@@ -140,6 +140,26 @@ Item {
             sourceSize.height: Math.min(512, grid.cell * 2)
             smooth: true
         }
+        // video: a play glyph in the middle and the running time in the corner
+        Rectangle {
+            visible: cell.photo.video === true
+            anchors.centerIn: parent
+            width: 40; height: 40; radius: 20
+            color: Qt.rgba(0, 0, 0, 0.45)
+            Text { anchors.centerIn: parent; text: "▶"; color: "white"; font.pixelSize: 17 }
+        }
+        Rectangle {
+            visible: cell.photo.video === true && cell.photo.duration > 0
+            anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 5
+            width: durLabel.implicitWidth + 10; height: 17; radius: 4
+            color: Qt.rgba(0, 0, 0, 0.6)
+            Label {
+                id: durLabel
+                anchors.centerIn: parent
+                text: Math.floor(cell.photo.duration / 60000) + ":" + ("0" + Math.floor(cell.photo.duration / 1000) % 60).slice(-2)
+                color: "white"; font.pixelSize: 10
+            }
+        }
         // selection: white inner line + accent ring, check badge
         Rectangle {
             anchors.fill: parent

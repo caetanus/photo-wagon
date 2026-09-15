@@ -44,24 +44,72 @@ void allowCoreDumps() nothrow @nogc
 	}
 }
 
+/// Forbids core dumps. On the phone a SIGSEGV (the guard's, or a real crash) otherwise
+/// writes a multi-GB `core` into the app's data dir, which fills /data, makes Android
+/// evict the thumbnail cache, and spirals into a re-decode + OOM loop.
+void disableCoreDumps() nothrow @nogc
+{
+	version (Posix)
+	{
+		import core.sys.posix.sys.resource : setrlimit, rlimit, RLIMIT_CORE;
+
+		rlimit r;
+		r.rlim_cur = 0;
+		r.rlim_max = 0;
+		setrlimit(RLIMIT_CORE, &r);
+	}
+}
+
 /// Starts the watchdog; `limitMb <= 0` disables it. `what` names the process in the log.
-void startMemoryGuard(long limitMb, string what = "photo-wagon")
+/// `dump` = true (the desktop) ends with a SIGSEGV core dump so a leak can be read; false
+/// (the phone) exits cleanly with no dump — a giant core on a phone is never worth its cost.
+void startMemoryGuard(long limitMb, string what = "photo-wagon", bool dump = true)
 {
 	if (limitMb <= 0)
 		return;
-	allowCoreDumps();
+	if (dump)
+		allowCoreDumps();
+	else
+		disableCoreDumps();
 	auto t = new Thread({
 		for (;;)
 		{
 			Thread.sleep(2.seconds);
 			immutable rss = residentMb();
 			if (rss > limitMb)
-				dieForTheDump(what, rss, limitMb);
+			{
+				if (dump)
+					dieForTheDump(what, rss, limitMb);
+				else
+					exitCleanly(what, rss, limitMb);
+			}
 		}
 	});
 	t.name = "memguard";
 	t.isDaemon = true;
 	t.start();
+}
+
+/// Says why and exits without a core dump: for the phone, where the OS restarts the app
+/// and the work resumes from the last saved state.
+private void exitCleanly(string what, long rss, long limitMb) nothrow
+{
+	import core.stdc.stdio : fprintf, fflush, stderr;
+	import core.sys.posix.unistd : _exit;
+	import std.string : toStringz;
+
+	try
+	{
+		import vibe.core.log : logError;
+		logError("memory: %s is at %s MB, over the %s MB limit — exiting cleanly (no dump)", what, rss, limitMb);
+	}
+	catch (Exception)
+	{
+	}
+	fprintf(stderr, "memory: %s at %ld MB (limit %ld MB): exiting cleanly, no core dump\n",
+		what.toStringz, rss, limitMb);
+	fflush(stderr);
+	_exit(137);
 }
 
 /// Says why, flushes, and segfaults on purpose (the default action dumps core).

@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
+import QtMultimedia
 
 // Full-size viewer over the grid. `photo` is the parsed library.current object
 // (a Photo plus prev/next ids) or null.
@@ -20,6 +21,7 @@ Rectangle {
     property bool sendEnabled: false
 
     signal closed()
+    signal edit()
     signal send(int id)
     signal nameFace(int faceId, int personId, string name)
 
@@ -40,6 +42,7 @@ Rectangle {
         }
     }
     onVisibleChanged: if (visible) forceActiveFocus()
+    onPhotoChanged: resetZoom()   // a new photo always opens un-zoomed
 
     Keys.onPressed: (event) => {
         if (event.key === Qt.Key_Escape) { viewer.closed(); event.accepted = true }
@@ -47,15 +50,45 @@ Rectangle {
         else if (event.key === Qt.Key_Right || event.key === Qt.Key_Space) { library.next(); event.accepted = true }
     }
 
-    // Swallow clicks so the grid underneath does not react.
-    MouseArea { anchors.fill: parent; onClicked: viewer.closed() }
+    // Block the grid underneath from getting taps, but do NOT close on tap: a tap-to-close
+    // here ate the first tap of a double-tap (so zoom never fired) and grabbed the swipe. A
+    // DragHandler can still steal from this for the swipe; close is the ✕ button.
+    MouseArea { anchors.fill: parent; onClicked: {} }
+
+    // A soft scrim under the top controls, so the close / nav buttons stay legible
+    // over a bright photo without a hard black bar.
+    Rectangle {
+        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+        height: 96
+        gradient: Gradient {
+            GradientStop { position: 0; color: Qt.rgba(0, 0, 0, 0.5) }
+            GradientStop { position: 1; color: "transparent" }
+        }
+    }
+
+    // Pinch / double-tap to zoom, drag to pan when zoomed. `zoomed` gates the swipe
+    // navigation (a one-finger drag pans instead of changing photo) and hides the face
+    // overlay (its boxes are computed for the un-transformed image).
+    readonly property bool zoomed: image.scale > 1.01
+    function resetZoom() {
+        image.scale = 1
+        image.x = image.baseX
+        image.y = image.baseY
+    }
+
+    readonly property bool isVideo: photo && photo.video === true
 
     Image {
         id: image
-        anchors.fill: parent
-        anchors.margins: 0
-        anchors.bottomMargin: 64
-        source: viewer.photo ? viewer.photo.fileUrl : ""
+        visible: !viewer.isVideo
+        readonly property real baseX: (viewer.width - width) / 2
+        readonly property real baseY: (viewer.height - height) / 2
+        width: viewer.width
+        height: viewer.height
+        x: baseX
+        y: baseY
+        transformOrigin: Item.Center
+        source: viewer.isVideo ? "" : (viewer.photo ? viewer.photo.fileUrl : "")
         // decode scaled: a 108 MP photo (434 MB decoded) is over Qt's 256 MB image limit
         sourceSize.width: 2560
         sourceSize.height: 2560
@@ -64,14 +97,115 @@ Rectangle {
         autoTransform: true
         smooth: true
         mipmap: true
-        MouseArea { anchors.fill: parent; onClicked: {} }
         HoverHandler { id: imageHover }
+
+        PinchHandler {
+            target: image
+            minimumScale: 1
+            maximumScale: 6
+            // pinch is zoom only — a photo viewer does not free-rotate the picture. Left on,
+            // PinchHandler twists `image` a little on every pinch and never puts it back.
+            rotationAxis.enabled: false
+            onActiveChanged: if (!active) {
+                image.rotation = 0            // undo any stray rotation from a two-finger twist
+                if (image.scale < 1.05) viewer.resetZoom()
+            }
+        }
+        WheelHandler {
+            target: image
+            property: "scale"
+            // desktop / trackpad zoom
+            onWheel: (e) => { if (image.scale < 1.02) { image.x = image.baseX; image.y = image.baseY } }
+        }
+        DragHandler {
+            // pan only while zoomed; when not zoomed the outer swipe navigates
+            enabled: viewer.zoomed
+            target: image
+        }
+        TapHandler {
+            onDoubleTapped: (pt) => {
+                if (viewer.zoomed) viewer.resetZoom()
+                else { image.scale = 2.5 }
+            }
+        }
+    }
+
+    // Video: plays in place of the still with play/pause, a scrub bar and 0.5×/1×/2×/3× speed.
+    // Loaded only for a video and torn down (which stops it) when you move to a still. The
+    // frame thumbnail arrives in the grid once the computer has the video and made one.
+    Loader {
+        anchors.fill: parent
+        active: viewer.isVideo
+        sourceComponent: Component {
+            Rectangle {
+                color: "#000000"
+                function fmt(ms) {
+                    if (!ms || ms < 0) ms = 0
+                    const s = Math.floor(ms / 1000)
+                    return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2)
+                }
+                MediaPlayer {
+                    id: mp
+                    source: viewer.photo ? (viewer.photo.fileUrl || "") : ""
+                    videoOutput: vout
+                    audioOutput: AudioOutput { }
+                }
+                VideoOutput { id: vout; anchors.fill: parent; fillMode: VideoOutput.PreserveAspectFit }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: mp.playbackState === MediaPlayer.PlayingState ? mp.pause() : mp.play()
+                }
+                Rectangle {   // big play/pause
+                    anchors.centerIn: parent
+                    width: 88; height: 88; radius: 44
+                    color: Qt.rgba(0, 0, 0, 0.5)
+                    visible: mp.playbackState !== MediaPlayer.PlayingState
+                    Text { anchors.centerIn: parent; text: "▶"; color: "white"; font.pixelSize: 40 }
+                    TapHandler { onTapped: mp.play() }
+                }
+                Row {   // speed
+                    anchors.top: parent.top; anchors.right: parent.right; anchors.topMargin: 60; anchors.rightMargin: 14
+                    spacing: 6
+                    visible: mp.duration > 0
+                    Repeater {
+                        model: [0.5, 1, 2, 3]
+                        Rectangle {
+                            required property var modelData
+                            width: 46; height: 32; radius: 16
+                            color: Math.abs(mp.playbackRate - modelData) < 0.01 ? viewer.theme.accent : Qt.rgba(0, 0, 0, 0.5)
+                            Text { anchors.centerIn: parent; text: modelData + "×"; color: "white"; font.pixelSize: 13 }
+                            TapHandler { onTapped: mp.playbackRate = modelData }
+                        }
+                    }
+                }
+                Rectangle {   // scrub bar
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                    anchors.margins: 16
+                    anchors.bottomMargin: 40
+                    height: 40; radius: 10
+                    color: Qt.rgba(0, 0, 0, 0.5)
+                    visible: mp.duration > 0
+                    RowLayout {
+                        anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 10
+                        Label { text: fmt(mp.position); color: "white"; font.pixelSize: 12 }
+                        Slider {
+                            Layout.fillWidth: true
+                            from: 0; to: Math.max(1, mp.duration)
+                            value: mp.position
+                            onMoved: mp.position = value
+                            Material.accent: viewer.theme.accent
+                        }
+                        Label { text: fmt(mp.duration); color: "white"; font.pixelSize: 12 }
+                    }
+                }
+            }
+        }
     }
 
     // Face boxes over the painted image area.
     Item {
         id: overlay
-        visible: viewer.showFaces && image.status === Image.Ready && (!viewer.facesOnHover || imageHover.hovered || namer.opened)
+        visible: viewer.showFaces && !viewer.zoomed && image.status === Image.Ready && (!viewer.facesOnHover || imageHover.hovered || namer.opened)
         readonly property real px: image.x + (image.width - image.paintedWidth) / 2
         readonly property real py: image.y + (image.height - image.paintedHeight) / 2
         Repeater {
@@ -192,9 +326,19 @@ Rectangle {
         anchors.margins: 10
         onClicked: viewer.closed()
     }
-    // swipe left / right for the neighbours
+    // Edit: opens the mini editor on this photo (local phone photos only).
+    GlassButton {
+        icon_: icons.edit
+        visible: viewer.photo && viewer.photo.remote !== true && !viewer.zoomed
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.margins: 10
+        onClicked: viewer.edit()
+    }
+    // swipe left / right for the neighbours — off while zoomed, where a drag pans instead
     DragHandler {
         target: null
+        enabled: !viewer.zoomed
         xAxis.enabled: true
         yAxis.enabled: false
         onActiveChanged: if (!active) {
@@ -203,17 +347,25 @@ Rectangle {
         }
     }
 
-    // Metadata strip: date on top, the rest small; the send button at the right.
+    // Metadata scrim: date on top, the rest small; the send button at the right.
+    // A gradient from transparent up into the photo, not a hard opaque bar.
     Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: 64
-        color: Qt.rgba(0.08, 0.09, 0.1, 0.96)
+        height: 116
+        gradient: Gradient {
+            GradientStop { position: 0; color: "transparent" }
+            GradientStop { position: 0.35; color: Qt.rgba(0, 0, 0, 0.55) }
+            GradientStop { position: 1; color: Qt.rgba(0, 0, 0, 0.88) }
+        }
         RowLayout {
-            anchors.fill: parent
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
             anchors.leftMargin: 16
             anchors.rightMargin: 12
+            anchors.bottomMargin: 12
             spacing: 12
             ColumnLayout {
                 spacing: 2

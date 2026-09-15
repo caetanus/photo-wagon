@@ -32,8 +32,21 @@ enum keepScore = 0.75f;
 /// When the two closest persons are this close to each other, nobody is
 /// chosen: the face stays unassigned for the user rather than guessed.
 enum minMargin = 0.05f;
+
+// --- face-level recognition (matchNamedByFaces) ---
+/// A neighbour face must be at least this similar to count as a vote.
+enum faceVoteMin = 0.40f;
+/// A single very-similar neighbour is enough on its own; below this a person
+/// needs two or more neighbours agreeing.
+enum faceVoteStrong = 0.55f;
+/// The winning named person must beat the runner-up named person by this ratio,
+/// else the two are too close (siblings) and the face is left for the user.
+enum faceVoteMargin = 1.25f;
+/// How many nearest faces to look at.
+enum faceVoteK = 40;
+
 /// Bump when the rule changes: libraries clustered by an older rule are redone.
-enum clusterVersion = 5;
+enum clusterVersion = 6;
 
 bool eligible(float widthPx, float score) pure nothrow @nogc
 {
@@ -214,6 +227,127 @@ final class ClusterIndex
 		r.count++;
 		r.named |= named;
 		save(personId, r);
+	}
+
+	/// Index one face's own embedding, so future faces can be recognised by
+	/// their nearest faces (not just the person average). Raw embedding: the
+	/// cosine metric normalises. Idempotent per face id.
+	void addFace(long faceId, const ref float[128] embedding)
+	{
+		// vec0 virtual tables do not support UPSERT (ON CONFLICT), so replace by hand: a
+		// delete then an insert. A new face has no row yet, so the delete is usually a no-op.
+		auto d = db.prepare("DELETE FROM face_vec WHERE face_id = ?");
+		d.bind(1, faceId);
+		d.run();
+		auto s = db.prepare("INSERT INTO face_vec (face_id, embedding) VALUES (?, ?)");
+		s.bind(1, faceId).bind(2, cast(const(ubyte)[]) embedding[]);
+		s.run();
+	}
+
+	private struct FaceHit
+	{
+		long faceId;
+		float cosine;
+	}
+
+	private FaceHit[] nearestFaces(const ref float[128] e, long k)
+	{
+		FaceHit[] out_;
+		if (k <= 0)
+			return out_;
+		auto s = db.prepare("SELECT face_id, distance FROM face_vec WHERE embedding MATCH ? AND k = ? ORDER BY distance");
+		s.bind(1, cast(const(ubyte)[]) e[]).bind(2, k);
+		while (s.step())
+			out_ ~= FaceHit(s.getLong(0), 1 - cast(float) s.getDouble(1));
+		return out_;
+	}
+
+	/// Face ids whose own embedding is at least `minCos` similar to `e`, nearest first.
+	/// Used to spread a correction: the faces that most look like the one the user just fixed.
+	long[] facesNear(const ref float[128] e, float minCos, long k = 100)
+	{
+		long[] out_;
+		foreach (h; nearestFaces(e, k))
+		{
+			if (h.cosine < minCos)
+				break; // sorted closest-first
+			out_ ~= h.faceId;
+		}
+		return out_;
+	}
+
+	private struct FacePerson
+	{
+		long person; // 0 = none
+		bool named;
+	}
+
+	private FacePerson personOfFace(long faceId)
+	{
+		auto s = db.prepare(
+			"SELECT f.person_id, pe.name IS NOT NULL FROM faces f LEFT JOIN persons pe ON pe.id = f.person_id WHERE f.id = ?");
+		s.bind(1, faceId);
+		if (!s.step())
+			return FacePerson(0, false);
+		return FacePerson(s.getLong(0), s.getLong(1) != 0);
+	}
+
+	/// Recognise a NAMED person for `embedding` by a vote of its nearest faces:
+	/// each neighbour face that belongs to a named person adds its cosine to
+	/// that person's tally. The top person wins if it has real support (two
+	/// neighbours, or one very close) and clearly beats the runner-up named
+	/// person; two close named people (siblings) leave the face for the user
+	/// (`ambiguous`). Returns 0 (and ambiguous=false) when no named person is
+	/// near — the caller then falls back to centroid grouping. Only ever routes
+	/// to a person the user has named, so it cannot chain automatic groups.
+	long matchNamedByFaces(const ref float[128] embedding, const(long)[] taken, out bool ambiguous)
+	{
+		import std.algorithm : canFind;
+
+		ambiguous = false;
+		auto hits = nearestFaces(embedding, faceVoteK);
+		float[long] score;
+		uint[long] cnt;
+		float[long] bestCos;
+		foreach (h; hits)
+		{
+			if (h.cosine < faceVoteMin)
+				break; // sorted closest-first: the rest are further still
+			auto pf = personOfFace(h.faceId);
+			if (pf.person == 0 || !pf.named || taken.canFind(pf.person))
+				continue;
+			score[pf.person] += h.cosine;
+			cnt[pf.person]++;
+			if (h.cosine > bestCos.get(pf.person, 0f))
+				bestCos[pf.person] = h.cosine;
+		}
+		long top, second;
+		float topScore = 0, secondScore = 0;
+		foreach (p, sc; score)
+		{
+			if (!(cnt[p] >= 2 || bestCos[p] >= faceVoteStrong))
+				continue; // not enough support to be an anchor
+			if (sc > topScore)
+			{
+				second = top;
+				secondScore = topScore;
+				top = p;
+				topScore = sc;
+			}
+			else if (sc > secondScore)
+			{
+				second = p;
+				secondScore = sc;
+			}
+		}
+		if (top == 0)
+			return 0;
+		if (second != 0 && topScore < secondScore * faceVoteMargin)
+		{
+			ambiguous = true; // two named people equally close — the user decides
+			return 0;
+		}
+		return top;
 	}
 
 	void setNamed(long personId, bool named)

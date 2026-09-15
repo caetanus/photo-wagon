@@ -43,6 +43,7 @@ struct Photo
 	string[] keywords; // the user's own tags (core/library/keywords.d)
 	string edits;      // edit/edits.d JSON; null = untouched
 	string editedHash; // the rendered result in the store
+	long durationMs;   // > 0 for a video (kind = 'video'); its running time
 }
 
 /// Restricts a page or a count. Zero means "no restriction" for every field.
@@ -108,11 +109,29 @@ final class PhotoRepo
 		return s.step();
 	}
 
+	/// Turn a file away for good: a phone that offers this hash during sync negotiation is
+	/// told "refuse" and stops pushing it. Recorded when the user deletes an imported photo.
+	void decline(string hash)
+	{
+		if (!hash.length)
+			return;
+		auto s = db.prepare("INSERT OR IGNORE INTO declined_hashes (hash) VALUES (?)");
+		s.bind(1, hash);
+		s.run();
+	}
+
+	bool isDeclined(string hash)
+	{
+		auto s = db.prepare("SELECT 1 FROM declined_hashes WHERE hash = ?");
+		s.bind(1, hash);
+		return s.step();
+	}
+
 	long insert(ref Photo p)
 	{
 		auto s = db.prepare(`INSERT INTO photos (hash, path, root_id, size, mtime_ms, taken_ts, taken_at,
-			width, height, orientation, camera, lat, lon, thumb_hash, origin_peer, kind, kind_by)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+			width, height, orientation, camera, lat, lon, thumb_hash, origin_peer, kind, kind_by, duration_ms)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 		bindPhoto(s, p);
 		s.run();
 		p.id = db.lastInsertId();
@@ -124,9 +143,9 @@ final class PhotoRepo
 	{
 		auto s = db.prepare(`UPDATE photos SET hash = ?, path = ?, root_id = ?, size = ?, mtime_ms = ?,
 			taken_ts = ?, taken_at = ?, width = ?, height = ?, orientation = ?, camera = ?, lat = ?, lon = ?,
-			thumb_hash = ?, origin_peer = ?, kind = ?, kind_by = ? WHERE id = ?`);
+			thumb_hash = ?, origin_peer = ?, kind = ?, kind_by = ?, duration_ms = ? WHERE id = ?`);
 		bindPhoto(s, p);
-		s.bind(18, p.id);
+		s.bind(19, p.id);
 		s.run();
 	}
 
@@ -143,7 +162,7 @@ final class PhotoRepo
 			s.bind(12, p.lat).bind(13, p.lon);
 		else
 			s.bindNull(12).bindNull(13);
-		s.bind(14, p.thumbHash).bind(15, p.originPeer).bind(16, p.kind).bind(17, p.kindBy);
+		s.bind(14, p.thumbHash).bind(15, p.originPeer).bind(16, p.kind).bind(17, p.kindBy).bind(18, p.durationMs);
 	}
 
 	/// Where a stored thumbnail lives.
@@ -360,6 +379,8 @@ final class PhotoRepo
 			"keywords": JSONValue(p.keywords),
 			"edits": p.edits is null ? JSONValue(null) : parseEdits(p.edits),
 			"editedUrl": p.editedHash is null ? JSONValue(null) : JSONValue(fileUrl(store.pathFor(p.editedHash))),
+			"video": JSONValue(p.kind == "video"),
+			"duration": JSONValue(p.durationMs),
 		];
 		return j;
 	}
@@ -383,7 +404,7 @@ final class PhotoRepo
 		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'weather' AND t.tag <> ''),
 		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'holiday' AND t.tag <> ''),
 		(SELECT group_concat(k.keyword, char(31)) FROM (SELECT keyword FROM photo_keywords WHERE photo_id = p.id ORDER BY keyword) k),
-		p.edits, p.edited_hash`;
+		p.edits, p.edited_hash, p.duration_ms`;
 
 	private static Photo readRow(ref Statement s)
 	{
@@ -425,6 +446,7 @@ final class PhotoRepo
 		}
 		p.edits = s.getString(27);
 		p.editedHash = s.getString(28);
+		p.durationMs = s.getLong(29);
 		return p;
 	}
 
@@ -460,20 +482,25 @@ final class PhotoRepo
 	package static Where whereClause(Filter f)
 	{
 		Where w;
+		// JOINs first, so their bound values precede the WHERE values (bind order = call order).
 		if (f.albumId)
 		{
 			w.joins ~= " JOIN album_photos ap ON ap.photo_id = p.id AND ap.album_id = ?";
 			w.add(f.albumId);
 		}
+		if (f.personId)
+		{
+			// Drive from the faces index (person_id): a person's photos are a few hundred, so
+			// this seeks them straight away. The old correlated EXISTS scanned every photo in
+			// the library and ran a subquery per row — ~0.8 s on a big library, now a few ms.
+			// GROUP BY dedups the (rare) two-faces-of-one-person-in-a-photo case.
+			w.joins ~= " JOIN (SELECT photo_id FROM faces WHERE person_id = ? GROUP BY photo_id) fp ON fp.photo_id = p.id";
+			w.add(f.personId);
+		}
 		if (f.rootId)
 		{
 			w.where ~= " AND p.root_id = ?";
 			w.add(f.rootId);
-		}
-		if (f.personId)
-		{
-			w.where ~= " AND EXISTS (SELECT 1 FROM faces fp WHERE fp.photo_id = p.id AND fp.person_id = ?)";
-			w.add(f.personId);
 		}
 		if (f.favorites)
 			w.where ~= " AND p.favorite = 1";

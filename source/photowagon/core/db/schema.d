@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 11;
+enum currentVersion = 15;
 
 void migrate(Database db)
 {
@@ -35,6 +35,14 @@ void migrate(Database db)
 			db.exec(schemaV10);
 		if (have < 11)
 			migrateV11(db);
+		if (have < 12)
+			db.exec(schemaV12);
+		if (have < 13)
+			db.exec(schemaV13);
+		if (have < 14)
+			migrateV14(db);
+		if (have < 15)
+			db.exec(schemaV15);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -189,6 +197,65 @@ CREATE TABLE person_centroid (
 );
 ALTER TABLE photo_clip ADD COLUMN ok INTEGER NOT NULL DEFAULT 1;   -- 0: the image could not be encoded
 `;
+
+// v12: photos the desktop has turned away. A hash lands here when the user deletes an
+// imported photo, so a phone offering it again during sync negotiation is told "refuse"
+// and does not push it back. The negotiation (library.offer) reads it.
+private enum schemaV12 = `
+CREATE TABLE declined_hashes (
+    hash TEXT PRIMARY KEY,                          -- sha256 of a file the desktop will not take
+    at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`;
+
+// v13: the phones paired with this desktop, each keyed by its libp2p peer id (a stable,
+// cryptographic per-device fingerprint). A new phone is admitted only after the person at
+// the desktop types the 4-digit code the phone shows; the row remembers the name and lets
+// the desktop pause or revoke it. Auth refuses a paused or revoked peer.
+private enum schemaV13 = `
+CREATE TABLE devices (
+    peer_id   TEXT PRIMARY KEY,                    -- the phone's libp2p peer id
+    name      TEXT,
+    state     TEXT NOT NULL DEFAULT 'active',      -- active | paused | revoked
+    paired_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen TEXT
+);
+`;
+
+// v14: a per-face vector index. person_vec keeps one averaged centroid per person; a face
+// at an unusual angle can sit far from that average even when it is plainly the same person.
+// face_vec holds every face's own embedding, so recognition can ask "whose faces are nearest
+// to this one?" and vote — which is how a new face of a known person gets recognized, and it
+// gets better as more faces accumulate. A trigger keeps it in step when a face is deleted.
+private enum schemaV14 = `
+CREATE VIRTUAL TABLE face_vec USING vec0(face_id INTEGER PRIMARY KEY, embedding float[128] distance_metric=cosine);
+CREATE TRIGGER faces_del_vec AFTER DELETE ON faces BEGIN
+    DELETE FROM face_vec WHERE face_id = old.id;
+END;
+`;
+
+// v15: videos join the library. A video row is a photo row with kind = 'video'; its
+// thumbnail is a frame, and duration_ms is how long it runs (0 for a still).
+private enum schemaV15 = `
+ALTER TABLE photos ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0;
+`;
+
+private void migrateV14(Database db)
+{
+	db.exec(schemaV14);
+	// seed it with the faces good enough to be identity anchors (the clustering gate:
+	// score >= 0.8, at least 48 px wide in the original). Raw embeddings — the cosine
+	// metric normalises internally, so no need to unit them here.
+	auto q = db.prepare(`SELECT f.id, f.embedding FROM faces f JOIN photos p ON p.id = f.photo_id
+		WHERE length(f.embedding) = 512 AND f.score >= 0.8 AND f.w * p.width >= 48`);
+	auto ins = db.prepare("INSERT INTO face_vec (face_id, embedding) VALUES (?, ?)");
+	while (q.step())
+	{
+		ins.reset();
+		ins.bind(1, q.getLong(0)).bind(2, q.getBlob(1));
+		ins.run();
+	}
+}
 
 private void migrateV11(Database db)
 {

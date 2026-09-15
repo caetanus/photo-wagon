@@ -5,17 +5,19 @@
 module photowagon.core.daemon;
 
 import core.thread : Thread;
+import core.time : Duration, seconds;
 import std.conv : to;
 import std.file : mkdirRecurse, write, remove, exists;
 import std.path : buildPath;
 
-import vibe.core.core : runTask, runEventLoop, exitEventLoop;
+import vibe.core.core : runTask, runEventLoop, exitEventLoop, sleep;
 import vibe.core.log : logInfo, logWarn, logError;
 
 import libp2p.util.fibers : FiberGroup;
 
 import photowagon.core.api.album_api : registerAlbumApi;
 import photowagon.core.api.daemon_api : registerDaemonApi;
+import photowagon.core.api.device_api : registerDeviceApi;
 import photowagon.core.api.edit_api : registerEditApi;
 import photowagon.core.api.face_api : registerFaceApi;
 import photowagon.core.api.import_api : registerImportApi;
@@ -39,15 +41,18 @@ import photowagon.core.ipc.server : IpcServer;
 import photowagon.core.jobs.scheduler : Scheduler, installScheduler;
 import photowagon.core.vision.worker : configureVision, VisionModels, releaseVision;
 import photowagon.core.p2p.ipc : IpcOverP2p;
+import photowagon.core.p2p.blobpush : BlobStash, BlobOverP2p;
 import photowagon.core.library.albums : AlbumRepo;
 import photowagon.core.library.dates : DateTree;
 import photowagon.core.library.kindjob : KindService;
 import photowagon.core.library.photos : PhotoRepo;
 import photowagon.core.library.places : Geocoder, PlaceService;
 import photowagon.core.library.scenes : SceneService;
+import photowagon.core.library.placemodel : PlaceModel;
 import photowagon.core.library.keywords : KeywordService;
 import photowagon.core.metadata.filetags : FileTagWriter, applyFileSubjects;
 import photowagon.core.library.roots : RootRepo;
+import photowagon.core.p2p.devices : DeviceRepo, PairingManager;
 import photowagon.core.p2p.identity : loadOrCreateIdentity;
 import photowagon.core.p2p.node : Node;
 import photowagon.core.p2p.peers : PeerRepo;
@@ -75,8 +80,10 @@ final class Daemon : ServerControl
 	private Indexer indexer;
 	private FaceService facesService;
 	private KindService kinds;
+	private bool taggingArmed;   // a deferred "start tagging when quiet" retry is scheduled
 	private PlaceService places;
 	private SceneService scenes;
+	private PlaceModel placeModel;
 	private FileTagWriter fileTags;
 	private Node node;
 	private Sharing sharing;
@@ -133,10 +140,14 @@ final class Daemon : ServerControl
 				places.geocodePending();
 			catch (Exception e)
 				logWarn("places: pass failed: %s", e.msg);
-			kinds.start();
+			startTaggingWhenQuiet();
 		};
 		scenes = new SceneService(cfg, db, photos, store, events);
 		kinds.onDone = () { facesService.start(); scenes.start(); };   // both look only at photographs
+		// learned places: recognise where a photo was taken by how it looks (no GPS needed),
+		// once the CLIP embeddings are current — and again whenever the user names a new place
+		placeModel = new PlaceModel(db, events);
+		scenes.onDone = () { placeModel.start(); };
 
 		if (cfg.p2p)
 		{
@@ -154,12 +165,16 @@ final class Daemon : ServerControl
 			}
 		}
 
+		auto deviceRepo = new DeviceRepo(db);
+		auto pairingMgr = new PairingManager;
 		registry = new Registry;
 		registerDaemonApi(registry, cfg, node, &requestStop);
+		registerDeviceApi(registry, deviceRepo, events, pairingMgr);
 		registerPairingApi(registry, this);
 		registerLibraryApi(registry, roots, photos, dates, indexer, events, kinds, () { facesService.start(); });
 		registerMediaApi(registry, photos, store);
-		registerImportApi(registry, cfg, roots, photos, indexer);
+		auto blobStash = new BlobStash;
+		registerImportApi(registry, cfg, roots, photos, indexer, blobStash);
 		registerFaceApi(registry, faceRepo, facesService, store, events);
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerPlacesApi(registry, places);
@@ -169,7 +184,7 @@ final class Daemon : ServerControl
 		auto keywords = new KeywordService(db, store, events);
 		keywords.onUserChange = (const(long)[] ids) { fileTags.enqueue(ids); };
 		scenes.onUserChange = (const(long)[] ids) { fileTags.enqueue(ids); };
-		places.onUserChange = (const(long)[] ids) { fileTags.enqueue(ids); };
+		places.onUserChange = (const(long)[] ids) { fileTags.enqueue(ids); if (placeModel) placeModel.relearn(); };
 		indexer.onFileSubjects = (long id, string[] subjects) { applyFileSubjects(db, id, subjects); };
 		registerTagsApi(registry, scenes, keywords, photos, fileTags);
 		registerEditApi(registry, cfg, photos, store, events, (string path) {
@@ -180,7 +195,10 @@ final class Daemon : ServerControl
 		});
 		registerP2pApi(registry, node, sharing);
 		if (node !is null)
-			new IpcOverP2p(node.host, registry, events, token);   // the phone's way in over libp2p
+		{
+			new IpcOverP2p(node.host, registry, events, token, deviceRepo, pairingMgr);   // the phone's way in over libp2p
+			new BlobOverP2p(node.host, blobStash, deviceRepo);   // the raw-bytes pipe for pushed photos/videos
+		}
 
 		if (link !is null)
 		{
@@ -278,6 +296,41 @@ final class Daemon : ServerControl
 		}
 	}
 
+	/// Classification and tagging are a SEPARATE concern from finding photos: the scan
+	/// makes a photo appear, the classifiers (kinds → faces → scenes) label it later.
+	/// Chaining them meant every batch a phone sync delivered kicked the CLIP and face
+	/// workers, which then starved the sync's own requests — "o celular espera o
+	/// computador taguear a foto antes de mandar outra". So hold tagging off while the
+	/// indexer is still active (photos arriving), and run it once things have been quiet
+	/// for a window. On a desktop folder add, the indexer goes quiet fast and this is a
+	/// short delay; during a sync burst it waits for the burst to end.
+	private enum Duration taggingQuiet = 12.seconds;
+	private void startTaggingWhenQuiet()
+	{
+		if (indexer.activeWithin(taggingQuiet))
+		{
+			if (!taggingArmed)
+			{
+				taggingArmed = true;
+				runTask(() nothrow {
+					try
+						sleep(taggingQuiet);
+					catch (Exception)
+					{
+					}
+					taggingArmed = false;
+					try
+						startTaggingWhenQuiet();
+					catch (Exception)
+					{
+					}
+				});
+			}
+			return;
+		}
+		kinds.start();
+	}
+
 	private void requestStop()
 	{
 		exitEventLoop();
@@ -306,6 +359,8 @@ final class Daemon : ServerControl
 			facesService.close();
 		if (scenes)
 			scenes.close();
+		if (placeModel)
+			placeModel.close();
 		if (fileTags)
 			fileTags.close();
 		releaseVision();

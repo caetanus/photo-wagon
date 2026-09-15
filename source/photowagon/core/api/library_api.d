@@ -139,6 +139,10 @@ import photowagon.core.jobs.scheduler : jobs;
 					if (permanent) remove(photo.path);
 					else moveToTrash(photo.path);
 				}
+				// a deleted photo must not come back on the next sync: turn its hash away, so
+				// a phone that still has it is told "refuse" during negotiation
+				if (photo.hash.length)
+					photos.decline(photo.hash);
 				photos.remove(id);
 				deleted++;
 			}

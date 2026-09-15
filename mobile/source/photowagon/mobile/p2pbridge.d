@@ -26,10 +26,11 @@ import cppq = qt.quick.qobject;
 import qtmoc;
 
 import libp2p.core.peer_id : PeerId;
-import libp2p.core.stream : Stream, readLengthPrefixed, writeLengthPrefixed;
+import libp2p.core.stream : Stream, readLengthPrefixed, writeLengthPrefixed, readExact;
 import libp2p.host.host : Host, HostConfig;
 import libp2p.multiformats.multiaddr : Multiaddr;
 import libp2p.transport.tcp : TcpTransport;
+import libp2p.protocol.relay.service : Relay;
 
 import photowagon.core.ipc.link : InProcessLink;
 import photowagon.core.pairingcode : parsePairingCode;
@@ -61,6 +62,10 @@ final class P2pBridge : Bridge
     }
     private Mutex lock;
     private Target target;              // under lock; read by the vibe thread
+    private string pairCode;            // the 4-digit code for the current pairing; stable across dial retries
+    private static struct PushJob { long ticket; string path; }
+    private PushJob[] pushJobs;          // under lock: files queued to push on the blob pipe
+    private ResultCb[long] pushCbs;      // Qt thread only: ticket -> callback for a push
 
     this(string settingsDir)
     {
@@ -105,6 +110,26 @@ final class P2pBridge : Bridge
             catch (Exception e)
                 plog("p2p: saved code unusable: ", e.msg);
         }
+        // extra addresses learned in earlier sessions (e.g. the computer's public address,
+        // for dialing in over 4G) — merged onto whatever the saved pairing code carried
+        try
+        {
+            import std.string : splitLines, strip;
+            import std.algorithm : canFind;
+
+            immutable extra = buildPath(settingsDir, "p2p-addrs");
+            if (extra.exists)
+                foreach (ln; readText(extra).splitLines)
+                {
+                    auto a = ln.strip;
+                    if (a.length)
+                        synchronized (lock)
+                            if (target.valid && !target.addrs.canFind(a))
+                                target.addrs ~= a;
+                }
+        }
+        catch (Exception e)
+            plog("p2p: extra addrs unusable: ", e.msg);
         import core.thread : Thread;
         auto t = new Thread(&loop);
         t.name = "libp2p";
@@ -165,6 +190,41 @@ final class P2pBridge : Bridge
         }
     }
 
+    /// Add addresses the computer reported (from p2p.status) to the dial list and persist
+    /// them, so a later reconnect — including off the LAN, over 4G — has every route to try.
+    private void mergeLearnedAddrs(string[] fresh)
+    {
+        import std.algorithm : canFind;
+        import std.array : join;
+
+        string[] all;
+        bool added;
+        synchronized (lock)
+        {
+            if (!target.valid)
+                return;
+            foreach (a; fresh)
+                if (a.length && !target.addrs.canFind(a))
+                {
+                    target.addrs ~= a;
+                    added = true;
+                }
+            all = target.addrs.dup;
+        }
+        if (!added)
+            return;
+        plog("p2p: address list now ", all);
+        try
+        {
+            import std.file : write, mkdirRecurse;
+
+            mkdirRecurse(settingsDir);
+            write(buildPath(settingsDir, "p2p-addrs"), all.join("\n"));
+        }
+        catch (Exception e)
+            plog("p2p: cannot save addrs: ", e.msg);
+    }
+
     override void request(string method, JSONValue params, ResultCb cb)
     {
         if (p2pUp)
@@ -189,6 +249,41 @@ final class P2pBridge : Bridge
             JSONValue e = ["code": JSONValue("no_computer"), "message": JSONValue("not connected to a computer")];
             cb(JSONValue(null), e);
         }
+    }
+
+    override bool canPush() const
+    {
+        return p2pUp;
+    }
+
+    /// Streams the file's raw bytes on the blob pipe, then sends library.import{ticket,...}.
+    override void uploadFile(long ticket, string path, JSONValue meta, ResultCb cb)
+    {
+        pushFile(ticket, path, (JSONValue pr, JSONValue perr) {
+            if (perr.type != JSONType.null_)
+            {
+                cb(JSONValue(null), perr);
+                return;
+            }
+            auto p = meta;
+            p["ticket"] = JSONValue(ticket);
+            request("library.import", p, cb);
+        });
+    }
+
+    /// Queues `path` to be streamed on the blob pipe under `ticket`; the vibe loop does it.
+    private void pushFile(long ticket, string path, ResultCb cb)
+    {
+        if (!p2pUp)
+        {
+            cb(JSONValue(null), JSONValue([
+                "code": JSONValue("no_computer"), "message": JSONValue("no libp2p link")
+            ]));
+            return;
+        }
+        pushCbs[ticket] = cb;
+        synchronized (lock)
+            pushJobs ~= PushJob(ticket, path);
     }
 
     /// A request timed out: the libp2p session is dropped (the loop dials the same
@@ -232,6 +327,24 @@ final class P2pBridge : Bridge
                     onConnected(connected);
                 continue;
             }
+            if (obj.type == JSONType.object && "pushDone" in obj)
+            {
+                immutable ticket = obj["pushDone"].integer;
+                if (auto cbp = ticket in pushCbs)
+                {
+                    auto cb = *cbp;
+                    pushCbs.remove(ticket);
+                    if ("ok" in obj && obj["ok"].type == JSONType.true_)
+                        cb(JSONValue(["ok": JSONValue(true)]), JSONValue(null));
+                    else
+                        cb(JSONValue(null), JSONValue([
+                            "code": JSONValue("push_failed"),
+                            "message": ("error" in obj && obj["error"].type == JSONType.string)
+                                ? obj["error"] : JSONValue("push failed"),
+                        ]));
+                }
+                continue;
+            }
             deliverLine(line);
         }
     }
@@ -243,9 +356,13 @@ final class P2pBridge : Bridge
         import vibe.core.core : runTask, runEventLoop;
 
         useCrashStack();
-        {   // vibe's own diagnostics (the exit reason of the loop, for one) → stderr → logcat
+        {   // vibe's own diagnostics (the exit reason of the loop, for one) → stderr → logcat.
+            // info, not debug: debug logs every frame's worth of fiber chatter, a real drag on
+            // a phone under sync. PW_QT_DEBUG turns the firehose back on for diagnosis.
             import vibe.core.log : setLogLevel, LogLevel;
-            setLogLevel(LogLevel.debug_);
+            import std.process : environment;
+
+            setLogLevel("PW_QT_DEBUG" in environment ? LogLevel.debug_ : LogLevel.info);
         }
         // If vibe's event loop ever returns or throws (it did on Android, with "May not
         // process events within an active yieldLock()" — a per-thread counter left
@@ -290,6 +407,18 @@ final class P2pBridge : Bridge
         HostConfig hc;
         hc.agentVersion = "photowagon-mobile/0.5.0";
         auto host = new Host(identity, [new TcpTransport], hc);
+        // NAT-traversal (relay transport + DCUtR) is temporarily OFF here too: on the desktop
+        // adding the relay as a swarm transport stalled things, so it is parked on both ends
+        // until fixed. Direct LAN sync is unaffected.
+        import libp2p.protocol.relay.service : Relay;
+
+        enum bool natTraversal = true;
+        Relay relay = null;
+        if (natTraversal)
+        {
+            relay = new Relay(host);
+            host.swarm.addTransport(relay);
+        }
         plog("p2p: this phone is ", host.id.toString);
         for (;;)
         {
@@ -302,7 +431,7 @@ final class P2pBridge : Bridge
                 continue;
             }
             try
-                session(host, t);
+                session(host, relay, t);
             catch (Exception e)
                 deliverLink(false, null, e.msg);
             // give way immediately to a new code; otherwise retry in a while
@@ -318,54 +447,213 @@ final class P2pBridge : Bridge
         }
     }
 
+    /// The 4-digit code shown on this phone and typed at the desktop to authorize it.
+    private static string fourDigitCode()
+    {
+        import std.random : uniform;
+        import std.format : format;
+
+        return format("%04d", uniform(0, 10_000));
+    }
+
+    /// A friendly default name the desktop shows for this phone (the user can rename it).
+    private static string deviceName()
+    {
+        import std.process : environment;
+        import std.socket : Socket;
+
+        auto n = environment.get("PW_DEVICE_NAME", "");
+        if (n.length)
+            return n;
+        try
+            return Socket.hostName();
+        catch (Exception)
+            return "Phone";
+    }
+
+    /// True when the multiaddr's /ip4 host is an RFC 1918 address (a LAN route).
+    private static bool isPrivateIp4(string text)
+    {
+        import std.algorithm : findSplitAfter, startsWith;
+        import std.string : indexOf;
+        import std.conv : to;
+
+        auto rest = text.findSplitAfter("/ip4/")[1];
+        if (rest.length == 0)
+            return false;
+        immutable end = rest.indexOf('/');
+        immutable host = end < 0 ? rest : rest[0 .. end];
+        if (host.startsWith("10.") || host.startsWith("192.168."))
+            return true;
+        if (host.startsWith("172."))
+        {
+            auto p = host[4 .. $];
+            immutable dot = p.indexOf('.');
+            if (dot > 0)
+                try
+                {
+                    immutable n = p[0 .. dot].to!int;
+                    return n >= 16 && n <= 31;
+                }
+                catch (Exception)
+                {
+                }
+        }
+        return false;
+    }
+
     /// One connected stream: dial, authenticate, then pump lines both ways until it drops.
-    private void session(Host host, Target t)
+    private void session(Host host, Relay relay, Target t)
     {
         import vibe.core.core : runTask, sleep;
         import libp2p.core.peer_id : PeerId;
-        import libp2p.core.stream : Stream, readLengthPrefixed, writeLengthPrefixed;
+        import libp2p.core.stream : Stream, readLengthPrefixed, writeLengthPrefixed, readExact;
         import libp2p.host.host : Host;
         import libp2p.multiformats.multiaddr : Multiaddr;
+        import libp2p.protocol.relay.service : Relay;
+
+        import std.algorithm : canFind;
 
         PeerId peer;
-        Multiaddr[] addrs;
+        Multiaddr[] lan, circuit, other;
         bool havePeer;
         foreach (text; t.addrs)
         {
+            if (text.canFind("/ip4/0.0.0.0/") || text.canFind("/ip4/127."))
+                continue; // a wildcard or loopback listen address is not a route to the computer
             auto full = Multiaddr.parse(text);
-            Multiaddr addr;
-            foreach (c; full.components)
+            auto comps = full.components;
+            // The trailing /p2p/<id> names the computer. The address itself goes to the
+            // swarm whole: it strips that trailer from a plain address, and keeps a relayed
+            // one intact because the relay transport needs the relay's own /p2p/<id> too.
+            // (Stripping every /p2p here turned the circuit into "/ip4/…/tcp/4001/p2p-circuit",
+            // which the relay refused with "address does not name its relay": off the LAN,
+            // the phone never had a valid route.)
+            if (comps.length && comps[$ - 1].name == "p2p")
             {
-                if (c.name == "p2p")
-                {
-                    peer = PeerId.fromBytes(c.value);
-                    havePeer = true;
-                }
-                else
-                    addr = addr ~ Multiaddr.parse("/" ~ c.name ~ (c.protocol.size != 0 ? "/" ~ c.text : ""));
+                peer = PeerId.fromBytes(comps[$ - 1].value);
+                havePeer = true;
             }
-            addrs ~= addr;
+            if (comps.canFind!(c => c.name == "p2p-circuit"))
+                circuit ~= full;
+            else if (isPrivateIp4(text))
+                lan ~= full;
+            else
+                other ~= full;
         }
         if (!havePeer)
             throw new Exception("code has no peer id");
-        host.connect(peer, addrs);
+        // Dialed in this order, and a dead address costs the full dial timeout: the LAN
+        // first (instant when we are on it), then the relay circuit (reachable from
+        // anywhere), and last the computer's public address — under CGNAT it never
+        // answers and would only burn the timeout ahead of the circuit.
+        auto addrs = lan ~ circuit ~ other;
+        auto conn = host.connect(peer, addrs);
+        // If we reached the computer through a relay (a /p2p-circuit address, the 4G case),
+        // punch a direct connection with DCUtR so the photos flow peer-to-peer, not through
+        // the relay. Best-effort: if the NAT will not cooperate we simply stay on the relay.
+        import std.algorithm : canFind;
+
+        if (relay !is null && conn !is null && conn.remoteAddr.toString.canFind("p2p-circuit"))
+            runTask(() nothrow {
+                try
+                {
+                    relay.holePunch(peer);
+                    plog("p2p: hole-punched a direct connection to the computer");
+                }
+                catch (Exception e)
+                {
+                    try plog("p2p: hole punch failed (staying on the relay): ", e.msg); catch (Exception) {}
+                }
+            });
         auto s = host.newStream(peer, ipcProtocol);
         scope (exit)
             s.close();
-        JSONValue auth = ["id": JSONValue(0), "method": JSONValue("daemon.auth"), "params": JSONValue(["token": JSONValue(t.token)])];
+        JSONValue auth = ["id": JSONValue(0), "method": JSONValue("daemon.auth"),
+            "params": JSONValue(["token": JSONValue(t.token), "name": JSONValue(deviceName())])];
         writeLengthPrefixed(s, cast(const(ubyte)[]) auth.toString());
-        auto reply = parseJSON(cast(string) readLengthPrefixed(s, maxLine).idup);
+        // The core sends events on this same stream (it attaches the event sink at once), so a
+        // handshake reply can be preceded by an event frame — read past events to the response.
+        JSONValue readResponse()
+        {
+            for (;;)
+            {
+                auto frame = cast(string) readLengthPrefixed(s, maxLine).idup;
+                auto j = parseJSON(frame);
+                if (j.type == JSONType.object && "event" in j.object)
+                {
+                    link.deliver(frame);   // hand the event to the UI, keep waiting for the reply
+                    continue;
+                }
+                return j;
+            }
+        }
+        auto reply = readResponse();
         if (!("result" in reply))
             throw new Exception("not admitted: " ~ reply.toString());
+        // A device the desktop has never seen must be authorized there: we show a 4-digit
+        // code and the person at the computer types it. The connection is held (this read
+        // blocks) until they confirm — or the computer drops us.
+        if ("needsPairing" in reply["result"] && reply["result"]["needsPairing"].type == JSONType.true_)
+        {
+            if (pairCode.length == 0)
+                pairCode = fourDigitCode();
+            immutable code = pairCode;   // stable across dial retries, so the operator sees one code
+            plog("p2p: pairing code ", code, " — enter it on the computer to allow this phone");
+            // tell the phone UI to show the code (drain() surfaces this as an event)
+            link.deliver(JSONValue(["event": JSONValue("pairing.code"),
+                "data": JSONValue(["code": JSONValue(code)])]).toString());
+            JSONValue pair = ["id": JSONValue(1), "method": JSONValue("daemon.pair"),
+                "params": JSONValue(["code": JSONValue(code), "name": JSONValue(deviceName())])];
+            writeLengthPrefixed(s, cast(const(ubyte)[]) pair.toString());
+            auto preply = readResponse();   // skips the pairing.request event the core broadcasts
+            link.deliver(JSONValue(["event": JSONValue("pairing.code"),
+                "data": JSONValue(["done": JSONValue(true)])]).toString());
+            if (!("result" in preply))
+                throw new Exception("pairing was not confirmed on the computer");
+            pairCode = null;   // paired: a later re-pairing will make a fresh code
+        }
         deliverLink(true, peer.toString, null);
 
+        // Ask the computer for its full address list and remember any new ones (its public
+        // address in particular): a later dial off the LAN — on 4G — then has a route to try,
+        // without re-pairing. Done here, before the reader task below, so the reply is ours.
+        try
+        {
+            JSONValue statusReq = ["id": JSONValue(2), "method": JSONValue("p2p.status"),
+                "params": JSONValue.emptyObject];
+            writeLengthPrefixed(s, cast(const(ubyte)[]) statusReq.toString());
+            auto sres = readResponse();
+            if ("result" in sres && sres["result"].type == JSONType.object && "addrs" in sres["result"])
+            {
+                string[] fresh;
+                foreach (a; sres["result"]["addrs"].array)
+                    if (a.type == JSONType.string)
+                        fresh ~= a.str;
+                mergeLearnedAddrs(fresh);
+            }
+        }
+        catch (Exception e)
+            plog("p2p: address refresh failed: ", e.msg);
+
+        // Liveness: when Wi-Fi drops mid-session the socket does not fail for a long
+        // time, so reads block and writes buffer while `p2pUp` stays true and every
+        // request piles into a dead link until the 45 s sync deadline. A keepalive
+        // fixes that: `lastRecv` is bumped on any frame the reader sees; a `daemon.hello`
+        // goes out every `pingEvery`; and if nothing has come back for `deadAfter`
+        // (a couple of missed pings) the session is declared dead and dropped, so the
+        // outer loop re-dials in seconds rather than after three quarters of a minute.
+        import core.time : MonoTime, seconds, msecs;
+
         bool done;
+        auto lastRecv = MonoTime.currTime;
         auto reader = runTask(() nothrow {
             try
             {
                 for (;;)
                 {
                     auto frame = readLengthPrefixed(s, maxLine);
+                    lastRecv = MonoTime.currTime;
                     link.deliver(cast(string) frame.idup);
                 }
             }
@@ -373,6 +661,11 @@ final class P2pBridge : Bridge
             done = true;
         });
         cast(void) reader;
+        const(ubyte)[] ping = cast(const(ubyte)[]) JSONValue(["id": JSONValue(-1),
+            "method": JSONValue("daemon.hello"), "params": JSONValue.emptyObject]).toString();
+        enum pingEvery = 3.seconds;
+        enum deadAfter = 9.seconds;
+        auto lastPing = MonoTime.currTime;
         // Polling rather than the link's shared ManualEvent: on Android vibe's
         // per-thread event for it comes back invalid (an assertion in
         // threadlocalwaiter.d), and 20 ms of latency on a phone is nothing.
@@ -381,6 +674,49 @@ final class P2pBridge : Bridge
             foreach (line; link.takeInbox())
                 if (line.length && !done)
                     writeLengthPrefixed(s, cast(const(ubyte)[]) line);
+            // blob pipe: stream queued files' raw bytes on their own stream, beside this
+            // loop, so a 31 MB video never blocks the keepalive here
+            PushJob[] jobs;
+            synchronized (lock)
+            {
+                jobs = pushJobs;
+                pushJobs = null;
+            }
+            foreach (job; jobs)
+            {
+                immutable jt = job.ticket;
+                immutable jp = job.path;
+                runTask(() nothrow {
+                    string err;
+                    try
+                        pushOne(host, peer, jt, jp);
+                    catch (Exception e)
+                        err = e.msg.length ? e.msg : "push failed";
+                    try
+                        link.deliver(JSONValue([
+                            "pushDone": JSONValue(jt),
+                            "ok": JSONValue(err.length == 0),
+                            "error": err.length ? JSONValue(err) : JSONValue(null),
+                        ]).toString());
+                    catch (Exception)
+                    {
+                    }
+                });
+            }
+            immutable now = MonoTime.currTime;
+            if (now - lastPing >= pingEvery)
+            {
+                lastPing = now;
+                try
+                    writeLengthPrefixed(s, ping);
+                catch (Exception)
+                    break;                                // the write side is gone
+            }
+            if (now - lastRecv >= deadAfter)
+            {
+                plog("p2p: link silent for ", deadAfter.total!"seconds", "s — dropping to re-dial");
+                break;                                    // no answer to the pings: the link is dead
+            }
             uint v;
             synchronized (lock)
                 v = target.version_;
@@ -398,4 +734,48 @@ final class P2pBridge : Bridge
         d["error"] = error.length ? JSONValue(error) : JSONValue(null);
         link.deliver(JSONValue(["event": JSONValue("p2p.link"), "data": d]).toString());
     }
+}
+
+private enum pushProtocol = "/photowagon/push/1.0.0";
+
+private ubyte[8] longToBe8(long v) @safe @nogc nothrow pure
+{
+    ubyte[8] b;
+    foreach_reverse (i; 0 .. 8)
+    {
+        b[i] = cast(ubyte)(v & 0xff);
+        v >>= 8;
+    }
+    return b;
+}
+
+/// Streams one file's raw bytes to `peer` on the blob pipe: (long ticket)(long size)(bytes),
+/// then waits for the one-byte ack. vibe async file I/O, so the fiber yields and the session's
+/// keepalive keeps ticking.
+private void pushOne(Host host, PeerId peer, long ticket, string path)
+{
+    import vibe.core.file : openFile, FileMode;
+
+    auto st = host.newStream(peer, pushProtocol);
+    scope (exit)
+        st.close();
+    auto fh = openFile(path, FileMode.read);
+    scope (exit)
+        fh.close();
+    immutable size = fh.size;
+    ubyte[8] tb = longToBe8(ticket);
+    st.write(tb[]);
+    ubyte[8] sb = longToBe8(cast(long) size);
+    st.write(sb[]);
+    ubyte[64 * 1024] buf;
+    ulong remaining = size;
+    while (remaining > 0)
+    {
+        immutable n = cast(size_t)(remaining < buf.length ? remaining : buf.length);
+        fh.read(buf[0 .. n]);
+        st.write(buf[0 .. n]);
+        remaining -= n;
+    }
+    ubyte[1] ack;
+    readExact(st, ack[]);
 }

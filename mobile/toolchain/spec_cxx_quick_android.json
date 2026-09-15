@@ -95,6 +95,6 @@
     "/home/caetano/lab/android-d/pkgconfig"
   ],
   "resource_dir": "/usr/lib/clang/22",
-  "_android": "Cross spec for Qt 6.11.1 android_arm64_v8a: same discovery as spec_cxx_quick.json, flags from hand-written .pc files in ~/lab/android-d/pkgconfig, builtin headers from the NDK clang.",
+  "_android": "Cross spec for Qt 6.11.1 android_arm64_v8a: same discovery as spec_cxx_quick.json, flags from hand-written .pc files in ~/lab/android-d/pkgconfig, builtin headers from the HOST clang (see _resource_dir_note — NOT the NDK clang: parsing with the host libclang means its own resource_dir; the NDK clang-18 arm_neon.h uses builtins a newer libclang rejects).",
   "_resource_dir_note": "The host clang's, not the NDK's: xiboca parses with the host libclang, and the NDK's clang-18 arm_neon.h uses builtins libclang 21 does not know. Passed as -resource-dir so libc++'s include_next chain stays intact."
 }

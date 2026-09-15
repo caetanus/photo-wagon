@@ -39,6 +39,7 @@ final class Indexer
 	void delegate(long photoId, string[] subjects) onFileSubjects;
 	private bool[long] running; // root ids with a job in flight
 	private bool[long] again; // roots asked for again while running
+	private MonoTime lastStart; // when a job was last (re)started — for the tagging quiet gate
 
 	this(Config cfg, PhotoRepo photos, Events events)
 	{
@@ -59,10 +60,20 @@ final class Indexer
 		return running.length > 0;
 	}
 
+	/// True while a job is running or one started within `d` — used to hold expensive
+	/// tagging off while photos are still flowing in (a phone sync burst), so the scan
+	/// that makes photos appear and the classifiers that label them stop competing.
+	import core.time : Duration;
+	bool activeWithin(Duration d) const
+	{
+		return running.length > 0 || (lastStart != MonoTime.init && MonoTime.currTime - lastStart < d);
+	}
+
 	/// Starts indexing `path` as root `rootId`; a second call for the same
 	/// root while one is running is ignored.
 	void start(long rootId, string path)
 	{
+		lastStart = MonoTime.currTime;
 		if (rootId in running)
 		{
 			again[rootId] = true; // files arrived mid-run; go once more when done
@@ -81,6 +92,155 @@ final class Indexer
 			if (onDone)
 				onDone();
 		});
+	}
+
+	/// Index a SINGLE file (a photo the phone just sent), without re-scanning its whole
+	/// folder — so an import no longer logs "skipped N" for everything already there and
+	/// does not walk the growing imports/ directory on every photo.
+	void indexOne(long rootId, string path)
+	{
+		import std.file : exists, getSize, timeLastModified;
+
+		if (!path.exists)
+			return;
+		import photowagon.core.indexer.scan : isVideoPath;
+
+		Candidate c;
+		c.path = path;
+		c.isVideo = isVideoPath(path);
+		try
+		{
+			c.size = cast(long) getSize(path);
+			c.mtimeMs = timeLastModified(path).toUnixTime!long * 1000;
+		}
+		catch (Exception)
+			return;
+		lastStart = MonoTime.currTime;
+		fibers.spawn(() {
+			jobs.pass(Priority.indexer, "importing " ~ path, {
+				try
+				{
+					if (importCandidate(rootId, c))
+						events.emit("library.changed", JSONValue.emptyObject);
+				}
+				catch (Exception e)
+					logWarn("indexer: import %s: %s", path, e.msg);
+			});
+			if (onDone)
+				onDone();
+		});
+	}
+
+	/// The per-file pipeline: hash, dedupe, EXIF, thumbnail, classify, insert. Returns
+	/// true when a row was added or updated, false when the file was already current.
+	/// Shared by the folder scan (Job) and by `indexOne`.
+	package bool importCandidate(long rootId, Candidate c)
+	{
+		auto known = photos.byPath(c.path);
+		if (!known.isNull && known.get.size == c.size && known.get.mtimeMs == c.mtimeMs)
+			return false;
+		if (!known.isNull)
+			logDiagnostic("indexer: changed %s (size %s → %s, mtime %s → %s)", c.path, known.get.size, c.size,
+				known.get.mtimeMs, c.mtimeMs);
+
+		immutable hash = jobs.background({ return async(&sha256File, c.path).getResult(); });
+		auto same = photos.byHash(hash);
+		if (!same.isNull && same.get.path != c.path)
+		{
+			logDiagnostic("indexer: duplicate of %s: %s", same.get.path, c.path);
+			return false;
+		}
+
+		// videos take a different path: a frame is the thumbnail, ffprobe gives duration and
+		// size, there is no EXIF to read and nothing to classify — kind is simply 'video'.
+		if (c.isVideo)
+		{
+			import photowagon.core.thumbs.video : makeVideoThumbnail;
+			import photowagon.core.metadata.datefromname : dateFromPath;
+
+			auto v = jobs.background({
+				return async(&makeVideoThumbnail, c.path, cfg.storeDir, cfg.thumbSize).getResult();
+			});
+			if (!v.ok)
+				throw new Exception(v.error);
+			Photo pv;
+			if (!known.isNull)
+				pv = known.get;
+			pv.hash = hash;
+			pv.path = c.path;
+			pv.rootId = rootId;
+			pv.size = c.size;
+			pv.mtimeMs = c.mtimeMs;
+			immutable vnamed = dateFromPath(c.path);
+			pv.takenTs = vnamed ? vnamed : c.mtimeMs / 1000;
+			pv.takenAt = isoTime(pv.takenTs);
+			pv.width = v.width;
+			pv.height = v.height;
+			pv.orientation = 1;
+			pv.thumbHash = v.hash;
+			pv.durationMs = v.durationMs;
+			pv.kind = "video";
+			if (pv.kindBy != "user")
+				pv.kindBy = "auto";
+			if (pv.id)
+				photos.update(pv);
+			else
+				photos.insert(pv);
+			return true;
+		}
+
+		auto exif = jobs.background({ return async(&readExif, c.path).getResult(); });
+		auto thumb = jobs.background({ return async(&makeThumbnail, c.path, cfg.storeDir, cfg.thumbSize).getResult(); });
+		if (!thumb.ok)
+			throw new Exception(thumb.error);
+
+		Photo p;
+		if (!known.isNull)
+			p = known.get;
+		p.hash = hash;
+		p.path = c.path;
+		p.rootId = rootId;
+		p.size = c.size;
+		p.mtimeMs = c.mtimeMs;
+		import photowagon.core.metadata.datefromname : dateFromPath;
+		immutable named = exif.takenTs ? 0 : dateFromPath(c.path);
+		p.takenTs = exif.takenTs ? exif.takenTs : (named ? named : c.mtimeMs / 1000);
+		p.takenAt = isoTime(p.takenTs);
+		immutable swap = exif.orientation >= 5;
+		p.width = swap ? thumb.srcHeight : thumb.srcWidth;
+		p.height = swap ? thumb.srcWidth : thumb.srcHeight;
+		p.orientation = exif.orientation;
+		p.camera = exif.camera;
+		p.hasGps = exif.hasGps;
+		p.lat = exif.lat;
+		p.lon = exif.lon;
+		p.thumbHash = thumb.hash;
+
+		if (p.kindBy != "user")
+		{
+			Signals sig;
+			sig.path = c.path;
+			sig.width = p.width;
+			sig.height = p.height;
+			sig.hasCamera = exif.camera !is null;
+			try
+				sig.stats = jobs.background({ return async(&imageStats, c.path).getResult(); });
+			catch (Exception e)
+				logDiagnostic("indexer: stats failed for %s: %s", c.path, e.msg);
+			p.kind = classify(sig);
+			p.kindBy = "auto";
+		}
+
+		if (p.id)
+			photos.update(p);
+		else
+			photos.insert(p);
+		if (exif.keywords.length && onFileSubjects !is null && p.id)
+			try
+				onFileSubjects(p.id, exif.keywords);
+			catch (Exception e)
+				logDiagnostic("indexer: file keywords of %s: %s", c.path, e.msg);
+		return true;
 	}
 
 	void close() nothrow
@@ -181,83 +341,14 @@ private final class Job
 
 	private void process(Candidate c)
 	{
-		auto known = owner.photos.byPath(c.path);
-		if (!known.isNull && known.get.size == c.size && known.get.mtimeMs == c.mtimeMs)
+		if (owner.importCandidate(rootId, c))
 		{
-			skipped++;
-			return;
+			imported++;
+			if (imported % 200 == 0)
+				owner.events.emit("library.changed", JSONValue.emptyObject);
 		}
-		if (!known.isNull)
-			logDiagnostic("indexer: changed %s (size %s → %s, mtime %s → %s)", c.path, known.get.size, c.size,
-				known.get.mtimeMs, c.mtimeMs);
-
-		immutable hash = jobs.background({ return async(&sha256File, c.path).getResult(); });
-		auto same = owner.photos.byHash(hash);
-		if (!same.isNull && same.get.path != c.path)
-		{
-			// same bytes already indexed under another path: keep the first, count this one
-			logDiagnostic("indexer: duplicate of %s: %s", same.get.path, c.path);
-			skipped++;
-			return;
-		}
-
-		auto exif = jobs.background({ return async(&readExif, c.path).getResult(); });
-		auto thumb = jobs.background({ return async(&makeThumbnail, c.path, owner.cfg.storeDir, owner.cfg.thumbSize).getResult(); });
-		if (!thumb.ok)
-			throw new Exception(thumb.error);
-
-		Photo p;
-		if (!known.isNull)
-			p = known.get;
-		p.hash = hash;
-		p.path = c.path;
-		p.rootId = rootId;
-		p.size = c.size;
-		p.mtimeMs = c.mtimeMs;
-		// EXIF, else a date in the name or the folder, else the file's mtime (the last copy)
-		import photowagon.core.metadata.datefromname : dateFromPath;
-		immutable named = exif.takenTs ? 0 : dateFromPath(c.path);
-		p.takenTs = exif.takenTs ? exif.takenTs : (named ? named : c.mtimeMs / 1000);
-		p.takenAt = isoTime(p.takenTs);
-		// rotated dimensions: what the viewer will actually show
-		immutable swap = exif.orientation >= 5;
-		p.width = swap ? thumb.srcHeight : thumb.srcWidth;
-		p.height = swap ? thumb.srcWidth : thumb.srcHeight;
-		p.orientation = exif.orientation;
-		p.camera = exif.camera;
-		p.hasGps = exif.hasGps;
-		p.lat = exif.lat;
-		p.lon = exif.lon;
-		p.thumbHash = thumb.hash;
-
-		// what kind of picture it is (a user's choice on a re-import stays)
-		if (p.kindBy != "user")
-		{
-			Signals sig;
-			sig.path = c.path;
-			sig.width = p.width;
-			sig.height = p.height;
-			sig.hasCamera = exif.camera !is null;
-			try
-				sig.stats = jobs.background({ return async(&imageStats, c.path).getResult(); }); // the original, not the thumbnail
-			catch (Exception e)
-				logDiagnostic("indexer: stats failed for %s: %s", c.path, e.msg);
-			p.kind = classify(sig);
-			p.kindBy = "auto";
-		}
-
-		if (p.id)
-			owner.photos.update(p);
 		else
-			owner.photos.insert(p);
-		if (exif.keywords.length && owner.onFileSubjects !is null && p.id)
-			try
-				owner.onFileSubjects(p.id, exif.keywords);
-			catch (Exception e)
-				logDiagnostic("indexer: file keywords of %s: %s", c.path, e.msg);
-		imported++;
-		if (imported % 200 == 0)
-			owner.events.emit("library.changed", JSONValue.emptyObject);
+			skipped++;
 	}
 
 	private void report(bool force)

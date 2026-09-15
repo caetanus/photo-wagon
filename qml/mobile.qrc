@@ -7,5 +7,6 @@
     <file>mobile/PhotoGrid.qml</file>
     <file>mobile/DateTreeSidebar.qml</file>
     <file>mobile/PhotoFocusView.qml</file>
+    <file>mobile/EditView.qml</file>
   </qresource>
 </RCC>

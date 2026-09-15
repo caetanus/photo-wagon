@@ -23,13 +23,31 @@ void registerFaceApi(Registry r, FaceRepo faces, FaceService service, ContentSto
 		return p.type == JSONType.object && "inline" in p && p["inline"].type == JSONType.true_;
 	}
 
+	// Inline portraits are shrunk to a small JPEG: 558 full-size crops make a ~4 MB
+	// people.list, and one frame that big stalls the phone's yamux stream past its
+	// 9 s liveness timeout, so the phone drops the link and never syncs. A per-hash
+	// cache keeps the re-encode off the hot path after the first call.
+	ubyte[][string] portraitCache;
 	string dataUrl(string hash)
 	{
 		import std.base64 : Base64;
+		import photowagon.core.thumbs.vips : smallJpegOfBytes;
 
 		if (hash is null || !store.has(hash))
 			return null;
-		return "data:image/jpeg;base64," ~ cast(string) Base64.encode(store.get(hash));
+		auto cached = hash in portraitCache;
+		ubyte[] small;
+		if (cached !is null)
+			small = *cached;
+		else
+		{
+			try
+				small = smallJpegOfBytes(store.get(hash), 64, 66);
+			catch (Exception)
+				small = cast(ubyte[]) store.get(hash); // vips hiccup: fall back to the full crop
+			portraitCache[hash] = small;
+		}
+		return "data:image/jpeg;base64," ~ cast(string) Base64.encode(small);
 	}
 
 	r.add("people.list", (JSONValue p) {

@@ -6,7 +6,6 @@
 /// Nothing here knows about Qt or about fibers beyond the wake-up itself.
 module photowagon.core.ipc.link;
 
-import core.atomic : atomicStore, cas;
 import core.sync.mutex : Mutex;
 import core.sys.posix.fcntl : fcntl, F_GETFL, F_SETFL, O_NONBLOCK;
 import core.sys.posix.unistd : pipe, read, write, close;
@@ -20,7 +19,7 @@ final class InProcessLink
 	private string[] outbox; // core → UI
 	private shared(ManualEvent) wake;
 	private int[2] fds;
-	private shared bool signalled;
+	private bool signalled; // "a wake byte is in flight"; guarded by `lock`, same as outbox
 
 	private bool vibeWake;
 
@@ -54,7 +53,14 @@ final class InProcessLink
 	/// Everything the core produced since the last call. Also clears the wake pipe.
 	string[] takeOutbox()
 	{
-		atomicStore(signalled, false);
+		// Drain the pipe first, then take the outbox and drop `signalled` together under the
+		// lock. Doing it in this order, with `signalled` guarded by the same lock as `outbox`,
+		// keeps the two in step: after this returns, the outbox is empty and any later deliver
+		// sees signalled == false and writes a fresh wake byte. The old code flipped a lock-free
+		// `signalled` outside the outbox lock, which could leave it stuck true with an empty
+		// pipe — after which no deliver ever woke the UI again and every later response (a page,
+		// the stats) sat unread. Under a phone sync's event volume that raced often: an empty
+		// library while Places, answered earlier, still showed.
 		ubyte[64] sink;
 		while (read(fds[0], sink.ptr, sink.length) > 0)
 		{
@@ -64,6 +70,7 @@ final class InProcessLink
 		{
 			out_ = outbox;
 			outbox = null;
+			signalled = false;
 		}
 		return out_;
 	}
@@ -90,19 +97,25 @@ final class InProcessLink
 	/// Queues a response or event line for the UI and wakes it once.
 	void deliver(string line) nothrow
 	{
+		bool wasSignalled = true; // if the lock throws, skip the write
 		try
 		{
 			synchronized (lock)
+			{
 				outbox ~= line;
+				wasSignalled = signalled;
+				signalled = true;
+			}
 		}
 		catch (Exception)
 		{
 			return;
 		}
-		if (!cas(&signalled, false, true))
-			return; // a wake is already pending
-		ubyte one = 1;
-		write(fds[1], &one, 1);
+		if (!wasSignalled) // only the first pending message writes a wake byte
+		{
+			ubyte one = 1;
+			write(fds[1], &one, 1);
+		}
 	}
 
 	int emitCount()

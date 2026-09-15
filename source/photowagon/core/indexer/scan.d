@@ -10,6 +10,11 @@ immutable string[] imageExtensions = [
 	".gif", ".bmp", ".jxl", ".dng", ".cr2", ".cr3", ".nef", ".arw", ".orf", ".raf", ".rw2"
 ];
 
+/// Camera and phone video containers. A frame becomes the thumbnail; the viewer plays them.
+immutable string[] videoExtensions = [
+	".mp4", ".mov", ".m4v", ".3gp", ".avi", ".mkv", ".webm", ".mts", ".m2ts", ".wmv", ".flv"
+];
+
 bool isImagePath(string path) pure
 {
 	import std.algorithm : canFind;
@@ -17,11 +22,19 @@ bool isImagePath(string path) pure
 	return imageExtensions.canFind(path.extension.toLower);
 }
 
+bool isVideoPath(string path) pure
+{
+	import std.algorithm : canFind;
+
+	return videoExtensions.canFind(path.extension.toLower);
+}
+
 struct Candidate
 {
 	string path;
 	long size;
 	long mtimeMs;
+	bool isVideo;
 }
 
 /// Every image under `root`, without following symlinks or entering hidden
@@ -58,10 +71,10 @@ Candidate[] scanImages(string root)
 					walk(e.name);
 					continue;
 				}
-				if (!e.isFile || !isImagePath(e.name))
+				if (!e.isFile || !(isImagePath(e.name) || isVideoPath(e.name)))
 					continue;
 				out_ ~= Candidate(e.name, cast(long) e.size, e.timeLastModified.toUnixTime!long * 1000
-						+ e.timeLastModified.fracSecs.total!"msecs");
+						+ e.timeLastModified.fracSecs.total!"msecs", isVideoPath(e.name));
 			}
 			catch (Exception)
 			{

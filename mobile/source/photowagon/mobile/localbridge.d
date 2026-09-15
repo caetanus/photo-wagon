@@ -49,12 +49,28 @@ final class LocalBridge : Bridge
     private bool autoSync;             // persisted: files/settings/autosync
     private string autoSyncFile;
     private string syncStatusFile;     // files/settings/sync-status, read by the Java notifier
-    private long[] sendQueue;
-    private long sent, sendTotal, sendFailed, skipped;
+    private long[] sendQueue;         // the WANTED photos (negotiated), waiting for their bytes
+    private long sent, sendTotal, sendFailed, skipped, declined;
     private bool sending;
+    private bool negotiating;         // a library.offer round is in flight
     private QTimer prepPoll;           // watches the preparation thread
     private shared(Prepared)* inflight;
+    private long nextTicket = 1;      // blob-pipe ticket, paired with library.import
     private string lastSyncError;
+
+    // Sync negotiation: the phone offers a batch of hashes, the computer answers which it
+    // has and which it refuses, and only the rest are sent. Hashes are computed off-thread.
+    private enum offerBatchN = 512;   // one negotiation covers up to 512 photos
+    private long[] pendingOfferIds;   // the whole batch being negotiated
+    private long[] pendingHashIds;    // the subset of it being hashed right now
+    private shared(HashBatch)* hashing;
+    private QTimer hashPoll;
+
+    private static struct HashBatch
+    {
+        shared(string)[] hashes;   // parallel to pendingHashIds; "" on a read failure
+        bool done;
+    }
 
     private static struct Prepared
     {
@@ -101,6 +117,9 @@ final class LocalBridge : Bridge
         prepPoll = new QTimer(cast(cppq.QObject) null);
         prepPoll.setInterval(50);
         prepPoll.connectTimeout(&onPrepared);
+        hashPoll = new QTimer(cast(cppq.QObject) null);
+        hashPoll.setInterval(50);
+        hashPoll.connectTimeout(&onHashed);
         syncDeadline = new QTimer(cast(cppq.QObject) null);
         syncDeadline.setSingleShot(true);
         syncDeadline.connectTimeout(&onSyncTimeout);
@@ -132,6 +151,7 @@ final class LocalBridge : Bridge
                 syncDeadline.stop();
                 syncRequestSeq++;
                 sending = false;
+                negotiating = false;
                 publishSync();
             }
         };
@@ -140,6 +160,8 @@ final class LocalBridge : Bridge
                 emit("library.changed", JSONValue.emptyObject);
             else if (ev == "people.changed" || ev == "faces.done")
                 emit(ev, data);   // the UI reloads people; a face named on the computer shows here
+            else if (ev == "pairing.code")
+                emit(ev, data);   // the first-pairing code to show, so the desktop can authorize
         };
     }
 
@@ -726,7 +748,7 @@ final class LocalBridge : Bridge
             "active": JSONValue(sending || sendQueue.length > 0),
             "pending": JSONValue(pending),
             "total": JSONValue(sendTotal),
-            "done": JSONValue(sent + sendFailed + skipped),
+            "done": JSONValue(sent + sendFailed),
             "sent": JSONValue(sent),
             "skipped": JSONValue(skipped),
             "failed": JSONValue(sendFailed),
@@ -759,24 +781,180 @@ final class LocalBridge : Bridge
             publishSync();
             return;
         }
-        bool[long] queued;
-        foreach (id; sendQueue) queued[id] = true;
-        auto ids = index.unsentIds();
-        long added;
-        foreach (id; ids)
-            if (id !in queued && !(sending && inflight !is null && inflight.id == id))
-            {
-                sendQueue ~= id;
-                added++;
-            }
-        if (!sending && sendQueue.length && sendTotal == 0)
+        // a step is already in flight; it will carry on to the next batch by itself
+        if (sending || negotiating)
+            return;
+        if (sendTotal == 0 && sendQueue.length == 0)
         {
-            sent = sendFailed = skipped = 0;
+            sent = sendFailed = skipped = declined = 0;
             lastSyncError = null;
         }
-        sendTotal += added;
-        publishSync();
-        pumpSend();
+        if (sendQueue.length)
+            pumpSend();
+        else
+            negotiateNextBatch();
+    }
+
+    /// Offer the computer a batch of hashes; it tells us what it has and what it refuses,
+    /// and only the rest becomes `sendQueue`. Hashes missing from the index are computed
+    /// off-thread first (onHashed continues here).
+    private void negotiateNextBatch()
+    {
+        if (sending || negotiating || !computer.connected)
+            return;
+        auto ids = index.unsentIds();
+        if (ids.length == 0)
+        {
+            pumpSend();   // nothing to offer — let pumpSend finalise the run
+            return;
+        }
+        if (ids.length > offerBatchN)
+            ids = ids[0 .. offerBatchN];
+        negotiating = true;
+        pendingOfferIds = ids.dup;
+        long[] needHash;
+        string[] paths;
+        foreach (id; ids)
+        {
+            auto p = index.get(id);
+            if (p !is null && !p.hash.length)
+            {
+                needHash ~= id;
+                paths ~= p.path;
+            }
+        }
+        if (needHash.length == 0)
+        {
+            offerBatch();
+            return;
+        }
+        pendingHashIds = needHash;
+        auto hb = new shared(HashBatch);
+        hashing = hb;
+        immutable(string)[] immPaths = paths.idup;
+        import core.thread : Thread;
+        auto t = new Thread({ useCrashStack(); hashFiles(hb, immPaths); });
+        t.name = "hash";
+        t.isDaemon = true;
+        t.start();
+        hashPoll.start();
+    }
+
+    private static void hashFiles(shared(HashBatch)* hb, immutable(string)[] paths)
+    {
+        import std.digest.sha : sha256Of, toHexString, LetterCase;
+
+        // Run behind the UI: hashing a 512-photo batch reads and digests gigabytes, and at
+        // normal priority it starved the render thread — scrolling went to pieces during a
+        // sync. A high nice value hands the phone's cores to the interface first; the sync
+        // just takes a little longer in the background.
+        version (Posix)
+        {
+            import core.sys.posix.sys.resource : setpriority, PRIO_PROCESS;
+
+            setpriority(PRIO_PROCESS, 0, 12);
+        }
+        shared(string)[] out_;
+        foreach (p; paths)
+        {
+            try
+            {
+                auto bytes = cast(ubyte[]) read(p);
+                out_ ~= cast(shared) toHexString!(LetterCase.lower)(sha256Of(bytes)).idup;
+            }
+            catch (Exception)
+                out_ ~= cast(shared) "";
+        }
+        hb.hashes = out_;
+        hb.done = true;
+    }
+
+    private void onHashed()
+    {
+        auto hb = hashing;
+        if (hb is null || !hb.done)
+            return;
+        hashPoll.stop();
+        hashing = null;
+        auto hashes = cast(string[]) hb.hashes;
+        foreach (i, id; pendingHashIds)
+            if (i < hashes.length && hashes[i].length)
+                index.setHash(id, hashes[i]);
+        pendingHashIds = null;
+        offerBatch();
+    }
+
+    private void offerBatch()
+    {
+        JSONValue[] hashes;
+        long[string] idOf;
+        foreach (id; pendingOfferIds)
+        {
+            auto p = index.get(id);
+            if (p !is null && p.hash.length)
+            {
+                hashes ~= JSONValue(p.hash);
+                idOf[p.hash] = id;
+            }
+        }
+        auto batch = pendingOfferIds.dup;
+        pendingOfferIds = null;
+        if (hashes.length == 0)
+        {
+            negotiating = false;
+            foreach (id; batch)
+                queueWanted(id);
+            pumpSend();
+            return;
+        }
+        JSONValue params = ["hashes": JSONValue(hashes)];
+        plog("sync: offering ", hashes.length, " hashes to the computer");
+        syncRequest(probeTimeoutMs, (cb) { computer.request("library.offer", params, cb); }, (r, e) {
+            negotiating = false;
+            if (e.type != JSONType.null_)
+            {
+                // the computer would not negotiate (offline, or an older build): send them all
+                foreach (id; batch)
+                    queueWanted(id);
+                pumpSend();
+                return;
+            }
+            bool[long] handled;
+            if (r.type == JSONType.object && "have" in r && r["have"].type == JSONType.array)
+                foreach (h; r["have"].array)
+                    if (h.type == JSONType.string)
+                        if (auto pid = h.str in idOf)
+                        {
+                            skipped++;
+                            index.markSent(*pid, h.str);
+                            handled[*pid] = true;
+                        }
+            if (r.type == JSONType.object && "refuse" in r && r["refuse"].type == JSONType.array)
+                foreach (h; r["refuse"].array)
+                    if (h.type == JSONType.string)
+                        if (auto pid = h.str in idOf)
+                        {
+                            declined++;
+                            index.markDeclined(*pid);
+                            handled[*pid] = true;
+                        }
+            long wanted;
+            foreach (id; batch)
+                if (id !in handled)
+                {
+                    queueWanted(id);
+                    wanted++;
+                }
+            plog("sync: computer has ", skipped, ", refuses ", declined, ", wants ", wanted, " of this batch");
+            publishSync();
+            pumpSend();
+        });
+    }
+
+    private void queueWanted(long id)
+    {
+        sendQueue ~= id;
+        sendTotal++;
     }
 
     private void pumpSend()
@@ -785,14 +963,20 @@ final class LocalBridge : Bridge
             return;
         if (sendQueue.length == 0)
         {
-            if (sendTotal)
+            // the wanted photos of this batch are done; if more remain, offer the next batch
+            if (!negotiating && computer.connected && index.unsentCount() > 0)
+            {
+                negotiateNextBatch();
+                return;
+            }
+            if (sendTotal || skipped || declined)
             {
                 emit("upload.done", JSONValue(["sent": JSONValue(sent), "failed": JSONValue(sendFailed), "total": JSONValue(sendTotal)]));
-                plog("sync: done — ", sent, " sent, ", skipped, " already there, ", sendFailed, " failed");
+                plog("sync: done — ", sent, " sent, ", skipped, " already there, ", declined, " refused, ", sendFailed, " failed");
                 emit("library.changed", JSONValue.emptyObject);
             }
             index.saveNow();   // the last marks must not wait for the timer: Android may kill us next
-            sent = sendTotal = sendFailed = skipped = 0;
+            sent = sendTotal = sendFailed = skipped = declined = 0;
             publishSync();
             return;
         }
@@ -811,9 +995,28 @@ final class LocalBridge : Bridge
             return;
         }
         sending = true;
-        plog("sync: photo ", id, " (", sent + sendFailed + skipped + 1, " of ", sendTotal, ") preparing");
-        emit("upload.progress", JSONValue(["done": JSONValue(sent + sendFailed + skipped), "total": JSONValue(sendTotal), "id": JSONValue(id)]));
+        plog("sync: photo ", id, " (", sent + sendFailed + 1, " of ", sendTotal, ") preparing");
+        emit("upload.progress", JSONValue(["done": JSONValue(sent + sendFailed), "total": JSONValue(sendTotal), "id": JSONValue(id)]));
         publishSync();
+        // Raw-bytes pipe (libp2p): stream the file on its own stream, no base64 and no giant
+        // JSON line; the metadata rides the normal request with a ticket the desktop pairs up.
+        if (computer.canPush())
+        {
+            immutable ticket = nextTicket++;
+            immutable phash = ph.hash;
+            immutable ppath = ph.path;
+            JSONValue meta = [
+                "name": JSONValue(ph.path.baseName),
+                "takenAt": JSONValue(isoTime(ph.takenTs)),
+                "mtimeMs": JSONValue(ph.mtimeMs),
+                "sha256": JSONValue(phash),
+            ];
+            plog("sync: photo ", id, " pushing ", ph.path.baseName);
+            syncRequest(uploadTimeoutMs, (cb) { computer.uploadFile(ticket, ppath, meta, cb); }, (r2, e2) {
+                finish(id, e2.type == JSONType.null_, e2.type == JSONType.null_ ? null : e2.toString(), phash);
+            });
+            return;
+        }
         // read + hash + base64 on a thread: 15 MB files would stall the UI here
         auto pr = new shared(Prepared);
         pr.id = id;
@@ -871,11 +1074,13 @@ final class LocalBridge : Bridge
 
     private void onSyncTimeout()
     {
-        if (!sending)
+        if (!sending && !negotiating)
             return;
         syncRequestSeq++;   // the pending callback is now a stranger
         plog("sync: no answer from the computer in time — reconnecting");
-        finish(inflightId, false, "timeout", null);
+        if (sending)
+            finish(inflightId, false, "timeout", null);
+        negotiating = false;   // a stalled offer must not wedge the queue; startSync retries the batch
         computer.reconnect();
     }
 
@@ -897,27 +1102,12 @@ final class LocalBridge : Bridge
         }
         immutable hash = cast(string) pr.hash;
         inflightId = id;
-        plog("sync: photo ", id, " ready, asking the computer by hash");
-        JSONValue probe = ["name": JSONValue(cast(string) pr.name), "sha256": JSONValue(hash), "probe": JSONValue(true)];
-        syncRequest(probeTimeoutMs, (cb) { computer.request("library.import", probe, cb); }, (r, e) {
-            if (e.type == JSONType.null_ && r.type == JSONType.object && "existed" in r && r["existed"].type == JSONType.true_)
-            {
-                plog("sync: photo ", id, " already there");
-                skipped++;
-                index.markSent(id, hash);
-                sending = false;
-                pumpSend();
-                return;
-            }
-            if (e.type != JSONType.null_)
-            {
-                finish(id, false, e.toString(), hash);
-                return;
-            }
-            immutable paramsJson = cast(string) pr.paramsJson;
-            syncRequest(uploadTimeoutMs, (cb) { computer.requestRaw("library.import", paramsJson, cb); }, (r2, e2) {
-                finish(id, e2.type == JSONType.null_, e2.type == JSONType.null_ ? null : e2.toString(), hash);
-            });
+        // The batch negotiation (library.offer) already established the computer wants this
+        // one, so no per-photo probe: send the bytes straight away.
+        immutable paramsJson = cast(string) pr.paramsJson;
+        plog("sync: photo ", id, " sending");
+        syncRequest(uploadTimeoutMs, (cb) { computer.requestRaw("library.import", paramsJson, cb); }, (r2, e2) {
+            finish(id, e2.type == JSONType.null_, e2.type == JSONType.null_ ? null : e2.toString(), hash);
         });
     }
 

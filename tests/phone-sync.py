@@ -27,13 +27,24 @@ def call(port, method, params=None):
     s = socket.create_connection(("127.0.0.1", port), timeout=30)
     s.sendall((json.dumps({"id": 1, "method": method, "params": params or {}}) + "\n").encode())
     buf = b""
-    while b"\n" not in buf:
-        chunk = s.recv(65536)
-        if not chunk:
+    r = None
+    while True:
+        while b"\n" not in buf:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+        if b"\n" not in buf:
             break
-        buf += chunk
+        line, buf = buf.split(b"\n", 1)
+        m = json.loads(line)
+        if "event" in m:            # a broadcast can arrive on our socket before the reply — skip it
+            continue
+        r = m
+        break
     s.close()
-    r = json.loads(buf.split(b"\n")[0])
+    if r is None:
+        raise RuntimeError("no response to " + method)
     if r.get("error"):
         raise RuntimeError(r["error"])
     return r.get("result")
@@ -157,12 +168,30 @@ for _ in range(100):
 pairing = call(port2, "phone.pairing", {"enable": True})
 check(len(pairing.get("p2p", [])) > 0 and "#/ip4/" in pairing["code"], "pairing code carries libp2p addresses: " + pairing["code"][-60:])
 shutil.rmtree(os.path.join(tmp, "xdg-data"), ignore_errors=True)   # a fresh phone
+
+import re
+def confirm_pairing(shot, corep):
+    """Act as the person at the desktop: read the code the phone shows, type it in."""
+    lg = phone_log(shot)
+    codes = re.findall(r"pairing code (\d{4})", lg)   # the phone makes a new code per attempt: use the latest
+    mpeer = re.search(r"this phone is (\S+)", lg)
+    if not (codes and mpeer):
+        return False
+    try:
+        return call(corep, "devices.confirm", {"peerId": mpeer.group(1), "code": codes[-1]}).get("ok", False)
+    except Exception:
+        return False
+
 p = phone(25, "p2p.png", {"PW_ENDPOINT": pairing["code"], "PW_SHOT_SEND": "1"})
+confirmed = False
 for _ in range(80):
     time.sleep(0.5)
+    if not confirmed:
+        confirmed = confirm_pairing("p2p.png", port2)
     if "sync: done" in phone_log("p2p.png"):
         break
 stop(p)
+check(confirmed, "desktop authorized the new phone with its 4-digit code")
 log = phone_log("p2p.png")
 check("p2p: connected to" in log, "phone connected over libp2p: " + ([l for l in log.splitlines() if "p2p: connected" in l] or ["no"])[0].split("p2p: ")[-1])
 check("sync: done" in log, "sync over libp2p ran to the end")
@@ -176,8 +205,10 @@ if faces_dir:
     shutil.rmtree(os.path.join(tmp, "xdg-data"), ignore_errors=True)
     e = {"PW_ENDPOINT": pairing["code"], "PW_SHOT_SEND": "1", "PW_PHONE_ROOTS": faces_dir}
     p = phone(25, "faces-sync.png", e)
+    fc = False
     for _ in range(80):
         time.sleep(0.5)
+        if not fc: fc = confirm_pairing("faces-sync.png", port2)
         if "sync: done" in phone_log("faces-sync.png"):
             break
     stop(p)
@@ -193,8 +224,10 @@ if faces_dir:
     check(lena is not None and idx is not None, "the phone's own copy of lena.jpg is photo %s" % lena)
     e2 = dict(e); e2.pop("PW_SHOT_SEND"); e2["PW_SHOT_OPEN"] = str(lena or 1)
     p = phone(20, "faces-open.png", e2)
+    fo = False
     for _ in range(60):
         time.sleep(0.5)
+        if not fo: fo = confirm_pairing("faces-open.png", port2)
         if "faces: " in phone_log("faces-open.png"):
             break
     stop(p)

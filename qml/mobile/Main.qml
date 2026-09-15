@@ -19,22 +19,25 @@ ApplicationWindow {
     title: "Photo Wagon"
     color: theme.bg
 
-    // Material, following the phone's light / dark setting; one palette for both.
-    Material.theme: Material.System
+    // The phone's light / dark setting, read from the platform colour scheme.
+    // (Material.theme is a MODE, so `Material.theme === Material.Dark` was false
+    // even under System — the dark palette below never applied and the white app
+    // bar glared in night mode. styleHints.colorScheme is the resolved scheme.)
+    readonly property bool dark: Qt.styleHints.colorScheme === Qt.Dark
+    Material.theme: root.dark ? Material.Dark : Material.Light
     Material.accent: theme.accent
     Material.primary: theme.panel
     Material.background: theme.bg
     Material.foreground: theme.text
-    readonly property bool dark: Material.theme === Material.Dark
 
     readonly property QtObject theme: QtObject {
-        readonly property color bg: root.dark ? "#121417" : "#f4f5f7"
-        readonly property color panel: root.dark ? "#1b1e24" : "#ffffff"
-        readonly property color panelAlt: root.dark ? "#242830" : "#eceef2"
-        readonly property color border: root.dark ? "#2c313a" : "#dcdfe5"
-        readonly property color text: root.dark ? "#eceef2" : "#1a1d23"
-        readonly property color muted: root.dark ? "#8f97a6" : "#6b7280"
-        readonly property color accent: "#3d8bff"
+        readonly property color bg: root.dark ? "#0e1013" : "#f4f5f7"
+        readonly property color panel: root.dark ? "#16191e" : "#ffffff"
+        readonly property color panelAlt: root.dark ? "#20242b" : "#eaecf0"
+        readonly property color border: root.dark ? "#282d35" : "#e0e3e9"
+        readonly property color text: root.dark ? "#eef1f5" : "#16181c"
+        readonly property color muted: root.dark ? "#8b93a3" : "#6b7280"
+        readonly property color accent: root.dark ? "#4c9dff" : "#0a7aff"
         readonly property color accentText: "#ffffff"
     }
     Icons { id: icons }
@@ -95,10 +98,17 @@ ApplicationWindow {
 
     // An icon button of the app bar: our SVG icons, tinted, no glyph fonts (Android's has none of them).
     component BarButton: ToolButton {
+        id: bb
         required property string icon_
         property string tip: ""
-        implicitWidth: 48
-        implicitHeight: 48
+        implicitWidth: 44
+        implicitHeight: 44
+        background: Rectangle {
+            radius: 10
+            anchors.margins: 3
+            anchors.fill: parent
+            color: bb.pressed ? theme.panelAlt : "transparent"
+        }
         contentItem: Image {
             source: icons.tint(parent.icon_, parent.enabled ? theme.text : theme.muted)
             sourceSize.width: 22; sourceSize.height: 22
@@ -206,8 +216,23 @@ ApplicationWindow {
             faces: root.facesData
             people: root.peopleData
             onClosed: library.closePhoto()
+            onEdit: editView.open(root.current)
             onSend: (id) => library.sendToComputer(id)
             onNameFace: (faceId, personId, name) => library.setFacePerson(faceId, personId, name)
+        }
+
+        // The mini editor, on top of the viewer when open.
+        EditView {
+            id: editView
+            anchors.fill: parent
+            z: 50
+            theme: root.theme
+            icons: icons
+            photo: null
+            visible: photo !== null
+            function open(p) { photo = p }
+            onCancelled: photo = null
+            onSaved: (path) => photo = null
         }
     }
 
@@ -256,6 +281,41 @@ ApplicationWindow {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // First pairing: show the 4-digit code to type on the computer. Stays up until the
+    // desktop confirms (library.pairingCode goes back to {}).
+    Popup {
+        id: pairingCodePopup
+        readonly property var pd: { try { return JSON.parse(library.pairingCode) } catch (e) { return ({}) } }
+        // "Later" hides it for this code; a NEW code (a fresh pairing attempt) shows it again.
+        property string dismissed: ""
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        closePolicy: Popup.NoAutoClose
+        visible: pd.code !== undefined && pd.code !== dismissed
+        padding: 24
+        background: Rectangle { color: theme.panel; border.color: theme.border; radius: 14 }
+        contentItem: ColumnLayout {
+            spacing: 14
+            Label { text: "Confirm on the computer"; font.pixelSize: 18; font.weight: Font.DemiBold; color: theme.text }
+            Label {
+                text: "Type this code in Photo Wagon on the computer to allow this phone. You can keep browsing your own photos meanwhile."
+                color: theme.muted; wrapMode: Text.WordWrap; Layout.preferredWidth: 260
+            }
+            Label {
+                text: pairingCodePopup.pd.code || ""
+                font.pixelSize: 44; font.bold: true; font.letterSpacing: 10
+                color: theme.accent; Layout.alignment: Qt.AlignHCenter
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                BusyIndicator { running: true; implicitWidth: 26; implicitHeight: 26 }
+                Item { Layout.fillWidth: true }
+                Button { text: "Later"; flat: true; onClicked: pairingCodePopup.dismissed = pairingCodePopup.pd.code }
             }
         }
     }

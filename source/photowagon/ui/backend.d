@@ -48,6 +48,9 @@ version (WithUi)
     Signal!() currentChanged;
     Signal!() endpointChanged;
     Signal!() pairingChanged;
+    Signal!() devicesChanged;
+    Signal!() pairingCodeChanged;
+    Signal!() pairingRequestChanged;
     Signal!() peopleChanged;
     Signal!() facesChanged;
     Signal!() filterChanged;
@@ -56,6 +59,7 @@ version (WithUi)
     Signal!() syncChanged;
     Signal!() candidatesChanged;
     Signal!() regionChanged;
+    Signal!() uiStateChanged;
 
     /// {"total":N,"offset":o,"items":[Photo…]} — accumulated across loadPage calls.
     @Property("pageChanged")    string page   = `{"total":0,"offset":0,"items":[]}`;
@@ -85,6 +89,12 @@ version (WithUi)
     @Property("endpointChanged") bool computerConnected = false;
     /// Desktop: {enabled, port, addrs, code, qr:{width, rows}} while a phone may pair.
     @Property("pairingChanged") string pairing = `{"enabled":false}`;
+    /// Desktop: the paired phones — {devices:[{peerId, name, state, pairedAt, lastSeen}]}.
+    @Property("devicesChanged") string devices = `{"devices":[]}`;
+    /// Phone: while first-pairing, {code:"4821"} to show so the desktop can authorize; {} otherwise.
+    @Property("pairingCodeChanged") string pairingCode = "{}";
+    /// Desktop: a phone knocking to be authorized — {peer, name}; {} when none is waiting.
+    @Property("pairingRequestChanged") string pairingRequest = "{}";
     /// {"people":[{id,name,faces,coverUrl}]} — clusters of faces, most photos first.
     @Property("peopleChanged") string people = `{"people":[]}`;
     /// {"places":[{place,country,count,cover}]} — the cities of the library, most photos first
@@ -117,6 +127,10 @@ version (WithUi)
     @Property("regionChanged") string region = `{"id":0}`;
     /// face.candidates for the face being named: {faceId, people: [{id, name, faces, coverUrl, similarity}]}
     @Property("candidatesChanged") string candidates = `{"faceId":0,"people":[]}`;
+    /// The window's own remembered state (geometry, which sections are folded, the last view):
+    /// the QML reads it at startup and writes it back through saveUiState. Kept in a local
+    /// config file, not the library, since it is this desktop's preference, not shared data.
+    @Property("uiStateChanged") string uiState = "{}";
     /// Phone: parsed library.syncStatus — {enabled, connected, active, pending, total, done, sent, skipped, failed, error}
     @Property("syncChanged") string sync = `{"enabled":false,"connected":false,"active":false,"pending":0,"total":0,"done":0,"sent":0,"skipped":0,"failed":0,"error":null}`;
     /// {"year","month","day","personId","albumId","rootId","favorites"} — what the page shows.
@@ -138,6 +152,7 @@ version (WithUi)
     private string fTag;
     private string fKeyword;
     private long fSimilar;   // photos that look like this one (photo.similar), instead of library.page
+    private long lastTimelineHns;   // Clock.currStdTime of the last library.changed refresh (coalescing)
     /// Screenshots and memes stay out of the library timeline (they have their own
     /// views under Media Types); an album, a search or an explicit kind shows everything.
     private bool onlyPhotos = true;
@@ -154,9 +169,49 @@ version (WithUi)
     private string progressText;
 
     /// Second half of construction: runs after newQObject registered us.
+    /// Where the window remembers its state (geometry, folded sections, last view).
+    private string uiStatePath()
+    {
+        import std.process : environment;
+        import std.path : buildPath, expandTilde;
+
+        immutable cfg = environment.get("XDG_CONFIG_HOME", expandTilde("~/.config"));
+        return buildPath(cfg, "photowagon", "ui-state.json");
+    }
+
+    /// QML calls this whenever the window state changes (geometry, a fold, the view).
+    @Slot void saveUiState(string json)
+    {
+        import std.file : write, mkdirRecurse, FileException;
+        import std.path : dirName;
+
+        if (json == uiState)
+            return;
+        uiState = json;
+        try
+        {
+            mkdirRecurse(uiStatePath().dirName);
+            write(uiStatePath(), json);
+        }
+        catch (Exception e)
+            report("saveUiState", JSONValue(e.msg));
+        uiStateChanged.emit();
+    }
+
     void start(Bridge bridge)
     {
         import std.process : environment;
+        import std.file : exists, readText;
+
+        try
+            if (uiStatePath().exists)
+            {
+                uiState = readText(uiStatePath());
+                uiStateChanged.emit();
+            }
+        catch (Exception)
+        {
+        }
         shotPath = environment.get("PW_SHOT", "");
         shotOpenId = environment.get("PW_SHOT_OPEN", "0").to!int;
         shotSend = environment.get("PW_SHOT_SEND", "") == "1";
@@ -769,6 +824,12 @@ version (WithUi)
         });
     }
 
+    /// Phone: rescan the device's photos now (after the editor saved a new file, say).
+    @Slot void rescanPhotos()
+    {
+        client.request("library.rescan", (r, e) { if (e.type == JSONType.null_) loadDates(); });
+    }
+
     @Slot void refresh()
     {
         loadPlaces();
@@ -1017,6 +1078,62 @@ version (WithUi)
         });
     }
 
+    /// Desktop: the paired phones, for the device list.
+    @Slot void loadDevices()
+    {
+        client.request("devices.list", (r, e) {
+            if (e.type != JSONType.null_) { report("devices", e); return; }
+            devices = r.toString();
+            devicesChanged.emit();
+        });
+    }
+
+    private void deviceAction(string method, string peerId, JSONValue extra = JSONValue.emptyObject)
+    {
+        JSONValue params = extra.type == JSONType.object ? extra : JSONValue.emptyObject;
+        params["peerId"] = peerId;
+        client.request(method, params, (r, e) {
+            if (e.type != JSONType.null_) { report(method, e); return; }
+            loadDevices();
+        });
+    }
+
+    @Slot void renameDevice(string peerId, string name)
+    {
+        JSONValue extra = ["name": JSONValue(name)];
+        deviceAction("devices.rename", peerId, extra);
+    }
+
+    /// Desktop: the operator typed the code the knocking phone shows.
+    @Slot void confirmDevice(string peerId, string code)
+    {
+        JSONValue params = ["peerId": JSONValue(peerId), "code": JSONValue(code)];
+        client.request("devices.confirm", params, (r, e) {
+            if (e.type != JSONType.null_) { report("devices.confirm", e); return; }
+            // clear the prompt if it was accepted; on a wrong code leave it up to retry
+            if (r.type == JSONType.object && "ok" in r && r["ok"].type == JSONType.true_)
+            {
+                pairingRequest = "{}";
+                pairingRequestChanged.emit();
+            }
+            loadDevices();
+        });
+    }
+
+    /// Desktop: turn away a knocking phone without pairing it.
+    @Slot void ignorePairing(string peerId)
+    {
+        JSONValue params = ["peerId": JSONValue(peerId), "code": JSONValue("")];   // never matches a 4-digit code
+        client.request("devices.confirm", params, (r, e) {});
+        pairingRequest = "{}";
+        pairingRequestChanged.emit();
+    }
+
+    @Slot void pauseDevice(string peerId) { deviceAction("devices.pause", peerId); }
+    @Slot void resumeDevice(string peerId) { deviceAction("devices.resume", peerId); }
+    @Slot void revokeDevice(string peerId) { deviceAction("devices.revoke", peerId); }
+    @Slot void forgetDevice(string peerId) { deviceAction("devices.forget", peerId); }
+
     /// Phone: push one photo to the computer's library.
     @Slot void sendToComputer(int id)
     {
@@ -1195,6 +1312,7 @@ version (WithUi)
                 }
             });
             refresh();
+            loadDevices();
         }
         setStatus(up, indexing, up ? (progressText.length ? progressText : "connected") : "daemon unreachable, retrying…");
     }
@@ -1219,10 +1337,35 @@ version (WithUi)
             loadRoots();
             reload(0, pageLimit);
             break;
+        case "devices.changed":
+            loadDevices();
+            break;
+        case "pairing.code":
+            // {code} to show while first-pairing, or {done:true} once the desktop confirmed
+            pairingCode = ("done" in data && data["done"].type == JSONType.true_) ? "{}" : data.toString();
+            pairingCodeChanged.emit();
+            break;
+        case "pairing.request":
+            // Desktop: a phone is knocking; show the prompt to enter the code it displays
+            pairingRequest = data.toString();
+            pairingRequestChanged.emit();
+            break;
         case "library.changed":
-            loadDates();
-            loadStats();
-            reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));   // keep what was scrolled to
+            // While a scan runs this fires for every batch of files; refreshing the whole
+            // timeline (page string + date tree + stats) each time re-published a huge page and
+            // reset the grid model every few seconds — "atualizar a biblioteca deixa o app
+            // instável". Coalesce to at most one refresh every 3 s; index.done / upload.done do a
+            // final, unthrottled reload so nothing is left stale at the end.
+            {
+                immutable nowHns = Clock.currStdTime;
+                if (nowHns - lastTimelineHns >= 30_000_000)   // 3 s, in 100 ns ticks
+                {
+                    lastTimelineHns = nowHns;
+                    loadDates();
+                    loadStats();
+                    reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));   // keep what was scrolled to
+                }
+            }
             break;
         case "tags.progress":
             setStatus(true, true, "finding scenes and moods: " ~ data["done"].integer.to!string

@@ -302,6 +302,25 @@ ubyte[] renderEdited(string source, Edits e, int maxEdge, int quality)
 	return (cast(ubyte*) buf)[0 .. len].dup;
 }
 
+/// A small JPEG (longest edge `size`) of in-memory JPEG bytes — NOT stored, returned raw.
+/// For inlining portraits over the phone link, where a 4 MB response of full-size crops
+/// stalls the yamux stream past the phone's liveness timeout. Throws on failure.
+ubyte[] smallJpegOfBytes(const(ubyte)[] bytes, int size, int quality)
+{
+	void* thumb;
+	if (vips_thumbnail_buffer(cast(void*) bytes.ptr, bytes.length, &thumb, size, "height".ptr, size, null) != 0)
+		throw new Exception("thumbnail: " ~ vipsError());
+	scope (exit)
+		g_object_unref(thumb);
+	void* buf;
+	size_t len;
+	if (vips_jpegsave_buffer(thumb, &buf, &len, "Q".ptr, quality, "strip".ptr, 1, null) != 0)
+		throw new Exception("jpegsave: " ~ vipsError());
+	scope (exit)
+		g_free(buf);
+	return (cast(ubyte*) buf)[0 .. len].dup;
+}
+
 /// A thumbnail (longest edge `size`) of JPEG bytes, stored; returns the hash and the size.
 ThumbResult thumbnailOfBytes(const(ubyte)[] bytes, string storeRoot, int size)
 {

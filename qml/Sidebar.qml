@@ -59,7 +59,8 @@ Rectangle {
     }
     function monthName(m) { return new Date(2000, m - 1, 1).toLocaleDateString(Qt.locale(), "MMMM") }
 
-    // Which sections are folded (the user's choice, kept for the session).
+    // Which sections are folded (the user's choice, remembered between sessions via
+    // foldsChanged → Main → library.saveUiState, restored by restoreFolds at startup).
     property bool datesOpen: true
     property bool peopleOpen: true
     property bool placesOpen: true
@@ -67,6 +68,27 @@ Rectangle {
     property bool keywordsOpen: true
     function toggleTags(g) { const o = Object.assign({}, tagsOpen); o[g] = !o[g]; tagsOpen = o }
     property bool albumsOpen: true
+
+    signal foldsChanged()
+    onDatesOpenChanged: foldsChanged()
+    onPeopleOpenChanged: foldsChanged()
+    onPlacesOpenChanged: foldsChanged()
+    onKeywordsOpenChanged: foldsChanged()
+    onAlbumsOpenChanged: foldsChanged()
+    onTagsOpenChanged: foldsChanged()
+    function foldSnapshot() {
+        return { dates: datesOpen, people: peopleOpen, places: placesOpen,
+                 keywords: keywordsOpen, albums: albumsOpen, tags: tagsOpen }
+    }
+    function restoreFolds(o) {
+        if (!o) return
+        if (o.dates !== undefined) datesOpen = o.dates
+        if (o.people !== undefined) peopleOpen = o.people
+        if (o.places !== undefined) placesOpen = o.places
+        if (o.keywords !== undefined) keywordsOpen = o.keywords
+        if (o.albums !== undefined) albumsOpen = o.albums
+        if (o.tags) tagsOpen = o.tags
+    }
 
     component SectionHeader: Item {
         required property string title
@@ -99,6 +121,22 @@ Rectangle {
         }
         HoverHandler { id: headerHover }
         TapHandler { enabled: parent.collapsible; onTapped: parent.toggled() }
+    }
+
+    // A section body that folds with an animated slide: it clips to a height that eases
+    // between the content's full height (open) and 0 (folded). Put the section's rows
+    // straight inside it. The rows stay built while folded (they are cheap and few), so
+    // there is content to slide; the lazy year→month→day drill-down below is unaffected.
+    component Collapser: Item {
+        id: col
+        property bool open: true
+        default property alias content: inner.data
+        width: parent ? parent.width : 0
+        clip: true
+        implicitHeight: inner.implicitHeight
+        height: open ? inner.implicitHeight : 0
+        Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+        Column { id: inner; width: col.width }
     }
 
     // One line of the list: a highlight, an icon or a portrait, a title and a detail.
@@ -230,8 +268,10 @@ Rectangle {
                 collapsible: true; open: sidebar.datesOpen
                 onToggled: sidebar.datesOpen = !sidebar.datesOpen
             }
+            Collapser {
+            open: sidebar.datesOpen
             Repeater {
-                model: sidebar.datesOpen ? sidebar.dates.years : []
+                model: sidebar.dates.years
                 delegate: Column {
                     id: yearNode
                     required property var modelData
@@ -299,6 +339,7 @@ Rectangle {
                     }
                 }
             }
+            }
 
             // ---- named people ------------------------------------------------------------
             SectionHeader {
@@ -306,8 +347,10 @@ Rectangle {
                 collapsible: true; open: sidebar.peopleOpen
                 onToggled: sidebar.peopleOpen = !sidebar.peopleOpen
             }
+            Collapser {
+            open: sidebar.peopleOpen
             Repeater {
-                model: sidebar.peopleOpen ? sidebar.namedPeople : []
+                model: sidebar.namedPeople
                 delegate: PersonRow {
                     key: "person:" + modelData.id
                     title: modelData.name
@@ -316,6 +359,7 @@ Rectangle {
                     detail: String(modelData.faces)
                 }
             }
+            }
 
             // ---- places ------------------------------------------------------------------
             SectionHeader {
@@ -323,8 +367,10 @@ Rectangle {
                 collapsible: true; open: sidebar.placesOpen
                 onToggled: sidebar.placesOpen = !sidebar.placesOpen
             }
+            Collapser {
+            open: sidebar.placesOpen
             Repeater {
-                model: sidebar.placesOpen ? sidebar.places : []
+                model: sidebar.places
                 delegate: Row {
                     required property var modelData
                     key: "place:" + modelData.place + "|" + (modelData.country || "")
@@ -333,6 +379,7 @@ Rectangle {
                     detail: String(modelData.count)
                 }
             }
+            }
 
             // ---- the user's own tags -----------------------------------------------------------
             SectionHeader {
@@ -340,8 +387,10 @@ Rectangle {
                 collapsible: true; open: sidebar.keywordsOpen
                 onToggled: sidebar.keywordsOpen = !sidebar.keywordsOpen
             }
+            Collapser {
+            open: sidebar.keywordsOpen
             Repeater {
-                model: sidebar.keywordsOpen ? sidebar.keywords : []
+                model: sidebar.keywords
                 delegate: Row {
                     required property var modelData
                     key: "keyword:" + modelData.keyword
@@ -349,6 +398,7 @@ Rectangle {
                     icon: icons.hash
                     detail: String(modelData.count)
                 }
+            }
             }
 
             // ---- scenes, moods, weather, holidays (CLIP zero-shot tags + the calendar) -----------
@@ -366,8 +416,10 @@ Rectangle {
                         collapsible: true; open: tagSection.open
                         onToggled: sidebar.toggleTags(tagSection.modelData.group)
                     }
+                    Collapser {
+                    open: tagSection.open
                     Repeater {
-                        model: tagSection.open ? tagSection.items : []
+                        model: tagSection.items
                         delegate: Row {
                             required property var modelData
                             key: tagSection.modelData.group + ":" + modelData.tag
@@ -375,6 +427,7 @@ Rectangle {
                             icon: tagSection.modelData.icon
                             detail: String(modelData.count)
                         }
+                    }
                     }
                 }
             }
@@ -389,8 +442,10 @@ Rectangle {
                 collapsible: true; open: sidebar.albumsOpen
                 onToggled: sidebar.albumsOpen = !sidebar.albumsOpen
             }
+            Collapser {
+            open: sidebar.albumsOpen
             Repeater {
-                model: sidebar.albumsOpen ? sidebar.albums : []
+                model: sidebar.albums
                 delegate: Row {
                     required property var modelData
                     key: "album:" + modelData.id
@@ -398,6 +453,7 @@ Rectangle {
                     icon: icons.album
                     detail: String(modelData.photos)
                 }
+            }
             }
 
             SectionHeader { title: "Devices" }

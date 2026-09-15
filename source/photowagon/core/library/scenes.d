@@ -170,6 +170,8 @@ final class SceneService
 	bool available;
 	/// Called with the photos whose tags the user changed (the file tag writer listens).
 	void delegate(const(long)[] ids) onUserChange;
+	/// Called after a pass finishes (embeddings are current): the place model runs here.
+	void delegate() onDone;
 
 	this(Config cfg, Database db, PhotoRepo photos, ContentStore store, Events events)
 	{
@@ -243,6 +245,8 @@ final class SceneService
 				loaded = false;
 				logInfo("scenes: CLIP worker released");
 			}
+			if (onDone)
+				onDone();
 		});
 	}
 

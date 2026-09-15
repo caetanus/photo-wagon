@@ -140,11 +140,17 @@ public class MainActivity extends QtActivity
      */
     private void requestPhotos()
     {
-        String permission = Build.VERSION.SDK_INT >= 33
-            ? "android.permission.READ_MEDIA_IMAGES"
-            : "android.permission.READ_EXTERNAL_STORAGE";
-        if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED)
-            requestPermissions(new String[] { permission }, REQUEST_PHOTOS);
+        // On Android 13+ photos and videos are separate permissions: ask for both, or the
+        // camera's videos stay invisible to the scan (they need READ_MEDIA_VIDEO).
+        String[] permissions = Build.VERSION.SDK_INT >= 33
+            ? new String[] { "android.permission.READ_MEDIA_IMAGES", "android.permission.READ_MEDIA_VIDEO" }
+            : new String[] { "android.permission.READ_EXTERNAL_STORAGE" };
+        boolean needAsk = false;
+        for (String p : permissions)
+            if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED)
+                needAsk = true;
+        if (needAsk)
+            requestPermissions(permissions, REQUEST_PHOTOS);
     }
 
     @Override

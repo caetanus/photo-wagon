@@ -45,6 +45,20 @@ abstract class Bridge
     /// True when photos live on another machine and must travel as bytes.
     bool remote() const { return false; }
 
+    /// True when this transport can stream raw file bytes on a side channel, so a photo or
+    /// video need not be base64'd into a JSON line. `uploadFile` is only called when true.
+    bool canPush() const { return false; }
+
+    /// Streams `path`'s raw bytes to the computer under `ticket`, then sends a
+    /// `library.import` with `meta` ({name, takenAt, sha256, ticket}); `cb` gets the import
+    /// result. Only meaningful when `canPush()`; the default refuses.
+    void uploadFile(long ticket, string path, JSONValue meta, ResultCb cb)
+    {
+        cb(JSONValue(null), JSONValue([
+            "code": JSONValue("unsupported"), "message": JSONValue("no push on this transport")
+        ]));
+    }
+
     // ---- shared plumbing for line-based transports ----------------------------------
 
     protected ResultCb[long] pending;

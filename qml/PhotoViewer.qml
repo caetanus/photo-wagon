@@ -325,32 +325,39 @@ Item {
                     const s = Math.floor(ms / 1000)
                     return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2)
                 }
+                // A crisp filled play triangle (the "▶" glyph rendered thin and off-centre).
+                readonly property string playGlyph: "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#ffffff"><path d="M8 5v14l11-7z"/></svg>')
                 MediaPlayer {
                     id: mp
                     source: viewer.photo ? (viewer.photo.fileUrl || "") : ""
                     videoOutput: vout
-                    audioOutput: AudioOutput { }
+                    audioOutput: AudioOutput { id: aout; muted: mp.priming }
+                    // Prime the first frame (play muted to the first frame, then pause to 0) so a
+                    // paused poster shows even when no stored thumbnail is available.
+                    property bool priming: true
+                    onMediaStatusChanged: if (mediaStatus === MediaPlayer.LoadedMedia && priming && position === 0) play()
+                    onPositionChanged: if (priming && position > 0) { pause(); position = 0; priming = false }
                 }
                 VideoOutput { id: vout; anchors.fill: parent; fillMode: VideoOutput.PreserveAspectFit }
-                Image {   // the frame, until the video is playing
+                Image {   // a stored thumbnail, if one exists, over the primed first frame
                     anchors.fill: parent
                     source: viewer.photo ? (viewer.photo.thumbUrl || "") : ""
                     fillMode: Image.PreserveAspectFit
-                    visible: mp.playbackState !== MediaPlayer.PlayingState && mp.position === 0
+                    visible: source != "" && mp.playbackState !== MediaPlayer.PlayingState && mp.position === 0
                 }
-                TapHandler { onTapped: mp.playbackState === MediaPlayer.PlayingState ? mp.pause() : mp.play() }
+                TapHandler { onTapped: { mp.priming = false; mp.playbackState === MediaPlayer.PlayingState ? mp.pause() : mp.play() } }
                 Rectangle {   // the big play / pause glyph in the middle
                     anchors.centerIn: parent
                     width: 76; height: 76; radius: 38
                     color: Qt.rgba(0, 0, 0, 0.5)
                     visible: mp.playbackState !== MediaPlayer.PlayingState
-                    Text {
+                    Image {
                         anchors.centerIn: parent
-                        text: "▶"
-                        color: "white"
-                        font.pixelSize: 34
+                        anchors.horizontalCenterOffset: 3   // optical centre of a triangle
+                        source: vplayer.playGlyph
+                        sourceSize.width: 34; sourceSize.height: 34
                     }
-                    TapHandler { onTapped: mp.play() }
+                    TapHandler { onTapped: { mp.priming = false; mp.play() } }
                 }
                 Row {   // playback speed
                     anchors.top: parent.top; anchors.right: parent.right; anchors.margins: 14

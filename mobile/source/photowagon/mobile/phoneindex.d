@@ -728,31 +728,49 @@ final class PhoneIndex
         timed("index.save", 30, { saveTimed(); });
     }
 
+    private shared bool saving;   // a background save is writing (skip overlapping saves)
+
     private void saveTimed()
     {
-        if (!dirty)
+        if (!dirty || saving)
             return;
-        JSONValue[] arr;
-        arr.reserve(photos.length);
-        foreach (ref p; photos)
-            arr ~= JSONValue([
-                "id": JSONValue(p.id), "path": JSONValue(p.path), "size": JSONValue(p.size),
-                "mtime": JSONValue(p.mtimeMs), "takenTs": JSONValue(p.takenTs), "w": JSONValue(p.width),
-                "h": JSONValue(p.height), "o": JSONValue(p.orientation),
-                "thumb": p.thumb is null ? JSONValue(null) : JSONValue(p.thumb), "sent": JSONValue(p.sent), "declined": JSONValue(p.declined), "hash": p.hash.length ? JSONValue(p.hash) : JSONValue(null), "tries": JSONValue(p.tries),
-                "video": JSONValue(p.isVideo), "duration": JSONValue(p.durationMs),
-            ]);
-        JSONValue j = ["nextId": JSONValue(nextId), "photos": JSONValue(arr)];
-        try
-        {
-            write(indexFile ~ ".tmp", j.toString());
-            import std.file : rename;
-            rename(indexFile ~ ".tmp", indexFile);
-            dirty = false;
-        }
-        catch (Exception e)
-        {
-            plog("phone: cannot save index: ", e.msg);
-        }
+        // Serialising 3,000+ photos to a 1.3 MB JSON string on the Qt thread blocked it for
+        // 70–200 ms per save. On this device that stall during startup made Android release the
+        // window surface — the app went black while still alive. Snapshot the photos here (cheap:
+        // value types with immutable strings) and serialise + write on a worker thread, so the
+        // Qt thread stays responsive and the surface survives.
+        auto snapshot = photos.dup;
+        immutable nId = nextId;
+        immutable file = indexFile;
+        dirty = false;
+        saving = true;
+        import core.thread : Thread;
+        auto t = new Thread({
+            useCrashStack();
+            JSONValue[] arr;
+            arr.reserve(snapshot.length);
+            foreach (ref p; snapshot)
+                arr ~= JSONValue([
+                    "id": JSONValue(p.id), "path": JSONValue(p.path), "size": JSONValue(p.size),
+                    "mtime": JSONValue(p.mtimeMs), "takenTs": JSONValue(p.takenTs), "w": JSONValue(p.width),
+                    "h": JSONValue(p.height), "o": JSONValue(p.orientation),
+                    "thumb": p.thumb is null ? JSONValue(null) : JSONValue(p.thumb), "sent": JSONValue(p.sent),
+                    "declined": JSONValue(p.declined), "hash": p.hash.length ? JSONValue(p.hash) : JSONValue(null),
+                    "tries": JSONValue(p.tries), "video": JSONValue(p.isVideo), "duration": JSONValue(p.durationMs),
+                ]);
+            JSONValue j = ["nextId": JSONValue(nId), "photos": JSONValue(arr)];
+            try
+            {
+                write(file ~ ".tmp", j.toString());
+                import std.file : rename;
+                rename(file ~ ".tmp", file);
+            }
+            catch (Exception e)
+                plog("phone: cannot save index: ", e.msg);
+            saving = false;
+        });
+        t.name = "index-save";
+        t.isDaemon = true;
+        t.start();
     }
 }

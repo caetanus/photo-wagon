@@ -1,11 +1,13 @@
 // PhoneIndex — the phone's own photos: DCIM/ and Pictures/ scanned in D,
 // capture time and orientation from the pure-D EXIF reader, thumbnails
-// decoded by Qt (QImageReader, DCT-scaled, EXIF-rotated) into the cache dir.
+// decoded by Qt (QImageReader, DCT-scaled, EXIF-rotated) into the data dir.
 //
-// Decoding runs on a few worker threads (value types and files only); the Qt
-// thread merges their results from a timer, so the UI stays responsive and no
-// QObject is ever touched off-thread. The index is a JSON file in the app's
-// data dir; a rescan only decodes what is new or changed.
+// Decoding runs on the Qt thread in time-bounded slices (a timer yields to the
+// event loop between slices) — never on worker threads: QImageReader/QImage off
+// the Qt thread loses the GL surface on Adreno (black window, app still alive).
+// Video frames come from the Android platform via the JNI shim (videothumb.c).
+// The index is a JSON file in the app's data dir; a rescan only decodes what is
+// new or changed.
 module photowagon.mobile.phoneindex;
 
 import photowagon.mobile.plog : plog, timed, useCrashStack;
@@ -29,6 +31,11 @@ import core.time : MonoTime, seconds;
 import photowagon.core.indexer.scan : Candidate, scanImages;
 import photowagon.core.library.calendar : dateRange, fileUrl, isoTime, localDate;
 import photowagon.core.metadata.exifparse : readExifCore, parseExifTimestamp;
+
+// videothumb.c: a representative frame of a video, saved as a JPEG scaled to fit
+// maxSize, via the Android MediaMetadataRetriever. Returns the duration in ms
+// (>= 0) or -1 on failure. `env` is a JNIEnv* from QJniEnvironment.getJniEnv().
+private extern(C) long pw_video_thumb(void* env, const(char)* videoPath, const(char)* outPath, int maxSize);
 
 struct PhonePhoto
 {
@@ -388,17 +395,29 @@ final class PhoneIndex
     private static PhonePhoto decode(Candidate c, string thumbDir, QImageReader reader, QImage img)
     {
         PhonePhoto p;
-        // a video: no EXIF, no frame thumbnail here (no ffmpeg on the phone). It shows a play
-        // placeholder in the grid and plays in the viewer; the computer makes a real frame
-        // thumbnail when it receives it on sync.
+        // a video: no ffmpeg on the phone, so the frame comes from the Android platform
+        // (MediaMetadataRetriever via the JNI shim). On failure it falls back to the grey tile
+        // + play glyph, and the computer still makes its own frame thumbnail on sync.
         if (c.isVideo)
         {
             import photowagon.core.metadata.datefromname : dateFromPath;
+            import std.string : toStringz;
+            import qt.quick.qjnienvironment : QJniEnvironment;
 
             immutable named = dateFromPath(c.path);
             p.takenTs = named ? named : c.mtimeMs / 1000;
             p.isVideo = true;
-            p.thumb = null;
+
+            immutable vthumb = buildPath(thumbDir, toHexString!(LetterCase.lower)(sha1Of(c.path ~ "@" ~ c.mtimeMs.to!string)).idup ~ ".jpg");
+            auto env = QJniEnvironment.getJniEnv();
+            immutable dur = pw_video_thumb(cast(void*) env, c.path.toStringz, vthumb.toStringz, 512);
+            if (dur >= 0 && vthumb.exists)
+            {
+                p.thumb = vthumb;
+                p.durationMs = dur;
+            }
+            else
+                p.thumb = null;
             return p;
         }
         auto exif = readExifCore(c.path);

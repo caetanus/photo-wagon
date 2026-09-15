@@ -55,6 +55,10 @@ link() {
     # -relocation-model=pic: everything in a .so must be PIC (the binding archive was built so too).
     # qrc.d is compiled in (not only imported) or the link wants "ModuleInfo for qrc".
     cd "$HERE"
+    # videothumb.c: Android video frame thumbnails via JNI (MediaMetadataRetriever).
+    # Compiled with the NDK clang for this ABI/API and linked into the .so below.
+    CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/${TRIPLE}35-clang"
+    "$CC" -c -fPIC -O2 "$HERE/jni/videothumb.c" -o "$OUT/videothumb_$ABI.o"
     ldc2 -conf="$LDC_CONF" -mtriple=$TRIPLE -shared -relocation-model=pic -O \
         -d-version=PhotoWagonMobile \
         -of="$OUT/lib${APP}_${ABI}.so" \
@@ -71,6 +75,7 @@ link() {
         -Isource -I../source -I"$GEN" -I"$DSIDE/runtime/qrc" -J=../qml \
         -L--gc-sections -L--as-needed \
         -L--start-group -L="$BUILD/libbinding_ldc2.a" -L="$BUILD/libshims.a" -L--end-group \
+        -L="$OUT/videothumb_$ABI.o" \
         -L="$HERE/toolchain/android-libs/$ABI_DIR/libsodium.a" \
         -L-L"$QT_ANDROID/lib" \
         -L-lQt6Quick_${ABI} -L-lQt6QmlModels_${ABI} -L-lQt6Qml_${ABI} -L-lQt6Network_${ABI} \

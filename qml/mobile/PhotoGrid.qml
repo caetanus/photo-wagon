@@ -19,6 +19,8 @@ Item {
     property bool requesting: false
     // the "already on the computer" check mark, built once and shared by every cell
     readonly property string checkIcon: "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>')
+    // A crisp filled play triangle — the same glyph the viewer uses, not the "▶" char.
+    readonly property string playGlyph: "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#ffffff"><path d="M8 5v14l11-7z"/></svg>')
 
     signal loadMore()
     signal open(int id)
@@ -106,9 +108,16 @@ Item {
             Rectangle {
                 visible: cell.video
                 anchors.centerIn: parent
-                width: 34; height: 34; radius: 17
+                width: 38; height: 38; radius: 19
                 color: Qt.rgba(0, 0, 0, 0.42)
-                Text { anchors.centerIn: parent; text: "▶"; color: "white"; font.pixelSize: 15 }
+                border.width: 1.5
+                border.color: Qt.rgba(1, 1, 1, 0.85)
+                Image {
+                    anchors.centerIn: parent
+                    anchors.horizontalCenterOffset: 1   // optical centre of a triangle
+                    source: grid.playGlyph
+                    sourceSize.width: 17; sourceSize.height: 17
+                }
             }
             Rectangle {
                 visible: cell.video && cell.duration > 0

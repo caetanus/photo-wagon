@@ -138,10 +138,8 @@ final class PhoneIndex
     }
 
     private Mutex lock;
-    private Candidate[] work;       // under lock: what the workers still have to decode
-    private Decoded[] results;      // under lock: decoded, not yet merged
+    private Candidate[] work;       // under lock: candidates still to decode (drained on the Qt thread)
     private uint generation;
-    private int workers;            // under lock: threads alive
     private bool walking;           // under lock: a walk thread is running
     private bool walkDone;          // under lock: `walked` is ready
     private Candidate[] walked;     // under lock
@@ -152,6 +150,12 @@ final class PhoneIndex
     private MonoTime lastChange;    // the last library.changed while decoding
 
     enum maxWorkers = 3;
+
+    // Decoding runs on the Qt thread (see stepTimed): QImageReader/QImage on a worker thread
+    // loses the GL surface on some GPUs (Adreno). One reader/image, reused across the run.
+    private QImageReader decodeReader;
+    private QImage decodeImg;
+    private bool decodeReady;
 
     /// Walks the roots on a thread (2,900 files take 2–3 s on the phone) and,
     /// back on the Qt thread, starts decoding what is new on the workers.
@@ -229,7 +233,6 @@ final class PhoneIndex
         {
             generation++;
             work = todo;
-            results.length = 0;
         }
         queued = todo.length;
         processed = 0;
@@ -239,9 +242,9 @@ final class PhoneIndex
         started = MonoTime.currTime;
         plog("phone: ", found.length, " files, ", queued, " to decode, ", removed, " gone");
         if (onProgress) onProgress(0, queued);
-        if (queued)
-            startWorkers();
-        else
+        // Decoding happens on the Qt thread in stepTimed (the pump is already running); no
+        // worker threads — QImageReader/QImage off the Qt thread loses the surface on Adreno.
+        if (!queued)
         {
             if (dirty) saveNow();
             if (removed && onChanged) onChanged();
@@ -250,74 +253,18 @@ final class PhoneIndex
         if (onScanned) onScanned(found.length);
     }
 
-    private void startWorkers()
-    {
-        import core.thread : Thread;
-        import std.parallelism : totalCPUs;
-
-        immutable want = cast(int) (totalCPUs > 1 ? (totalCPUs - 1 < maxWorkers ? totalCPUs - 1 : maxWorkers) : 1);
-        synchronized (lock)
-        {
-            while (workers < want)
-            {
-                workers++;
-                auto t = new Thread(&worker);
-                t.name = "decode";
-                t.isDaemon = true;
-                t.start();
-            }
-        }
-    }
-
-    /// One worker: takes candidates until there are none, decodes each, posts the result.
-    /// One reader and one image for the whole run: the binding never frees a QImage or
-    /// a QImageReader (no deleter yet), so one per photo leaked the decoded pixels and an
-    /// open file each — 2,000 photos were a gigabyte and a half. Reused, Qt releases the
-    /// previous pixels on the next read() and the previous file on the next setFileName().
-    private void worker()
-    {
-        useCrashStack();
-        auto reader = make!QImageReader();
-        auto img = new QImage();
-        for (;;)
-        {
-            Candidate c;
-            uint gen;
-            synchronized (lock)
-            {
-                if (work.length == 0)
-                {
-                    workers--;
-                    return;
-                }
-                c = work[0];
-                work = work[1 .. $];
-                gen = generation;
-            }
-            Decoded d;
-            d.c = c;
-            d.gen = gen;
-            try
-                d.p = decode(c, thumbDir, reader, img);
-            catch (Exception e)
-                d.error = e.msg;
-            synchronized (lock)
-                results ~= d;
-        }
-    }
-
-    /// Qt thread, every few ms while decoding: merges what the workers produced.
+    /// Qt thread, every few ms: process a finished walk, then decode a time-bounded slice of
+    /// thumbnails HERE (not on worker threads — QImageReader/QImage off the Qt thread loses the
+    /// GL surface on Adreno: the app keeps running but the window goes black). One reader/image,
+    /// reused. The slice yields to the event loop so the surface and input keep flowing.
     private void step() { timed("index.step", 30, { stepTimed(); }); }
 
     private void stepTimed()
     {
-        Decoded[] batch;
         Candidate[] found;
         bool haveWalk, stillWalking;
         synchronized (lock)
         {
-            batch = results;
-            results = null;
             if (walkDone)
             {
                 found = walked;
@@ -330,28 +277,60 @@ final class PhoneIndex
         }
         if (haveWalk)
             afterWalk(found);
-        foreach (ref d; batch)
+
+        if (work.length)
         {
-            if (d.gen != generation)
-                continue;
-            processed++;
-            if (d.error.length)
-                plog("phone: ", d.c.path, ": ", d.error);
-            else
-                merge(d);
+            if (!decodeReady)
+            {
+                decodeReader = make!QImageReader();
+                decodeImg = new QImage();
+                decodeReady = true;
+            }
+            uint gen;
+            synchronized (lock)
+                gen = generation;
+            immutable sliceStart = MonoTime.currTime;
+            bool did;
+            while (true)
+            {
+                Candidate c;
+                synchronized (lock)
+                {
+                    if (work.length == 0)
+                        break;
+                    c = work[0];
+                    work = work[1 .. $];
+                }
+                Decoded d;
+                d.c = c;
+                d.gen = gen;
+                try
+                    d.p = decode(c, thumbDir, decodeReader, decodeImg);
+                catch (Exception e)
+                    d.error = e.msg;
+                processed++;
+                did = true;
+                if (d.error.length)
+                    plog("phone: ", d.c.path, ": ", d.error);
+                else if (d.gen == generation)
+                    merge(d);
+                if ((MonoTime.currTime - sliceStart).total!"msecs" >= 12)
+                    break;   // yield: keep a frame budget so the surface and events keep flowing
+            }
+            if (did && onProgress)
+                onProgress(processed, queued);
+            if (processed - lastProgress >= 100 || processed >= queued)
+            {
+                lastProgress = processed;
+                import core.memory : GC;
+                auto gs = GC.profileStats();
+                plog("phone: decoded ", processed, "/", queued, " in ", (MonoTime.currTime - started).total!"msecs" / 1000.0,
+                    " s; gc ", gs.numCollections, " collections, paused ", gs.totalPauseTime.total!"msecs", " ms, max ",
+                    gs.maxPauseTime.total!"msecs", " ms; heap ", GC.stats().usedSize / 1048576, " MB");
+            }
         }
-        if (batch.length && onProgress)
-            onProgress(processed, queued);
-        if (processed - lastProgress >= 100 || (batch.length && processed >= queued))
-        {
-            lastProgress = processed;
-            import core.memory : GC;
-            auto gs = GC.profileStats();
-            plog("phone: decoded ", processed, "/", queued, " in ", (MonoTime.currTime - started).total!"msecs" / 1000.0,
-                " s; gc ", gs.numCollections, " collections, paused ", gs.totalPauseTime.total!"msecs", " ms, max ",
-                gs.maxPauseTime.total!"msecs", " ms; heap ", GC.stats().usedSize / 1048576, " MB");
-        }
-        if (processed >= queued)
+
+        if (work.length == 0 && processed >= queued)
         {
             if (stillWalking)
                 return;

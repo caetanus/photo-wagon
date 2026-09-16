@@ -31,7 +31,8 @@ fetched album are not pulled, only thumbnails.
   (OpenCV 5 has no C API for them); scan runs on worker threads after every index job
 - [x] clustering by cosine similarity (SFace threshold 0.363), face crops in the store
 - [x] UI: People list in the sidebar (filter, rename), face boxes in the viewer with "Who is this?"
-- [ ] batch naming ("is this the same person?"), per-person cover choice
+- [x] batch naming ("is this the same person?" — suggestMerge after naming, people.similar + people.merge)
+  and per-person cover choice (people.setCover) — done
 - [ ] faces in photos fetched from peers (only local originals are scanned)
 
 ## M4 — Editor
@@ -74,7 +75,12 @@ fetched album are not pulled, only thumbnails.
 - [ ] Phone: the libp2p event loop still ends with vibe's "May not process events within an active yieldLock()" once per session on Android; a fresh thread takes over, the cause is open
 - [x] Scenes and moods: CLIP zero-shot tags (2026-09-11)
 - [x] Tags on photos (chips, keywords) and non-destructive editing: filters, adjust, rotate, crop (2026-09-11)
-- [x] Places (city from GPS via an offline GeoNames table, or "Set Place…" by hand); [ ] a map view
+- [x] Places (city from GPS via an offline GeoNames table, or "Set Place…" by hand)
+- [~] a map view — parked: the DSide binding has no QtLocation module, and this library has GPS on ~1
+  photo (places here are hand-set, e.g. "Casa"), so a map would show one pin. Revisit if GPS coverage grows.
+- Natural-language (CLIP) search — parked: the CLIP shim (csrc/clip_opencv.cpp) encodes images only; a
+  text query would need a CLIP text encoder + BPE tokenizer + model. Text search already matches scene/mood
+  tags, keywords, people, albums and dates (Main.qml), which covers most of the value without a new model.
 - [x] Memories: curated auto-collections (On This Day, throwbacks, top places/people, recurring moments),
   computed on the fly and mapping to ordinary filters — 2026-09-16
 - Flatpak / AppImage, caching, startup time

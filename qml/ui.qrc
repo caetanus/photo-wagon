@@ -9,6 +9,7 @@
     <file>PhotoViewer.qml</file>
     <file>PeopleView.qml</file>
     <file>PlacesView.qml</file>
+    <file>MemoriesView.qml</file>
     <file>PlaceDialog.qml</file>
     <file>KeywordDialog.qml</file>
     <file>EditPanel.qml</file>

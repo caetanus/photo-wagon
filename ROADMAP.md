@@ -66,7 +66,10 @@ fetched album are not pulled, only thumbnails.
 - [x] Desktop: the library timeline is photographs only (screenshots and memes under Media Types), Shift-click / Shift+arrows / Ctrl+A selection, a row-and-a-half wheel step with touchpad deltas, pages of 240 fetched ahead, full screen leaves again, SIGTERM ends the process — 2026-09-11
 - [x] Dates: a photo without EXIF is dated from its name (IMG_20210321_150104, IMG-20200213-WA0000, Screenshot_2020-10-07-…, PXL_…) or its folder (2020/02/13) before the file's mtime; a one-time pass at startup re-dates what was already indexed (2,314 of the user's 2,386 EXIF-less photos left 2026) — 2026-09-11
 - [x] Delete → the desktop's trash, Shift+Delete → gone for good (asked first); also in the context menu; the photos leave the library with their faces and album entries — 2026-09-11
-- [ ] Phone: videos from the camera roll (index, thumbnails, playback, sync)
+- [x] Phone: videos from the camera roll — index (isVideo in the D scan), thumbnails (a real frame
+  via Android MediaMetadataRetriever through a C/JNI shim, since there is no ffmpeg on the phone),
+  playback (MediaPlayer in the viewer with a primed first-frame poster) and sync (raw bytes over the
+  `/photowagon/push/1.0.0` pipe, no base64) — 2026-09-16
 - [ ] Phone: the computer found without the QR (LAN beacon / DHT), faces cached for offline
 - [ ] Phone: the libp2p event loop still ends with vibe's "May not process events within an active yieldLock()" once per session on Android; a fresh thread takes over, the cause is open
 - [x] Scenes and moods: CLIP zero-shot tags (2026-09-11)

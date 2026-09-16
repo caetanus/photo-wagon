@@ -63,6 +63,7 @@ struct Filter
 	string tagGroup; // photos carrying one tag: scene | mood | weather | holiday …
 	string tag;      // … with this value; null = any
 	string keyword;  // photos carrying one of the user's own tags; null = any
+	string monthDay; // "MM-DD": photos taken on this calendar day in any year (for "On This Day")
 }
 
 struct Neighbours
@@ -544,6 +545,11 @@ final class PhotoRepo
 			w.where ~= " AND EXISTS (SELECT 1 FROM photo_tags tg WHERE tg.photo_id = p.id AND tg.grp = ? AND tg.tag = ?)";
 			w.add(f.tagGroup);
 			w.add(f.tag);
+		}
+		if (f.monthDay.length)
+		{
+			w.where ~= " AND strftime('%m-%d', p.taken_ts, 'unixepoch', 'localtime') = ?";
+			w.add(f.monthDay);
 		}
 		return w;
 	}

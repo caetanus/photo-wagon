@@ -21,6 +21,8 @@ Rectangle {
     property var people: []
     /// parsed library.places.places: [{place, country, count, cover}]
     property var places: []
+    /// parsed library.memories.memories: [{key, kind, title, subtitle, cover, count}]
+    property var memories: []
     /// parsed library.keywords.keywords: [{keyword, count, cover}]
     property var keywords: []
     /// parsed library.tags: {scene: [{tag, count, cover}], mood: […], weather: […], holiday: […]}
@@ -256,6 +258,7 @@ Rectangle {
             Row { key: "favorites"; title: "Favorites"; icon: icons.heart }
             Row { key: "people"; title: "People"; icon: icons.people; detail: sidebar.namedPeople.length ? String(sidebar.namedPeople.length) : "" }
             Row { key: "places"; title: "Places"; icon: icons.pin; detail: sidebar.places.length ? String(sidebar.places.length) : "" }
+            Row { key: "memories"; title: "Memories"; icon: icons.memories; detail: sidebar.memories.length ? String(sidebar.memories.length) : "" }
             Row {
                 key: "imports"; title: "Imports"; icon: icons.imports
                 visible: sidebar.importRoot !== null

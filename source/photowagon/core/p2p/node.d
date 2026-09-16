@@ -73,9 +73,9 @@ final class Node : Notifiee
 		pc.interval = 30.seconds;
 		ping = new Ping(host, pc);
 		kad = new Kademlia(host);
-		// NAT-traversal wiring (relay transport + AutoNat) is temporarily OFF: adding the relay
-		// as a swarm transport stalled the in-process UI link at startup (the library came up
-		// empty under p2p). Kept behind this flag until that is understood and fixed.
+		// NAT-traversal wiring (relay transport + AutoNat). It is ON: the "empty library under
+		// p2p" this once caused was really the in-process UI link race (core/ipc/link.d), now
+		// fixed, so adding the relay as a swarm transport is safe. Behind a flag for bisecting.
 		if (natTraversal)
 		{
 			relay = new Relay(host);
@@ -423,6 +423,8 @@ final class Node : Notifiee
 	string[] addrs()
 	{
 		import std.algorithm : canFind;
+		import photowagon.core.pairing : lanAddresses;
+		import photowagon.core.p2p.listenaddrs : dialableListenAddress;
 
 		string[] transport; // transport parts, public first, deduped
 		void add(string t)
@@ -444,16 +446,10 @@ final class Node : Notifiee
 		}
 		foreach (t; learnedPublic) // what peers observed (a real public address)
 			add(t);
-		foreach (a; host.addrs) // the LAN / listen addresses
-		{
-			immutable s = a.toString;
-			// the wildcard listen address (/ip4/0.0.0.0/…) and loopback are not dialable by a
-			// remote peer; advertising them just made the phone waste dials on 0.0.0.0
-			if (s.canFind("/ip4/0.0.0.0/") || s.canFind("/ip6/::/")
-				|| s.canFind("/ip4/127.") || s.canFind("/ip6/::1/"))
-				continue;
-			add(s);
-		}
+		auto lan = lanAddresses();
+		foreach (a; host.addrs)
+			foreach (s; dialableListenAddress(a.toString, lan))
+				add(s);
 
 		string[] out_;
 		// circuit addresses are complete (they already end in /p2p/<self>): reachable from

@@ -407,9 +407,10 @@ final class P2pBridge : Bridge
         HostConfig hc;
         hc.agentVersion = "photowagon-mobile/0.5.0";
         auto host = new Host(identity, [new TcpTransport], hc);
-        // NAT-traversal (relay transport + DCUtR) is temporarily OFF here too: on the desktop
-        // adding the relay as a swarm transport stalled things, so it is parked on both ends
-        // until fixed. Direct LAN sync is unaffected.
+        // NAT-traversal (relay transport + DCUtR) is ON here too. The stall this once caused was
+        // the in-process UI link race on the desktop (now fixed); the relay transport lets the
+        // phone reach the computer over a /p2p-circuit off-LAN, and DCUtR then tries for a direct
+        // upgrade. Direct LAN sync works without any of it.
         import libp2p.protocol.relay.service : Relay;
 
         enum bool natTraversal = true;

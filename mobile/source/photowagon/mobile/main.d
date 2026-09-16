@@ -140,6 +140,13 @@ int main()
     QCoreApplication.setApplicationName(APP_ID);
     QCoreApplication.setApplicationVersion(APP_VERSION);
     QGuiApplication.setApplicationDisplayName(APP_NAME);
+    // Survive backgrounding. The root QML object is an ApplicationWindow; when Android sends the
+    // app to the background the surface is destroyed and Qt treats that as the last window closing,
+    // which quit the event loop and ended the whole process (main did exit(rc)) — the app "died"
+    // the moment the user switched away (e.g. to toggle Wi-Fi). Sync is meant to keep running in
+    // the background, so do not quit on window close; Android reclaims the process under pressure
+    // and the sync service restarts it.
+    QGuiApplication.setQuitOnLastWindowClosed(false);
 
     immutable dataDir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation).toString();
     immutable cacheDir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation).toString();
@@ -155,7 +162,10 @@ int main()
     auto index = new PhoneIndex(roots, dataDir, cacheDir);
     lib.start(new LocalBridge(index, computer, buildPath(dataDir, "settings")));
 
-    auto engine = new QQmlApplicationEngine(cast(cppq.QObject) null);
+    // The binding collects unparented D-owned QObjects. Keep the engine owned by
+    // the application throughout exec(), after this local's last use: collecting
+    // it also destroys the QML window, even while the indexer keeps running.
+    auto engine = new QQmlApplicationEngine(QCoreApplication.instance());
     engine.rootContext().setContextProperty("library", cppq.QObject.wrap(qobjOf(lib)));
 
     bool failed;

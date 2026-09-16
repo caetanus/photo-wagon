@@ -61,7 +61,7 @@ Item {
                     Label {   // fallback glyph when there is no cover yet
                         visible: !card.modelData.cover
                         anchors.centerIn: parent
-                        text: ({ onthisday: "🗓", throwback: "⏳", place: "📍", person: "👤", scene: "🏷" }[card.modelData.kind]) || "★"
+                        text: ({ onthisday: "🗓", throwback: "⏳", place: "📍", person: "👤", scene: "🏷", holiday: "🎉" }[card.modelData.kind]) || "★"
                         font.pixelSize: 34
                         opacity: 0.5
                     }
@@ -75,7 +75,7 @@ Item {
                         Label {
                             id: kindLabel
                             anchors.centerIn: parent
-                            text: ({ onthisday: "On this day", throwback: "Throwback", place: "Place", person: "Person", scene: "Moment" }[card.modelData.kind]) || ""
+                            text: ({ onthisday: "On this day", throwback: "Throwback", place: "Place", person: "Person", scene: "Moment", holiday: "Holiday" }[card.modelData.kind]) || ""
                             color: "white"; font.pixelSize: 10; font.bold: true
                         }
                     }

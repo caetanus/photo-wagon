@@ -52,6 +52,7 @@ final class MemoriesService
 		Memory[] all;
 		all ~= onThisDay();
 		all ~= throwback();
+		all ~= topHolidays(4);
 		all ~= topPlaces(4);
 		all ~= topPeople(4);
 		all ~= topScenes(3);
@@ -114,6 +115,10 @@ final class MemoriesService
 			break;
 		case "scene":
 			f.tagGroup = "scene";
+			f.tag = rest;
+			break;
+		case "holiday":
+			f.tagGroup = "holiday";
 			f.tag = rest;
 			break;
 		case "throwback":
@@ -215,7 +220,7 @@ final class MemoriesService
 			m.title = place;
 			m.subtitle = country.length ? format("%d photos · %s", m.count, country) : format("%d photos", m.count);
 			m.cover = s.isNull(3) ? null : s.getString(3);
-			m.prio = 2;
+			m.prio = 5;
 			out_ ~= m;
 		}
 		return out_;
@@ -268,6 +273,40 @@ final class MemoriesService
 			m.subtitle = format("%d photo%s", m.count, m.count == 1 ? "" : "s");
 			m.cover = s.isNull(2) ? null : s.getString(2);
 			m.prio = 4;
+			out_ ~= m;
+		}
+		return out_;
+	}
+
+	private Memory[] topHolidays(int n)
+	{
+		// The holidays that recur through the library — Christmas, birthdays, Carnival …
+		auto s = db.prepare(`SELECT tg.tag, count(*) c,
+			(SELECT q.thumb_hash FROM photo_tags t2 JOIN photos q ON q.id = t2.photo_id
+			 WHERE t2.grp = 'holiday' AND t2.tag = tg.tag AND q.thumb_hash IS NOT NULL
+			 ORDER BY q.taken_ts DESC, q.id DESC LIMIT 1),
+			min(cast(strftime('%Y', p.taken_ts, 'unixepoch', 'localtime') AS INTEGER)),
+			max(cast(strftime('%Y', p.taken_ts, 'unixepoch', 'localtime') AS INTEGER))
+			FROM photo_tags tg JOIN photos p ON p.id = tg.photo_id
+			WHERE tg.grp = 'holiday' AND tg.tag IS NOT NULL AND tg.tag != ''
+			GROUP BY tg.tag HAVING c >= 15 ORDER BY c DESC LIMIT ?`);
+		s.bind(1, n);
+		Memory[] out_;
+		while (s.step())
+		{
+			Memory m;
+			immutable tag = s.getString(0);
+			m.key = "holiday:" ~ tag;
+			m.kind = "holiday";
+			m.title = tag;
+			m.count = s.getLong(1);
+			m.cover = s.isNull(2) ? null : s.getString(2);
+			immutable minY = s.isNull(3) ? 0 : cast(int) s.getLong(3);
+			immutable maxY = s.isNull(4) ? 0 : cast(int) s.getLong(4);
+			m.subtitle = minY && minY != maxY
+				? format("%d photos · %d–%d", m.count, minY, maxY)
+				: format("%d photos", m.count);
+			m.prio = 2;
 			out_ ~= m;
 		}
 		return out_;

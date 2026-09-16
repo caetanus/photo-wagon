@@ -1414,6 +1414,7 @@ version (WithUi)
                     lastTimelineHns = nowHns;
                     loadDates();
                     loadStats();
+                    loadMemories();
                     reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));   // keep what was scrolled to
                 }
             }
@@ -1440,6 +1441,7 @@ version (WithUi)
             break;
         case "tags.changed":
             loadTags();
+            loadMemories();
             if (fTag.length)
                 reload(0, pageLimit);
             if (openId)

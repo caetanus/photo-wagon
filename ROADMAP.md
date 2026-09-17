@@ -58,7 +58,7 @@ fetched album are not pulled, only thumbnails.
 - [x] one timeline on the phone: camera roll merged with the computer's library, its albums in the drawer
 - [ ] the phone as a libp2p peer (album sharing both ways) once the core's deps build for Android
 - [ ] the core itself on the phone (needs libsodium, openssl, c-ares, sqlite, vips, gexiv2 for Android)
-- HTTP front-end from the core for a TV
+- [~] Cast to TV: a Google Cast (CASTV2) sender — a cast icon in the viewer throws a photo to a Chromecast; compiles, live handshake pending a device. DLNA (SSDP) for WebOS/older TVs is the planned second path. (chosen over an HTTP web gallery) — 2026-09-17
 
 ## M8 — Polish
 - [x] Photos-style desktop UI (sidebar, Years/Months/Days/All, zoom, selection, in-window viewer, Info panel, People, favorites, albums from a selection) — 2026-09-09

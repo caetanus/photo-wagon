@@ -58,7 +58,7 @@ fetched album are not pulled, only thumbnails.
 - [x] one timeline on the phone: camera roll merged with the computer's library, its albums in the drawer
 - [ ] the phone as a libp2p peer (album sharing both ways) once the core's deps build for Android
 - [ ] the core itself on the phone (needs libsodium, openssl, c-ares, sqlite, vips, gexiv2 for Android)
-- [x] Cast to TV (Google Cast / Chromecast): a cast icon in the viewer throws a photo to a Chromecast — live-verified, the photo shows on the TV. CASTV2 (TLS + protobuf) + avahi discovery + a TV-sized media server, in the `casting` package. [ ] DLNA (SSDP) for WebOS/older TVs is the planned second path. — 2026-09-17
+- [x] Cast to TV: a cast icon in the viewer throws a photo — or a looping 5s slideshow — to the living-room screen. Two paths, both live-verified: Google Cast/CASTV2 (Chromecast) and DLNA/UPnP AVTransport (LG WebOS, Samsung — no Google account). The LG native photo viewer gives a smooth crossfade for free. — 2026-09-17
 
 ## M8 — Polish
 - [x] Photos-style desktop UI (sidebar, Years/Months/Days/All, zoom, selection, in-window viewer, Info panel, People, favorites, albums from a selection) — 2026-09-09

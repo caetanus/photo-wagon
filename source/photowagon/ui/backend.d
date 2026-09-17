@@ -659,19 +659,21 @@ version (WithUi)
         });
     }
 
-    /// Throw photo `id` onto the screen at host:port.
-    @Slot void castTo(string host, int port, int id)
+    /// Throw photo `id` onto a screen (Chromecast or DLNA).
+    @Slot void castTo(string host, int port, string kind, string control, int id)
     {
-        JSONValue params = ["host": JSONValue(host), "port": JSONValue(port), "id": JSONValue(id)];
+        JSONValue params = ["host": JSONValue(host), "port": JSONValue(port),
+            "kind": JSONValue(kind), "control": JSONValue(control), "id": JSONValue(id)];
         client.request("cast.photo", params, (r, e) {
             if (e.type != JSONType.null_) { report("cast.photo", e); return; }
         });
     }
 
-    /// Start a looping slideshow of the library on host:port, one photo every 5 s.
-    @Slot void castSlideshow(string host, int port)
+    /// Start a looping slideshow of the library on a screen, one photo every 5 s.
+    @Slot void castSlideshow(string host, int port, string kind, string control)
     {
-        JSONValue params = ["host": JSONValue(host), "port": JSONValue(port), "intervalMs": JSONValue(5000)];
+        JSONValue params = ["host": JSONValue(host), "port": JSONValue(port),
+            "kind": JSONValue(kind), "control": JSONValue(control), "intervalMs": JSONValue(5000)];
         client.request("cast.slideshow", params, (r, e) {
             if (e.type != JSONType.null_) { report("cast.slideshow", e); return; }
         });

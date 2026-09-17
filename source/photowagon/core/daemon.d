@@ -250,19 +250,32 @@ final class Daemon : ServerControl
 						immutable ctPort = hp[1].to!ushort;
 						immutable ctId = recent[0].id;
 						runTask(() nothrow {
-							try { sleep(800.msecs); castSvc.castPhoto(ctHost, ctPort, ctId); }
+							try { sleep(800.msecs); castSvc.castPhoto(ctHost, ctPort, "chromecast", "", ctId); }
 							catch (Exception e) { try logInfo("cast test failed: %s", e.msg); catch (Exception) {} }
 						});
 					}
 				}
-				immutable slide = environment.get("PW_CAST_SLIDE", "");   // host:port → a 5 s slideshow
+				immutable slide = environment.get("PW_CAST_SLIDE", "");   // host:port → a 5 s Chromecast slideshow
 				if (slide.length && castSvc !is null)
 				{
 					import std.string : split;
 					import std.conv : to;
 					auto hp = slide.split(":");
 					if (hp.length >= 2)
-						castSvc.castSlideshow(hp[0], hp[1].to!ushort, 5000);
+						castSvc.castSlideshow(hp[0], hp[1].to!ushort, "chromecast", "", 5000);
+				}
+				immutable dlna = environment.get("PW_CAST_DLNA", "");   // an AVTransport control URL → a DLNA slideshow
+				if (dlna.length && castSvc !is null)
+				{
+					import std.string : indexOf;
+					immutable sp = dlna.indexOf("://");
+					auto rest = sp < 0 ? dlna : dlna[sp + 3 .. $];
+					immutable col = rest.indexOf(':');
+					immutable sl = rest.indexOf('/');
+					auto e = rest.length;
+					if (col >= 0 && col < e) e = col;
+					if (sl >= 0 && sl < e) e = sl;
+					castSvc.castSlideshow(rest[0 .. e], 0, "dlna", dlna, 5000);
 				}
 			}
 		}

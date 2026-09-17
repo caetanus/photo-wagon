@@ -24,6 +24,20 @@ import photowagon.core.thumbs.vips : smallJpegOfBytes;
 
 import std.file : read, exists;
 
+/// dlnaShow on the worker pool (blocking HTTP/SOAP).
+private bool dlnaShowSync(string control, string url)
+{
+	import photowagon.core.casting.dlna : dlnaShow;
+	try
+		dlnaShow(control, url);
+	catch (Exception e)
+	{
+		import vibe.core.log : logDiagnostic;
+		logDiagnostic("cast: dlna show: %s", e.msg);
+	}
+	return true;
+}
+
 /// avahi-browse, off the event loop.
 private string avahiCast()
 {
@@ -83,21 +97,33 @@ final class CastService
 					"name": JSONValue(name),
 					"host": JSONValue(address),
 					"port": JSONValue(port),
+					"kind": JSONValue("chromecast"),
+					"control": JSONValue(""),
 				]);
 		}
+		// DLNA renderers (LG WebOS, Samsung, most smart TVs) over SSDP
+		import photowagon.core.casting.dlna : discoverDlna;
+		foreach (d; async(&discoverDlna).getResult())
+			out_ ~= JSONValue([
+				"name": JSONValue(d.name),
+				"host": JSONValue(d.host),
+				"port": JSONValue("0"),
+				"kind": JSONValue("dlna"),
+				"control": JSONValue(d.control),
+			]);
 		return JSONValue(["devices": JSONValue(out_)]);
 	}
 
-	/// Show photo `id` on the device at host:port (starting a session if needed).
-	void castPhoto(string host, ushort port, long id)
+	/// Show photo `id` on a device (Chromecast at host:port, or a DLNA renderer at `control`).
+	void castPhoto(string host, ushort port, string kind, string control, long id)
 	{
 		slideGen++;   // a single cast ends any running slideshow
-		showPhoto(host, port, id);
+		showPhoto(host, port, kind, control, id);
 	}
 
 	/// A slideshow of every photograph, oldest first, one every `intervalMs`, looping,
 	/// until `stop()` or another cast supersedes it.
-	void castSlideshow(string host, ushort port, int intervalMs)
+	void castSlideshow(string host, ushort port, string kind, string control, int intervalMs)
 	{
 		import photowagon.core.library.photos : Filter;
 		import vibe.core.core : runTask, sleep;
@@ -124,7 +150,7 @@ final class CastService
 					break;
 				try
 				{
-					showPhoto(host, port, ids[i % ids.length]);
+					showPhoto(host, port, kind, control, ids[i % ids.length]);
 					i++;
 					sleep(ms.msecs);
 				}
@@ -156,12 +182,12 @@ final class CastService
 
 	// --- rendering one photo onto the current session -------------------------------
 
-	private void showPhoto(string host, ushort port, long id)
+	private void showPhoto(string host, ushort port, string kind, string control, long id)
 	{
 		auto p = photos.get(id);
 		if (!p.path.exists)
 			throw new Exception("the photo's file is missing");
-		// A TV-sized JPEG: fast to fetch, correctly rotated, and every Cast device reads it.
+		// A TV-sized JPEG: fast to fetch, correctly rotated, and every screen reads it.
 		auto jpeg = smallJpegOfBytes(cast(ubyte[]) read(p.path), 1920, 85);
 		immutable key = (counter++).to!string;
 		blobs[key] = jpeg;
@@ -173,13 +199,18 @@ final class CastService
 		ensureMediaServer();
 
 		immutable url = "http://" ~ localIpToward(host) ~ ":" ~ mediaPort.to!string ~ "/cast/" ~ key;
-		if (session is null)
+		if (kind == "dlna")
+			async(&dlnaShowSync, control, url).getResult();   // SOAP off the event loop
+		else
 		{
-			session = new CastSession(host, port);
-			session.start();
+			if (session is null)
+			{
+				session = new CastSession(host, port);
+				session.start();
+			}
+			session.show(url);
 		}
-		session.show(url);
-		logInfo("cast: showing photo %s on %s:%s", id, host, port);
+		logInfo("cast: showing photo %s on %s (%s)", id, host, kind);
 	}
 
 	// --- the media server -----------------------------------------------------------

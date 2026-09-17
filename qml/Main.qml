@@ -473,7 +473,7 @@ ApplicationWindow {
                             MenuItem {
                                 required property var modelData
                                 text: modelData.name
-                                onTriggered: library.castTo(modelData.host, parseInt(modelData.port), root.currentPhotoId)
+                                onTriggered: library.castTo(modelData.host, parseInt(modelData.port), modelData.kind || "chromecast", modelData.control || "", root.currentPhotoId)
                             }
                         }
                         MenuSeparator { visible: root.castDevicesData.length > 0 }
@@ -483,7 +483,7 @@ ApplicationWindow {
                             MenuItem {
                                 required property var modelData
                                 text: modelData.name
-                                onTriggered: library.castSlideshow(modelData.host, parseInt(modelData.port))
+                                onTriggered: library.castSlideshow(modelData.host, parseInt(modelData.port), modelData.kind || "chromecast", modelData.control || "")
                             }
                         }
                         MenuSeparator { }

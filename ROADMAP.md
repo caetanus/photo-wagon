@@ -46,6 +46,7 @@ fetched album are not pulled, only thumbnails.
 - QUIC transport, circuit relay v2, DCUtR, AutoNAT (all present in libp2p-dlang)
 
 ## M7 — Other screens (mobile started 2026-09-07)
+- [x] USB import: the desktop pulls a plugged-in phone's camera roll over adb, with a "new device connected — sync?" dialog (a companion to p2p, not a replacement) — 2026-09-17
 - [x] `mobile/`: the same Qt Quick UI in D on the phone's own photos (D scan, pure-D EXIF, Qt thumbnails,
   JSON index), sending them to the computer through `library.import`
 - [x] Android package (arm64): LDC cross build + DSide binding for Qt Android, verified on a device (`ANDROID.md`)

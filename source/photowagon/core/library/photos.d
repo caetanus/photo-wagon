@@ -64,6 +64,8 @@ struct Filter
 	string tag;      // … with this value; null = any
 	string keyword;  // photos carrying one of the user's own tags; null = any
 	string monthDay; // "MM-DD": photos taken on this calendar day in any year (for "On This Day")
+	long tsFrom;     // taken_ts >= tsFrom (a moment / event time window); 0 = no lower bound
+	long tsTo;       // taken_ts <  tsTo; 0 = no upper bound
 }
 
 struct Neighbours
@@ -550,6 +552,16 @@ final class PhotoRepo
 		{
 			w.where ~= " AND strftime('%m-%d', p.taken_ts, 'unixepoch', 'localtime') = ?";
 			w.add(f.monthDay);
+		}
+		if (f.tsFrom)
+		{
+			w.where ~= " AND p.taken_ts >= ?";
+			w.add(f.tsFrom);
+		}
+		if (f.tsTo)
+		{
+			w.where ~= " AND p.taken_ts < ?";
+			w.add(f.tsTo);
 		}
 		return w;
 	}

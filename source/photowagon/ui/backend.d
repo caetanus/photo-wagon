@@ -55,6 +55,7 @@ version (WithUi)
     Signal!() peopleChanged;
     Signal!() facesChanged;
     Signal!() memoriesChanged;
+    Signal!() momentsChanged;
     Signal!() filterChanged;
     Signal!() suggestionChanged;
     Signal!() statsChanged;
@@ -103,6 +104,8 @@ version (WithUi)
     @Property("peopleChanged") string people = `{"people":[]}`;
     /// memories.list: {"memories":[{key,kind,title,subtitle,cover,count}]} — the curated strip.
     @Property("memoriesChanged") string memories = `{"memories":[]}`;
+    /// moments.list: {"moments":[{key,title,subtitle,cover,count}]} — the timeline as events.
+    @Property("momentsChanged") string moments = `{"moments":[]}`;
     /// {"places":[{place,country,count,cover}]} — the cities of the library, most photos first
     @Property("placesChanged") string places = `{"places":[]}`;
     /// places.suggest for the name being typed in "Set Place…": {"places":[{place,country,own}]}
@@ -157,6 +160,7 @@ version (WithUi)
     private string fTagGroup;
     private string fTag;
     private string fMemory;   // a memory key: pages through memories.page instead of library.page
+    private string fMoment;   // a moment key: pages through moments.page instead of library.page
     private string fKeyword;
     private long fSimilar;   // photos that look like this one (photo.similar), instead of library.page
     private long lastTimelineHns;   // Clock.currStdTime of the last library.changed refresh (coalescing)
@@ -364,6 +368,15 @@ version (WithUi)
     {
         clearFilters();
         fMemory = key;
+        publishFilter();
+        reload(0, pageLimit);
+    }
+
+    /// Open one moment (see moments.list): the photos in its time window.
+    @Slot void filterMoment(string key)
+    {
+        clearFilters();
+        fMoment = key;
         publishFilter();
         reload(0, pageLimit);
     }
@@ -624,6 +637,15 @@ version (WithUi)
         });
     }
 
+    @Slot void loadMoments()
+    {
+        client.request("moments.list", (r, e) {
+            if (e.type != JSONType.null_) return;
+            moments = r.toString();
+            momentsChanged.emit();
+        });
+    }
+
     /// The user's word on where a selection was taken ("" clears).
     @Slot void setPlace(string photoIdsJson, string place, string country)
     {
@@ -698,6 +720,7 @@ version (WithUi)
         fKeyword = null;
         fSimilar = 0;
         fMemory = null;
+        fMoment = null;
     }
 
     private void publishFilter()
@@ -795,6 +818,33 @@ version (WithUi)
             });
             return;
         }
+        if (fMoment.length)
+        {
+            if (offset == 0)
+                items.length = 0;
+            if (limit > 0)
+                pageLimit = limit;
+            JSONValue tp = JSONValue.emptyObject;
+            tp["key"] = fMoment;
+            tp["offset"] = offset;
+            tp["limit"] = pageLimit;
+            immutable toff = offset;
+            client.request("moments.page", tp, (r, e) {
+                if (e.type != JSONType.null_) { report("moments.page", e); return; }
+                if (!fMoment.length) return;
+                if (toff == 0)
+                    items.length = 0;
+                total = r["total"].integer;
+                immutable first = items.length;
+                foreach (it; r["items"].array)
+                    items ~= it;
+                if (remote)
+                    fetchThumbs(first);
+                else
+                    publishPage();
+            });
+            return;
+        }
         if (fMemory.length)
         {
             if (offset == 0)
@@ -887,6 +937,7 @@ version (WithUi)
     {
         loadPlaces();
         loadMemories();
+        loadMoments();
         loadPresets();
         loadKeywords();
         loadTags();
@@ -1473,6 +1524,7 @@ version (WithUi)
                     loadDates();
                     loadStats();
                     loadMemories();
+                    loadMoments();
                     reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));   // keep what was scrolled to
                 }
             }

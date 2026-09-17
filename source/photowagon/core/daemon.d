@@ -25,6 +25,7 @@ import photowagon.core.api.usb_api : registerUsbApi;
 import photowagon.core.api.library_api : registerLibraryApi;
 import photowagon.core.api.media_api : registerMediaApi;
 import photowagon.core.api.memories_api : registerMemoriesApi;
+import photowagon.core.api.moments_api : registerMomentsApi;
 import photowagon.core.api.p2p_api : registerP2pApi;
 import photowagon.core.api.pairing_api : registerPairingApi, ServerControl;
 import photowagon.core.api.places_api : registerPlacesApi;
@@ -47,6 +48,7 @@ import photowagon.core.p2p.blobpush : BlobStash, BlobOverP2p;
 import photowagon.core.library.albums : AlbumRepo;
 import photowagon.core.library.dates : DateTree;
 import photowagon.core.library.memories : MemoriesService;
+import photowagon.core.library.moments : MomentsService;
 import photowagon.core.usb.watcher : UsbWatcher;
 import photowagon.core.library.kindjob : KindService;
 import photowagon.core.library.photos : PhotoRepo;
@@ -123,6 +125,7 @@ final class Daemon : ServerControl
 		auto dates = new DateTree(db, store);
 		auto albums = new AlbumRepo(db);
 		auto memories = new MemoriesService(db, store, photos);
+		auto moments = new MomentsService(db, store, photos);
 		indexer = new Indexer(cfg, photos, events);
 		auto faceRepo = new FaceRepo(db);
 		facesService = new FaceService(cfg, db, faceRepo, photos, store, events);
@@ -184,6 +187,7 @@ final class Daemon : ServerControl
 		registerFaceApi(registry, faceRepo, facesService, store, events);
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerMemoriesApi(registry, memories, photos);
+		registerMomentsApi(registry, moments, photos);
 		registerPlacesApi(registry, places);
 		// tags in the files: what the user says goes into the XMP / IPTC keywords, what a
 		// file brings along comes into the library

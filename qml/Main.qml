@@ -92,6 +92,8 @@ ApplicationWindow {
     readonly property var placesData: JSON.parse(library.places).places
     readonly property var memoriesData: JSON.parse(library.memories).memories
     property string currentMemoryTitle: ""
+    readonly property var momentsData: JSON.parse(library.moments).moments
+    property string currentMomentTitle: ""
     readonly property var tagsData: JSON.parse(library.tags)
     readonly property var keywordsData: JSON.parse(library.keywords).keywords
     readonly property var tagGroups: ["scene", "mood", "weather", "holiday"]
@@ -185,6 +187,7 @@ ApplicationWindow {
         else if (key === "people") library.loadPeople()
         else if (key === "places") library.loadPlaces()
         else if (key === "memories") library.loadMemories()
+        else if (key === "moments") library.loadMoments()
         else if (key.startsWith("keyword:")) {
             const k = key.substring(8)
             if (filterData.keyword === k) pickSource("all")
@@ -212,8 +215,10 @@ ApplicationWindow {
     function openPlace(place, country) { source = "place"; library.filterPlace(place, country); grid.clearSelection() }
     function memoryTitleFor(key) { for (const m of memoriesData) if (m.key === key) return m.title; return "Memory" }
     function openMemory(key) { source = "memory"; currentMemoryTitle = memoryTitleFor(key); library.filterMemory(key); grid.clearSelection() }
+    function momentTitleFor(key) { for (const m of momentsData) if (m.key === key) return m.title; return "Moment" }
+    function openMoment(key) { source = "moment"; currentMomentTitle = momentTitleFor(key); library.filterMoment(key); grid.clearSelection() }
     /// The photo grid and its toolbar are shown; People and Places are pages of their own.
-    readonly property bool browsing: source !== "people" && source !== "places" && source !== "memories"
+    readonly property bool browsing: source !== "people" && source !== "places" && source !== "memories" && source !== "moments"
 
     // A node of the date tree: keeps the person / album / favourites view, shows the photos.
     function pickDate(y, m, d) {
@@ -238,6 +243,8 @@ ApplicationWindow {
         if (source === "places") return "Places"
         if (source === "memories") return "Memories"
         if (source === "memory") return currentMemoryTitle
+        if (source === "moments") return "Moments"
+        if (source === "moment") return currentMomentTitle
         if (filterData.place) return filterData.place + (filterData.country ? ", " + filterData.country : "")
         for (const g of tagGroups) if (filterData[g]) return filterData[g]
         if (filterData.keyword) return "#" + filterData.keyword
@@ -302,6 +309,7 @@ ApplicationWindow {
             people: root.peopleData
             places: root.placesData
             memories: root.memoriesData
+            moments: root.momentsData
             tags: root.tagsData
             keywords: root.keywordsData
             status: root.status
@@ -539,6 +547,14 @@ ApplicationWindow {
                 icons: root.icons
                 memories: root.memoriesData
                 onOpen: (key) => root.openMemory(key)
+            }
+            MomentsView {
+                anchors.fill: parent
+                visible: !root.viewing && root.source === "moments"
+                theme: root.theme
+                icons: root.icons
+                moments: root.momentsData
+                onOpen: (key) => root.openMoment(key)
             }
             // a way out of full screen for the mouse, shown while the pointer is near the top
             Rectangle {
@@ -872,6 +888,8 @@ ApplicationWindow {
             else if (library.shotView === "places") root.pickSource("places")
             else if (library.shotView === "memories") root.pickSource("memories")
             else if (library.shotView.startsWith("memory:")) root.openMemory(library.shotView.substring(7))
+            else if (library.shotView === "moments") root.pickSource("moments")
+            else if (library.shotView.startsWith("moment:")) root.openMoment(library.shotView.substring(7))
             else if (library.shotView.startsWith("place:")) root.pickSource(library.shotView)   // place:<name>|<country>
             else if (root.tagGroups.some(g => library.shotView.startsWith(g + ":"))) root.pickSource(library.shotView)
             else if (library.shotView === "info") {}

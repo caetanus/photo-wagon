@@ -56,6 +56,7 @@ version (WithUi)
     Signal!() facesChanged;
     Signal!() memoriesChanged;
     Signal!() momentsChanged;
+    Signal!() castDevicesChanged;
     Signal!() filterChanged;
     Signal!() suggestionChanged;
     Signal!() statsChanged;
@@ -106,6 +107,8 @@ version (WithUi)
     @Property("memoriesChanged") string memories = `{"memories":[]}`;
     /// moments.list: {"moments":[{key,title,subtitle,cover,count}]} — the timeline as events.
     @Property("momentsChanged") string moments = `{"moments":[]}`;
+    /// cast.devices: {"devices":[{name,host,port}]} — the Cast screens on the LAN, when last asked.
+    @Property("castDevicesChanged") string castDevices = `{"devices":[]}`;
     /// {"places":[{place,country,count,cover}]} — the cities of the library, most photos first
     @Property("placesChanged") string places = `{"places":[]}`;
     /// places.suggest for the name being typed in "Set Place…": {"places":[{place,country,own}]}
@@ -644,6 +647,30 @@ version (WithUi)
             moments = r.toString();
             momentsChanged.emit();
         });
+    }
+
+    /// Ask which Cast screens are on the network (populates `castDevices`).
+    @Slot void loadCastDevices()
+    {
+        client.request("cast.devices", (r, e) {
+            if (e.type != JSONType.null_) { report("cast.devices", e); return; }
+            castDevices = r.toString();
+            castDevicesChanged.emit();
+        });
+    }
+
+    /// Throw photo `id` onto the screen at host:port.
+    @Slot void castTo(string host, int port, int id)
+    {
+        JSONValue params = ["host": JSONValue(host), "port": JSONValue(port), "id": JSONValue(id)];
+        client.request("cast.photo", params, (r, e) {
+            if (e.type != JSONType.null_) { report("cast.photo", e); return; }
+        });
+    }
+
+    @Slot void castStop()
+    {
+        client.request("cast.stop", (r, e) { cast(void) r; cast(void) e; });
     }
 
     /// The user's word on where a selection was taken ("" clears).

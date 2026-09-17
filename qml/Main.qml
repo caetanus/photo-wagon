@@ -94,6 +94,8 @@ ApplicationWindow {
     property string currentMemoryTitle: ""
     readonly property var momentsData: JSON.parse(library.moments).moments
     property string currentMomentTitle: ""
+    readonly property var castDevicesData: { try { return JSON.parse(library.castDevices).devices } catch (e) { return [] } }
+    readonly property int currentPhotoId: { try { return JSON.parse(library.current).id || 0 } catch (e) { return 0 } }
     readonly property var tagsData: JSON.parse(library.tags)
     readonly property var keywordsData: JSON.parse(library.keywords).keywords
     readonly property var tagGroups: ["scene", "mood", "weather", "holiday"]
@@ -457,6 +459,26 @@ ApplicationWindow {
                     icon_: icons.plus
                     ToolTip.text: "Add folder to the library"; ToolTip.visible: hovered
                     onClicked: folderDialog.open()
+                }
+                ToolIcon {
+                    visible: root.viewing && root.currentPhotoId > 0
+                    icon_: icons.cast
+                    ToolTip.text: "Cast to TV"; ToolTip.visible: hovered
+                    onClicked: { library.loadCastDevices(); castMenu.popup() }
+                    Menu {
+                        id: castMenu
+                        MenuItem { enabled: false; text: root.castDevicesData.length ? "Cast this photo to:" : "Looking for TVs…" }
+                        Repeater {
+                            model: root.castDevicesData
+                            MenuItem {
+                                required property var modelData
+                                text: modelData.name
+                                onTriggered: library.castTo(modelData.host, parseInt(modelData.port), root.currentPhotoId)
+                            }
+                        }
+                        MenuSeparator { }
+                        MenuItem { text: "Stop casting"; onTriggered: library.castStop() }
+                    }
                 }
 
                 // search

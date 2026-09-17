@@ -22,6 +22,7 @@ import photowagon.core.api.edit_api : registerEditApi;
 import photowagon.core.api.face_api : registerFaceApi;
 import photowagon.core.api.import_api : registerImportApi;
 import photowagon.core.api.usb_api : registerUsbApi;
+import photowagon.core.api.cast_api : registerCastApi;
 import photowagon.core.api.library_api : registerLibraryApi;
 import photowagon.core.api.media_api : registerMediaApi;
 import photowagon.core.api.memories_api : registerMemoriesApi;
@@ -50,6 +51,7 @@ import photowagon.core.library.dates : DateTree;
 import photowagon.core.library.memories : MemoriesService;
 import photowagon.core.library.moments : MomentsService;
 import photowagon.core.usb.watcher : UsbWatcher;
+import photowagon.core.casting.service : CastService;
 import photowagon.core.library.kindjob : KindService;
 import photowagon.core.library.photos : PhotoRepo;
 import photowagon.core.library.places : Geocoder, PlaceService;
@@ -73,6 +75,7 @@ final class Daemon : ServerControl
 	private Config cfg;
 	private InProcessLink link; // null when headless
 	private UsbWatcher usbWatcher; // null when headless
+	private CastService castSvc;   // null when headless
 	private Database db;
 	private IpcServer ipc;
 	private string ipcAddress;
@@ -209,6 +212,10 @@ final class Daemon : ServerControl
 		if (link !is null)
 			usbWatcher = new UsbWatcher(cfg, events, roots, indexer);
 		registerUsbApi(registry, usbWatcher);
+		// Cast a photo to a TV (Chromecast / Cast-enabled TV): desktop-UI only.
+		if (link !is null)
+			castSvc = new CastService(photos);
+		registerCastApi(registry, castSvc);
 		if (node !is null)
 		{
 			new IpcOverP2p(node.host, registry, events, token, deviceRepo, pairingMgr);   // the phone's way in over libp2p
@@ -365,6 +372,8 @@ final class Daemon : ServerControl
 		}
 		if (usbWatcher)
 			usbWatcher.stop();
+		if (castSvc)
+			castSvc.stop();
 		own.stopAll();
 		if (inproc)
 			inproc.close();

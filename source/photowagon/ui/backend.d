@@ -51,6 +51,7 @@ version (WithUi)
     Signal!() devicesChanged;
     Signal!() pairingCodeChanged;
     Signal!() pairingRequestChanged;
+    Signal!() deviceConnectedChanged;
     Signal!() peopleChanged;
     Signal!() facesChanged;
     Signal!() memoriesChanged;
@@ -96,6 +97,8 @@ version (WithUi)
     @Property("pairingCodeChanged") string pairingCode = "{}";
     /// Desktop: a phone knocking to be authorized — {peer, name}; {} when none is waiting.
     @Property("pairingRequestChanged") string pairingRequest = "{}";
+    /// USB: a phone just plugged in — {serial, model}; {} when none is waiting or after the choice.
+    @Property("deviceConnectedChanged") string deviceConnected = "{}";
     /// {"people":[{id,name,faces,coverUrl}]} — clusters of faces, most photos first.
     @Property("peopleChanged") string people = `{"people":[]}`;
     /// memories.list: {"memories":[{key,kind,title,subtitle,cover,count}]} — the curated strip.
@@ -1156,6 +1159,25 @@ version (WithUi)
     }
 
     /// Desktop: the operator typed the code the knocking phone shows.
+    /// USB: the user said yes in the "new device connected" dialog — pull its photos.
+    @Slot void confirmDeviceSync(string serial)
+    {
+        deviceConnected = "{}";
+        deviceConnectedChanged.emit();
+        JSONValue params = ["serial": JSONValue(serial)];
+        client.request("usb.sync", params, (r, e) {
+            if (e.type != JSONType.null_) { report("usb.sync", e); return; }
+        });
+    }
+
+    /// USB: "Not now" — dismiss the dialog without importing.
+    @Slot void dismissDevice(string serial)
+    {
+        cast(void) serial;
+        deviceConnected = "{}";
+        deviceConnectedChanged.emit();
+    }
+
     @Slot void confirmDevice(string peerId, string code)
     {
         JSONValue params = ["peerId": JSONValue(peerId), "code": JSONValue(code)];
@@ -1400,6 +1422,42 @@ version (WithUi)
             // Desktop: a phone is knocking; show the prompt to enter the code it displays
             pairingRequest = data.toString();
             pairingRequestChanged.emit();
+            break;
+        case "device.connected":
+            // USB: a phone was plugged in; offer to import its camera roll
+            deviceConnected = data.toString();
+            deviceConnectedChanged.emit();
+            break;
+        case "device.disconnected":
+            try
+            {
+                auto dc = parseJSON(deviceConnected);
+                if ("serial" in dc && dc["serial"].str == data["serial"].str)
+                {
+                    deviceConnected = "{}";
+                    deviceConnectedChanged.emit();
+                }
+            }
+            catch (Exception)
+            {
+            }
+            break;
+        case "usb.progress":
+            setStatus(true, true, "importing from USB: " ~ data["done"].integer.to!string
+                ~ " / " ~ data["total"].integer.to!string);
+            break;
+        case "usb.done":
+            if ("error" in data)
+                setStatus(true, indexing, "USB import failed: " ~ data["error"].str);
+            else
+            {
+                immutable skipped = data["total"].integer - data["imported"].integer;
+                setStatus(true, indexing, data["imported"].integer.to!string ~ " imported from USB"
+                    ~ (skipped > 0 ? ", " ~ skipped.to!string ~ " already had" : ""));
+            }
+            loadRoots();
+            loadDates();
+            reload(0, pageLimit);
             break;
         case "library.changed":
             // While a scan runs this fires for every batch of files; refreshing the whole

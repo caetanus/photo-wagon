@@ -744,6 +744,37 @@ ApplicationWindow {
         }
     }
 
+    // A phone was plugged in over USB: offer to import its camera roll (like Photos).
+    Popup {
+        id: deviceConnectedPopup
+        readonly property var dc: { try { return JSON.parse(library.deviceConnected) } catch (e) { return ({}) } }
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        closePolicy: Popup.NoAutoClose
+        visible: dc.serial !== undefined
+        padding: 24
+        background: Rectangle { color: theme.panel; border.color: theme.separator; radius: 10 }
+        contentItem: ColumnLayout {
+            spacing: 14
+            Label { text: "New device connected"; font.pixelSize: 18; font.bold: true; color: theme.text }
+            Label {
+                text: "Sync the photos from " + (deviceConnectedPopup.dc.model || "this phone") + " over the cable?"
+                color: theme.muted; wrapMode: Text.WordWrap; Layout.preferredWidth: 340
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Button { text: "Not now"; flat: true; onClicked: library.dismissDevice(deviceConnectedPopup.dc.serial) }
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "Sync photos"
+                    highlighted: true
+                    onClicked: library.confirmDeviceSync(deviceConnectedPopup.dc.serial)
+                }
+            }
+        }
+    }
+
     PeersPanel {
         id: peersPanel
         theme: root.theme
@@ -908,7 +939,7 @@ ApplicationWindow {
     Timer {
         running: library.shotPath.length > 0
         interval: 3500
-        onTriggered: (library.shotSend ? phonePanel.body : library.shotView.startsWith("name:") ? viewer.namerBody : library.shotView === "menu" ? photoMenu.contentItem : library.shotView === "facemenu" ? viewer.faceMenuBody : shell).grabToImage(function (r) {
+        onTriggered: (library.shotView === "overlay" ? Overlay.overlay : library.shotSend ? phonePanel.body : library.shotView.startsWith("name:") ? viewer.namerBody : library.shotView === "menu" ? photoMenu.contentItem : library.shotView === "facemenu" ? viewer.faceMenuBody : shell).grabToImage(function (r) {
             r.saveToFile(library.shotPath)
             console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length, "source", root.source, "filter", library.filter)
             library.quit()

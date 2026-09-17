@@ -22,6 +22,14 @@ void registerCastApi(Registry r, CastService svc)
 		return obj();
 	});
 
+	r.add("cast.slideshow", (JSONValue p) {
+		if (svc is null)
+			throw new ApiError("cast_off", "casting runs only with the desktop UI");
+		svc.castSlideshow(requireString(p, "host"), cast(ushort) getLong(p, "port", 8009),
+			cast(int) getLong(p, "intervalMs", 5000));
+		return obj();
+	});
+
 	r.add("cast.stop", (JSONValue p) {
 		if (svc !is null)
 			svc.stop();

@@ -668,6 +668,15 @@ version (WithUi)
         });
     }
 
+    /// Start a looping slideshow of the library on host:port, one photo every 5 s.
+    @Slot void castSlideshow(string host, int port)
+    {
+        JSONValue params = ["host": JSONValue(host), "port": JSONValue(port), "intervalMs": JSONValue(5000)];
+        client.request("cast.slideshow", params, (r, e) {
+            if (e.type != JSONType.null_) { report("cast.slideshow", e); return; }
+        });
+    }
+
     @Slot void castStop()
     {
         client.request("cast.stop", (r, e) { cast(void) r; cast(void) e; });

@@ -45,6 +45,7 @@ final class CastService
 	private ubyte[][string] blobs;   // key → JPEG bytes the TV fetches
 	private CastSession session;
 	private long counter;
+	private int slideGen;   // bumped to end a running slideshow
 
 	this(PhotoRepo photos)
 	{
@@ -90,27 +91,55 @@ final class CastService
 	/// Show photo `id` on the device at host:port (starting a session if needed).
 	void castPhoto(string host, ushort port, long id)
 	{
-		auto p = photos.get(id);
-		if (!p.path.exists)
-			throw new Exception("the photo's file is missing");
-		// A TV-sized JPEG: fast to fetch, correctly rotated, and every Cast device reads it.
-		auto jpeg = smallJpegOfBytes(cast(ubyte[]) read(p.path), 1920, 85);
-		immutable key = (counter++).to!string;
-		blobs[key] = jpeg;
-		ensureMediaServer();
+		slideGen++;   // a single cast ends any running slideshow
+		showPhoto(host, port, id);
+	}
 
-		immutable url = "http://" ~ localIpToward(host) ~ ":" ~ mediaPort.to!string ~ "/cast/" ~ key;
-		if (session is null)
-		{
-			session = new CastSession(host, port);
-			session.start();
-		}
-		session.show(url);
-		logInfo("cast: showing photo %s on %s:%s", id, host, port);
+	/// A slideshow of every photograph, oldest first, one every `intervalMs`, looping,
+	/// until `stop()` or another cast supersedes it.
+	void castSlideshow(string host, ushort port, int intervalMs)
+	{
+		import photowagon.core.library.photos : Filter;
+		import vibe.core.core : runTask, sleep;
+		import core.time : msecs;
+
+		Filter f;
+		f.kind = "photo";
+		auto page = photos.page(f, 0, 100_000);   // ids in time order; the set is bounded by the library
+		long[] ids;
+		foreach (ref ph; page)
+			ids ~= ph.id;
+		if (ids.length == 0)
+			return;
+
+		slideGen++;
+		immutable myGen = slideGen;
+		immutable ms = intervalMs < 1000 ? 1000 : intervalMs;
+		logInfo("cast: slideshow of %s photos every %s ms on %s", ids.length, ms, host);
+		runTask(() nothrow {
+			size_t i;
+			while (true)
+			{
+				if (myGen != slideGen)
+					break;
+				try
+				{
+					showPhoto(host, port, ids[i % ids.length]);
+					i++;
+					sleep(ms.msecs);
+				}
+				catch (Exception e)
+				{
+					try logDiagnostic("cast: slideshow: %s", e.msg); catch (Exception) {}
+					break;
+				}
+			}
+		});
 	}
 
 	void stop() nothrow
 	{
+		slideGen++;
 		try
 		{
 			if (session !is null)
@@ -123,6 +152,34 @@ final class CastService
 		catch (Exception)
 		{
 		}
+	}
+
+	// --- rendering one photo onto the current session -------------------------------
+
+	private void showPhoto(string host, ushort port, long id)
+	{
+		auto p = photos.get(id);
+		if (!p.path.exists)
+			throw new Exception("the photo's file is missing");
+		// A TV-sized JPEG: fast to fetch, correctly rotated, and every Cast device reads it.
+		auto jpeg = smallJpegOfBytes(cast(ubyte[]) read(p.path), 1920, 85);
+		immutable key = (counter++).to!string;
+		blobs[key] = jpeg;
+		// keep only the last few blobs — the TV may still be fetching the one before this
+		if (blobs.length > 4)
+			foreach (k; blobs.keys)
+				if (k.to!long < counter - 4)
+					blobs.remove(k);
+		ensureMediaServer();
+
+		immutable url = "http://" ~ localIpToward(host) ~ ":" ~ mediaPort.to!string ~ "/cast/" ~ key;
+		if (session is null)
+		{
+			session = new CastSession(host, port);
+			session.start();
+		}
+		session.show(url);
+		logInfo("cast: showing photo %s on %s:%s", id, host, port);
 	}
 
 	// --- the media server -----------------------------------------------------------

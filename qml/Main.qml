@@ -476,6 +476,16 @@ ApplicationWindow {
                                 onTriggered: library.castTo(modelData.host, parseInt(modelData.port), root.currentPhotoId)
                             }
                         }
+                        MenuSeparator { visible: root.castDevicesData.length > 0 }
+                        MenuItem { visible: root.castDevicesData.length > 0; enabled: false; text: "Slideshow (every 5s) on:" }
+                        Repeater {
+                            model: root.castDevicesData
+                            MenuItem {
+                                required property var modelData
+                                text: modelData.name
+                                onTriggered: library.castSlideshow(modelData.host, parseInt(modelData.port))
+                            }
+                        }
                         MenuSeparator { }
                         MenuItem { text: "Stop casting"; onTriggered: library.castStop() }
                     }

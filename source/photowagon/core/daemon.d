@@ -242,7 +242,8 @@ final class Daemon : ServerControl
 					import vibe.core.core : runTask, sleep;
 					import core.time : msecs;
 					auto hp = castTest.split(":");
-					auto recent = photos.page(Filter.init, 0, 1);
+					immutable ctOff = hp.length > 2 ? hp[2].to!long : 0;   // host:port:offset picks an older photo
+					auto recent = photos.page(Filter.init, ctOff, 1);
 					if (hp.length >= 2 && recent.length)
 					{
 						immutable ctHost = hp[0];
@@ -253,6 +254,15 @@ final class Daemon : ServerControl
 							catch (Exception e) { try logInfo("cast test failed: %s", e.msg); catch (Exception) {} }
 						});
 					}
+				}
+				immutable slide = environment.get("PW_CAST_SLIDE", "");   // host:port → a 5 s slideshow
+				if (slide.length && castSvc !is null)
+				{
+					import std.string : split;
+					import std.conv : to;
+					auto hp = slide.split(":");
+					if (hp.length >= 2)
+						castSvc.castSlideshow(hp[0], hp[1].to!ushort, 5000);
 				}
 			}
 		}

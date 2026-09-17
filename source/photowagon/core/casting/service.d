@@ -67,14 +67,16 @@ final class CastService
 			immutable address = f[7];
 			immutable port = f[8];
 			string name = f[3].replace("\\032", " ");   // avahi escapes spaces
-			// a nicer name from the TXT record's fn= if present
-			if (f.length >= 10)
-				foreach (kv; f[9 .. $])
-				{
-					auto t = kv.strip;
-					if (t.startsWith("fn="))
-						name = t[3 .. $];
-				}
+			// a nicer name from the TXT record's fn= (the TXT is a quoted blob after the port)
+			import std.array : join;
+			immutable txt = f.length > 9 ? f[9 .. $].join(";") : "";
+			immutable fi = txt.indexOf("fn=");
+			if (fi >= 0)
+			{
+				auto rest = txt[fi + 3 .. $];
+				immutable end = rest.indexOf('"');   // fn=Name"
+				name = end >= 0 ? rest[0 .. end] : rest;
+			}
 			if (address.length && port.length)
 				out_ ~= JSONValue([
 					"name": JSONValue(name),

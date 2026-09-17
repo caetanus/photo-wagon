@@ -230,6 +230,31 @@ final class Daemon : ServerControl
 			logInfo("core %s: serving the UI in-process, data in %s", coreVersion, cfg.dataDir);
 			if (usbWatcher !is null)
 				usbWatcher.start();
+			// Debug hook: PW_CAST_TEST=host:port casts the newest photo on startup.
+			{
+				import std.process : environment;
+				immutable castTest = environment.get("PW_CAST_TEST", "");
+				if (castTest.length && castSvc !is null)
+				{
+					import std.string : split;
+					import std.conv : to;
+					import photowagon.core.library.photos : Filter;
+					import vibe.core.core : runTask, sleep;
+					import core.time : msecs;
+					auto hp = castTest.split(":");
+					auto recent = photos.page(Filter.init, 0, 1);
+					if (hp.length >= 2 && recent.length)
+					{
+						immutable ctHost = hp[0];
+						immutable ctPort = hp[1].to!ushort;
+						immutable ctId = recent[0].id;
+						runTask(() nothrow {
+							try { sleep(800.msecs); castSvc.castPhoto(ctHost, ctPort, ctId); }
+							catch (Exception e) { try logInfo("cast test failed: %s", e.msg); catch (Exception) {} }
+						});
+					}
+				}
+			}
 		}
 		if (cfg.serve)
 			startServing(cfg.ipcAddress);

@@ -180,6 +180,7 @@ final class CastSession
 		auto ctx = createTLSContext(TLSContextKind.client);
 		ctx.peerValidationMode = TLSPeerValidationMode.none;   // Chromecast certs chain to Google's own root
 		tls = createTLSStream(raw, ctx, TLSStreamState.connecting, host, raw.remoteAddress);
+		logInfo("cast: TLS channel up to %s:%s", host, port);
 
 		send("sender-0", "receiver-0", ns_connection, `{"type":"CONNECT"}`);
 		send("sender-0", "receiver-0", ns_receiver,
@@ -205,6 +206,8 @@ final class CastSession
 
 	private void handle(string namespace, string payload)
 	{
+		if (namespace != ns_heartbeat)
+			logDiagnostic("cast<< [%s] %s", namespace, payload);
 		if (namespace == ns_heartbeat)
 		{
 			if (payload.length && parseJSON(payload)["type"].str == "PING")
@@ -222,6 +225,7 @@ final class CastSession
 						if (t != appTransport)
 						{
 							appTransport = t;
+							logInfo("cast: media receiver ready (%s)", appTransport);
 							// virtual-connect to the app, then load whatever is waiting
 							send("sender-0", appTransport, ns_connection, `{"type":"CONNECT"}`);
 							connected = true;
@@ -247,6 +251,7 @@ final class CastSession
 			"autoplay": JSONValue(true),
 			"media": media,
 		]);
+		logInfo("cast: LOAD %s", url);
 		send("sender-0", appTransport, ns_media, msg.toString());
 	}
 

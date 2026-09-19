@@ -1,6 +1,7 @@
 # build outputs
 photo-wagon
 photo-wagon-headless
+photo-wagon-node
 photo-wagon-test
 .dub/
 tests/e2e-work/

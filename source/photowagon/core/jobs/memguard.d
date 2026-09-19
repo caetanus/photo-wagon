@@ -30,6 +30,88 @@ long residentMb() nothrow
 	return 0;
 }
 
+/// VmRSS from /proc/self/status, in MB (exact kB, not statm's page-scaled guess).
+long vmRssMb() nothrow
+{
+	version (linux)
+	{
+		try
+		{
+			import std.file : readText;
+			import std.string : splitLines, split, startsWith;
+			import std.conv : to;
+
+			foreach (line; readText("/proc/self/status").splitLines)
+				if (line.startsWith("VmRSS:"))
+				{
+					auto p = line.split();
+					if (p.length >= 2)
+						return p[1].to!long / 1024;
+				}
+		}
+		catch (Exception)
+		{
+		}
+	}
+	return 0;
+}
+
+// glibc malloc introspection: uordblks = in-use (C-side), fordblks = free-but-held-in-arena.
+// Splits a real C-side leak (uordblks climbs with RSS) from arena retention (fordblks large).
+private struct MallInfo2
+{
+	size_t arena, ordblks, smblks, hblks, hblkhd, usmblks, fsmblks, uordblks, fordblks, keepcost;
+}
+
+private extern (C) MallInfo2 mallinfo2() @nogc nothrow;
+private extern (C) int malloc_trim(size_t pad) @nogc nothrow;
+
+/// Debug (PW_MEMSAMPLE=1): every guard tick log VmRSS + GC used/free + glibc c_used/c_free
+/// (texture); every ~30s the decisive experiment — GC.collect x2 then GC.minimize() (D heap),
+/// then malloc_trim(0) (C heap), each with before/after RSS. Reads: gc_used climbs = D leak;
+/// c_used (uordblks) climbs = C leak (unfreed vips/exif/sqlite); c_free large / trim_drop big
+/// = arena retention (config fix); nothing drops = fragmentation/mmap.
+private void memSample(long tick) nothrow
+{
+	try
+	{
+		import std.process : environment;
+		if (environment.get("PW_MEMSAMPLE", "").length == 0)
+			return;
+		import core.memory : GC;
+		import std.stdio : stderr;
+
+		auto s = GC.stats;
+		auto mi = mallinfo2();
+		stderr.writefln(
+			"MEMSAMPLE t=%d rss=%dMB gc_used=%dMB gc_free=%dMB c_used=%dMB c_free=%dMB c_mmap=%dMB",
+			tick, vmRssMb(), cast(long)(s.usedSize / 1048576), cast(long)(s.freeSize / 1048576),
+			cast(long)(mi.uordblks / 1048576), cast(long)(mi.fordblks / 1048576),
+			cast(long)(mi.hblkhd / 1048576));
+		if (tick > 0 && tick % 15 == 0)
+		{
+			GC.collect();
+			GC.collect();
+			auto sc = GC.stats;
+			immutable rssPostCollect = vmRssMb();
+			GC.minimize();
+			immutable rssPostMin = vmRssMb();
+			malloc_trim(0);
+			immutable rssPostTrim = vmRssMb();
+			auto mi2 = mallinfo2();
+			stderr.writefln(
+				"MEMPROBE t=%d post_collect rss=%dMB gc_used=%dMB | post_minimize rss=%dMB | post_trim rss=%dMB trim_drop=%dMB | c_used=%dMB c_free=%dMB",
+				tick, rssPostCollect, cast(long)(sc.usedSize / 1048576), rssPostMin,
+				rssPostTrim, rssPostMin - rssPostTrim,
+				cast(long)(mi2.uordblks / 1048576), cast(long)(mi2.fordblks / 1048576));
+		}
+		stderr.flush();
+	}
+	catch (Exception)
+	{
+	}
+}
+
 /// Lets the kernel write a full core dump when we do die.
 void allowCoreDumps() nothrow @nogc
 {
@@ -72,9 +154,11 @@ void startMemoryGuard(long limitMb, string what = "photo-wagon", bool dump = tru
 	else
 		disableCoreDumps();
 	auto t = new Thread({
+		long tick = 0;
 		for (;;)
 		{
 			Thread.sleep(2.seconds);
+			memSample(tick++);
 			immutable rss = residentMb();
 			if (rss > limitMb)
 			{

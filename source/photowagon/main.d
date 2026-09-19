@@ -37,7 +37,7 @@ int main(string[] args)
 			prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0);
 		}
 	}
-	if (cfg.visionWorker)
+	version (PW_NoVision) {} else if (cfg.visionWorker)
 	{
 		// the OpenCV child: the models' gigabyte lives here, for one pass
 		import photowagon.core.vision.worker : runVisionWorker, VisionModels;

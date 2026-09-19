@@ -17,6 +17,9 @@ import libp2p.protocol.relay.service : Relay;
 import libp2p.protocol.autonat.autonat : AutoNat, NatStatus;
 import libp2p.swarm.connection : Connection, Notifiee, Hold;
 import libp2p.transport.tcp : TcpTransport;
+import libp2p.transport.ws : WsTransport;
+import libp2p.transport.transport : Transport;
+version (LibP2P_OpensslTls) import libp2p.transport.ws_tls_openssl : OpensslTlsProvider;
 
 import photowagon.core.config : Config;
 import photowagon.core.ipc.events : Events;
@@ -66,7 +69,14 @@ final class Node : Notifiee
 		HostConfig hc;
 		hc.agentVersion = agentVersion;
 		hc.swarm.idleTimeout = 120.seconds;
-		host = new Host(identity, [new TcpTransport], hc);
+		// WebSocket transport too: the public libp2p relays are WSS-only (/dns4/.../tls/ws).
+		// Plain /ws today; /tls/ws lights up when built with -version=LibP2P_OpensslTls (openssl linked).
+		version (LibP2P_OpensslTls)
+			auto ws = new WsTransport(new OpensslTlsProvider());
+		else
+			auto ws = new WsTransport();
+		Transport[] transports = [cast(Transport) new TcpTransport, ws];   // cast: else the literal infers Object[]
+		host = new Host(identity, transports, hc);
 		identify = new IdentifyService(host);
 		identify.onIdentified = &identified;
 		PingConfig pc;

@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 15;
+enum currentVersion = 16;
 
 void migrate(Database db)
 {
@@ -43,6 +43,8 @@ void migrate(Database db)
 			migrateV14(db);
 		if (have < 15)
 			db.exec(schemaV15);
+		if (have < 16)
+			db.exec(schemaV16);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -238,6 +240,14 @@ END;
 // thumbnail is a frame, and duration_ms is how long it runs (0 for a still).
 private enum schemaV15 = `
 ALTER TABLE photos ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0;
+`;
+
+// v16: OCR. The text read from screenshots, memes and text-bearing photos (scene = 'Text'),
+// so search finds words that live in the picture. ocr_scanned marks a photo as looked at
+// (0 = pending, 1 = done) so the pass never re-reads it.
+private enum schemaV16 = `
+ALTER TABLE photos ADD COLUMN ocr_text TEXT;
+ALTER TABLE photos ADD COLUMN ocr_scanned INTEGER NOT NULL DEFAULT 0;
 `;
 
 private void migrateV14(Database db)

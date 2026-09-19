@@ -32,6 +32,7 @@ Item {
         return tag + by + (own ? "  " + Math.round(own.prob * 100) + " %" : "") + (other ? "  (" + pct(other) + ")" : "")
     }
     property bool showStrip: true
+    property bool showFaces: true       // toggle the face circles + name tags (the 'H' key / the toolbar eye)
     /// The naming popup's body (a plain Item: headless captures can grab it).
     property alias namerBody: namerBody
 
@@ -244,6 +245,7 @@ Item {
         else if (event.key === Qt.Key_Left) { viewer.step(-1); event.accepted = true }
         else if (event.key === Qt.Key_Right || event.key === Qt.Key_Space) { viewer.step(1); event.accepted = true }
         else if (event.key === Qt.Key_I) { viewer.infoOpen = !viewer.infoOpen; event.accepted = true }
+        else if (event.key === Qt.Key_H) { viewer.showFaces = !viewer.showFaces; event.accepted = true }
         else if (event.key === Qt.Key_F || event.key === Qt.Key_F11) { viewer.fullscreenToggle(); event.accepted = true }
         else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) { viewer.setZoom(viewer.zoom * 1.25); event.accepted = true }
         else if (event.key === Qt.Key_Minus) { viewer.setZoom(viewer.zoom / 1.25); event.accepted = true }
@@ -509,19 +511,19 @@ Item {
         // face circles
         Item {
             id: overlay
-            visible: !viewer.editing && image.status === Image.Ready && viewer.zoom === 1 && (stageHover.hovered || namer.opened)
-            readonly property real px: image.x + (image.width - image.paintedWidth) / 2
-            readonly property real py: image.y + (image.height - image.paintedHeight) / 2
+            // shown while hovering or naming; toggled by showFaces; tracks zoom+pan so
+            // faces stay markable when zoomed in (uses the zoom-aware painted geometry)
+            visible: !viewer.editing && image.status === Image.Ready && viewer.showFaces && (stageHover.hovered || namer.opened)
             Repeater {
                 model: viewer.faces
                 delegate: Item {
                     id: fbox
                     required property var modelData
-                    readonly property real bw: modelData.w * image.paintedWidth
-                    readonly property real bh: modelData.h * image.paintedHeight
+                    readonly property real bw: modelData.w * viewer.paintedW
+                    readonly property real bh: modelData.h * viewer.paintedH
                     readonly property real d: Math.max(bw, bh) * 1.25
-                    x: overlay.px + modelData.x * image.paintedWidth + bw / 2 - d / 2
-                    y: overlay.py + modelData.y * image.paintedHeight + bh / 2 - d / 2
+                    x: viewer.paintedX + modelData.x * viewer.paintedW + bw / 2 - d / 2
+                    y: viewer.paintedY + modelData.y * viewer.paintedH + bh / 2 - d / 2
                     width: d; height: d
                     Rectangle {
                         anchors.fill: parent
@@ -658,7 +660,7 @@ Item {
             id: chip
             required property var modelData
             height: 22
-            width: chipRow.implicitWidth + 18 + (chip.modelData.group === "keyword" && chipHover.hovered ? 14 : 0)
+            width: chipRow.implicitWidth + 18 + (chip.modelData.group === "keyword" ? 14 : 0)
             radius: 11
             color: chipHover.hovered ? theme.selection : theme.hover
             Behavior on width { NumberAnimation { duration: 80 } }
@@ -671,8 +673,8 @@ Item {
                 Image { source: icons.tint(chip.modelData.icon, chip.modelData.group === "keyword" ? theme.accent : theme.muted); sourceSize.width: 12; sourceSize.height: 12; anchors.verticalCenter: parent.verticalCenter }
                 Label { text: chip.modelData.text; color: theme.text; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
             }
-            Image {   // × on a keyword: remove it from this photo
-                visible: chip.modelData.group === "keyword" && chipHover.hovered
+            Image {   // × on a keyword: remove it from this photo (always shown, so it's discoverable)
+                visible: chip.modelData.group === "keyword"
                 anchors.right: parent.right
                 anchors.rightMargin: 6
                 anchors.verticalCenter: parent.verticalCenter
@@ -896,8 +898,35 @@ Item {
                 InfoRow { label: "File"; value: viewer.photo ? viewer.formatSize(viewer.photo.size) : "" }
                 InfoRow { label: "Folder"; value: viewer.photo && viewer.photo.path ? viewer.folderOf(viewer.photo.path) : "" }
                 InfoRow { label: "Location"; value: viewer.photo && viewer.photo.lat !== null ? viewer.photo.lat.toFixed(4) + ", " + viewer.photo.lon.toFixed(4) : "" }
+                // text read from inside the picture (OCR) — searchable, and shown here
+                Rectangle { Layout.fillWidth: true; height: 1; color: theme.separator; visible: viewer.photo && viewer.photo.ocrText }
+                ColumnLayout {
+                    visible: viewer.photo && viewer.photo.ocrText
+                    Layout.fillWidth: true
+                    spacing: 4
+                    Label { text: "Text"; color: theme.muted; font.pixelSize: 12; font.bold: true }
+                    Label {
+                        text: viewer.photo ? viewer.photo.ocrText : ""
+                        color: theme.text
+                        font.pixelSize: 12
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+                }
                 Rectangle { Layout.fillWidth: true; height: 1; color: theme.separator }
-                Label { text: "People"; color: theme.muted; font.pixelSize: 12; font.bold: true }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label { text: "People"; color: theme.muted; font.pixelSize: 12; font.bold: true; Layout.fillWidth: true }
+                    Label { visible: viewer.faces.length > 0; text: "Tags on photo"; color: theme.muted; font.pixelSize: 11 }
+                    Switch {
+                        visible: viewer.faces.length > 0
+                        checked: viewer.showFaces
+                        onToggled: viewer.showFaces = checked
+                        Layout.preferredHeight: 26
+                        ToolTip.text: "Show or hide the face circles on the photo (H)"
+                        ToolTip.visible: hovered
+                    }
+                }
                 Flow {
                     Layout.fillWidth: true
                     spacing: 10
@@ -980,7 +1009,12 @@ Item {
         property int cursor: -1
         modal: true
         anchors.centerIn: parent
-        width: 400
+        // wide enough for the button row (it grows with "Use as portrait" and a long name),
+        // but never past the viewer edge — was a fixed 400 and the buttons overflowed it
+        width: Math.min((parent ? parent.width : 900) - 24, Math.max(400, implicitWidth))
+        // never taller than the viewer: a center-anchored Popup whose content exceeds the
+        // parent used to run its buttons off-screen when there were many candidate people
+        height: Math.min(implicitHeight, (parent ? parent.height : 800) - 24)
         padding: 16
         background: Rectangle { color: theme.panel; border.color: theme.separator; radius: 10 }
         onOpened: { nameField.text = currentName; nameField.forceActiveFocus(); nameField.selectAll(); cursor = -1; library.loadCandidates(faceId) }
@@ -1019,7 +1053,9 @@ Item {
                 id: peopleList
                 visible: namer.matches.length > 0
                 Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(280, namer.matches.length * 40)
+                Layout.fillHeight: true                                          // shrinks (and scrolls) if the popup is clamped, so the buttons stay on-screen
+                Layout.preferredHeight: Math.min(280, namer.matches.length * 40)  // its natural height — the suggestions show
+                Layout.minimumHeight: 0
                 clip: true
                 model: namer.matches
                 ScrollBar.vertical: ScrollBar { }

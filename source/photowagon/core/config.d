@@ -80,6 +80,12 @@ struct Config
 		return buildPath(modelsDir, "clip_vision.onnx");
 	}
 
+	/// the CLIP ViT-B/32 text tower for natural-language search (optional: no file, no search)
+	string clipTextModel() const
+	{
+		return buildPath(modelsDir, "clip_text.onnx");
+	}
+
 	string sfaceModel() const
 	{
 		return buildPath(modelsDir, "face_recognition_sface_2021dec.onnx");

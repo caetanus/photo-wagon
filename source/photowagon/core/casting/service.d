@@ -60,6 +60,14 @@ final class CastService
 	private CastSession session;
 	private long counter;
 	private int slideGen;   // bumped to end a running slideshow
+	// Live slideshow playback state — the running fibre reads these; the PC/phone
+	// control bar sets them through slideNext/slidePrev/slidePause/slideResume.
+	private long[] slideIds;
+	private size_t slideIdx;
+	private bool slidePaused;
+	private int slideNudge;   // bumped by next()/prev() so the wait breaks and re-shows now
+	private string slideHost, slideKind, slideControl;
+	private ushort slidePort;
 
 	this(PhotoRepo photos)
 	{
@@ -121,51 +129,102 @@ final class CastService
 		showPhoto(host, port, kind, control, id);
 	}
 
-	/// A slideshow of every photograph, oldest first, one every `intervalMs`, looping,
-	/// until `stop()` or another cast supersedes it.
-	void castSlideshow(string host, ushort port, string kind, string control, int intervalMs)
+	/// A slideshow of photographs, oldest first, one every `intervalMs`, looping,
+	/// until `stop()` or another cast supersedes it. With `pick` non-empty, only those
+	/// photos play (in the given order); otherwise the whole library, in time order.
+	void castSlideshow(string host, ushort port, string kind, string control, int intervalMs, long[] pick = null)
 	{
 		import photowagon.core.library.photos : Filter;
 		import vibe.core.core : runTask, sleep;
 		import core.time : msecs;
 
-		Filter f;
-		f.kind = "photo";
-		auto page = photos.page(f, 0, 100_000);   // ids in time order; the set is bounded by the library
 		long[] ids;
-		foreach (ref ph; page)
-			ids ~= ph.id;
+		if (pick.length)
+		{
+			ids = pick.dup;
+		}
+		else
+		{
+			Filter f;
+			f.kind = "photo";
+			auto page = photos.page(f, 0, 100_000);   // ids in time order; the set is bounded by the library
+			foreach (ref ph; page)
+				ids ~= ph.id;
+		}
 		if (ids.length == 0)
 			return;
 
+		slideIds = ids;
+		slideIdx = 0;
+		slidePaused = false;
+		slideHost = host; slidePort = port; slideKind = kind; slideControl = control;
 		slideGen++;
 		immutable myGen = slideGen;
 		immutable ms = intervalMs < 1000 ? 1000 : intervalMs;
+		immutable nudge0 = slideNudge;
 		logInfo("cast: slideshow of %s photos every %s ms on %s", ids.length, ms, host);
 		runTask(() nothrow {
-			size_t i;
-			while (true)
+			int seenNudge = nudge0;
+			while (myGen == slideGen)
 			{
-				if (myGen != slideGen)
-					break;
 				try
-				{
-					showPhoto(host, port, kind, control, ids[i % ids.length]);
-					i++;
-					sleep(ms.msecs);
-				}
+					showPhoto(slideHost, slidePort, slideKind, slideControl, slideIds[slideIdx % slideIds.length]);
 				catch (Exception e)
 				{
 					try logDiagnostic("cast: slideshow: %s", e.msg); catch (Exception) {}
 					break;
 				}
+				// Wait one interval in slices so pause/next/prev take effect promptly.
+				long waited = 0;
+				while (myGen == slideGen)
+				{
+					try sleep(150.msecs); catch (Exception) return;
+					if (myGen != slideGen)
+						return;
+					if (slideNudge != seenNudge)   // next()/prev() moved slideIdx → re-show now
+						break;
+					if (!slidePaused)
+					{
+						waited += 150;
+						if (waited >= ms)
+							break;
+					}
+				}
+				if (myGen != slideGen)
+					break;
+				if (slideNudge != seenNudge)
+					seenNudge = slideNudge;                        // next/prev already set slideIdx
+				else if (!slidePaused)
+					slideIdx = (slideIdx + 1) % slideIds.length;   // auto-advance
 			}
 		});
 	}
 
+	/// PC/phone control of a running slideshow. No-ops when nothing is playing.
+	void slideNext() nothrow
+	{
+		if (slideIds.length == 0)
+			return;
+		slideIdx = (slideIdx + 1) % slideIds.length;
+		slideNudge++;
+	}
+
+	void slidePrev() nothrow
+	{
+		if (slideIds.length == 0)
+			return;
+		slideIdx = (slideIdx + slideIds.length - 1) % slideIds.length;
+		slideNudge++;
+	}
+
+	void slidePause() nothrow { slidePaused = true; }
+	void slideResume() nothrow { slidePaused = false; }
+
 	void stop() nothrow
 	{
 		slideGen++;
+		slideIds = null;
+		slidePaused = false;
 		try
 		{
 			if (session !is null)

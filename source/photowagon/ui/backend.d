@@ -39,6 +39,8 @@ version (WithUi)
     Signal!() tagLabelsChanged;
     Signal!() photoTagsChanged;
     Signal!() placeSuggestionsChanged;
+    Signal!() dayMatesChanged;
+    Signal!() systemAccentChanged;
     Signal!() datesChanged;
     Signal!() rootsChanged;
     Signal!() albumsChanged;
@@ -113,6 +115,11 @@ version (WithUi)
     @Property("placesChanged") string places = `{"places":[]}`;
     /// places.suggest for the name being typed in "Set Place…": {"places":[{place,country,own}]}
     @Property("placeSuggestionsChanged") string placeSuggestions = `{"places":[]}`;
+    /// album.dayMates for the photos being added to an album: {"items":[…]} — same-day suggestions
+    @Property("dayMatesChanged") string dayMates = `{"items":[]}`;
+    /// The desktop's accent colour as "#rrggbb" (GNOME accent-color → Adwaita), or "" when
+    /// unknown / not GNOME. The "System" theme uses it so the accent matches the desktop exactly.
+    @Property("systemAccentChanged") string systemAccent = "";
     /// tags.list: {"scene":[{tag,count,cover}],"mood":[…],"weather":[…],"holiday":[…],"available"} — most photos first
     @Property("tagsChanged") string tags = `{"scene":[],"mood":[],"weather":[],"holiday":[],"available":false}`;
     /// tags.labels: {"scene":[names],"mood":[names],"weather":[…],"holiday":[…]} — what the user can pick in the menu
@@ -166,6 +173,7 @@ version (WithUi)
     private string fMoment;   // a moment key: pages through moments.page instead of library.page
     private string fKeyword;
     private long fSimilar;   // photos that look like this one (photo.similar), instead of library.page
+    private string fSemantic;   // free-text search (search.combined: file/OCR + CLIP), instead of library.page
     private long lastTimelineHns;   // Clock.currStdTime of the last library.changed refresh (coalescing)
     /// Screenshots and memes stay out of the library timeline (they have their own
     /// views under Media Types); an album, a search or an explicit kind shows everything.
@@ -288,9 +296,13 @@ version (WithUi)
         loadDates();
     }
 
-    /// A year, a month or a day (0 = any). Keeps a person/album/root filter.
+    /// A year, a month or a day (0 = any). Keeps a person/album/root filter, but leaves
+    /// the alternate result views (search / similar / moment) — a date is a normal page.
     @Slot void filterDate(int year, int month, int day)
     {
+        fSemantic = null;
+        fSimilar = 0;
+        fMoment = null;
         fYear = year; fMonth = year ? month : 0; fDay = month ? day : 0;
         publishFilter();
         reload(0, pageLimit);
@@ -343,15 +355,21 @@ version (WithUi)
         loadDates();
     }
 
-    /// Photos whose file name or folder contains `q` ("" = everything).
+    /// Free-text search: file name, folder, the OCR text inside a picture, and CLIP
+    /// natural-language matches, blended by search.combined ("" = everything).
     @Slot void filterSearch(string q)
     {
         import std.string : strip;
         clearFilters();
-        fText = q.strip();
-        publishFilter();
+        fSemantic = q.strip();
+        if (!fSemantic.length)
+        {
+            publishFilter();
+            reload(0, pageLimit);
+            loadDates();
+            return;
+        }
         reload(0, pageLimit);
-        loadDates();
     }
 
     /// Photos of one place ("" clears).
@@ -669,19 +687,107 @@ version (WithUi)
         });
     }
 
-    /// Start a looping slideshow of the library on a screen, one photo every 5 s.
-    @Slot void castSlideshow(string host, int port, string kind, string control)
+    /// Start a looping slideshow on a screen, one photo every 5 s. `photoIdsJson` is a
+    /// JSON array of ids to play; "" (or "[]") plays the whole library, in time order.
+    @Slot void castSlideshow(string host, int port, string kind, string control, string photoIdsJson)
     {
         JSONValue params = ["host": JSONValue(host), "port": JSONValue(port),
             "kind": JSONValue(kind), "control": JSONValue(control), "intervalMs": JSONValue(5000)];
+        if (photoIdsJson.length)
+        {
+            try
+            {
+                auto ids = parseJSON(photoIdsJson);
+                if (ids.type == JSONType.array && ids.array.length)
+                    params["photoIds"] = ids;
+            }
+            catch (JSONException) { }
+        }
         client.request("cast.slideshow", params, (r, e) {
             if (e.type != JSONType.null_) { report("cast.slideshow", e); return; }
         });
     }
 
+    @Slot void castNext() { client.request("cast.next", (r, e) { cast(void) r; cast(void) e; }); }
+    @Slot void castPrev() { client.request("cast.prev", (r, e) { cast(void) r; cast(void) e; }); }
+    @Slot void castPause() { client.request("cast.pause", (r, e) { cast(void) r; cast(void) e; }); }
+    @Slot void castResume() { client.request("cast.resume", (r, e) { cast(void) r; cast(void) e; }); }
+
     @Slot void castStop()
     {
         client.request("cast.stop", (r, e) { cast(void) r; cast(void) e; });
+    }
+
+    /// Photos from the same day as `photoIdsJson` (a JSON array) → dayMates, for the
+    /// "add the rest of that day too?" suggestion in the Add-to-Album dialog.
+    @Slot void loadDayMates(string photoIdsJson)
+    {
+        JSONValue ids;
+        try
+            ids = parseJSON(photoIdsJson);
+        catch (JSONException)
+            ids = JSONValue.emptyArray;
+        if (ids.type != JSONType.array || ids.array.length == 0)
+        {
+            dayMates = `{"items":[]}`;
+            dayMatesChanged.emit();
+            return;
+        }
+        JSONValue params = JSONValue.emptyObject;
+        params["ids"] = ids;
+        client.request("album.dayMates", params, (r, e) {
+            if (e.type != JSONType.null_) { report("album.dayMates", e); return; }
+            dayMates = r.toString();
+            dayMatesChanged.emit();
+        });
+    }
+
+    /// Read the desktop's accent colour (GNOME `accent-color`) → systemAccent, as the
+    /// matching Adwaita hex. A cheap one-shot at startup; QML calls it, and can re-call
+    /// it to pick up a change. Silent (and clears to "") when there is no GNOME setting.
+    @Slot void refreshSystemAccent()
+    {
+        import std.process : execute;
+        import std.string : strip, toLower;
+
+        string hex = "";
+        try
+        {
+            auto r = execute(["gsettings", "get", "org.gnome.desktop.interface", "accent-color"]);
+            if (r.status == 0)
+            {
+                auto s = r.output.strip;
+                if (s.length >= 2 && s[0] == '\'' && s[$ - 1] == '\'')
+                    s = s[1 .. $ - 1];
+                hex = adwaitaAccentHex(s.toLower);
+            }
+        }
+        catch (Exception)
+        {
+        }
+        if (hex != systemAccent)
+        {
+            systemAccent = hex;
+            systemAccentChanged.emit();
+        }
+    }
+
+    /// GNOME 47+ named accent → the libadwaita @accent_bg_color hex.
+    private static string adwaitaAccentHex(string name)
+    {
+        switch (name)
+        {
+            case "blue":   return "#3584e4";
+            case "teal":   return "#2190a4";
+            case "green":  return "#3a944a";
+            case "yellow": return "#c88800";
+            case "orange": return "#ed5b00";
+            case "red":    return "#e62d42";
+            case "pink":   return "#d56199";
+            case "purple": return "#9141ac";
+            case "slate":  return "#6f8396";
+            default:       return "";
+        }
     }
 
     /// The user's word on where a selection was taken ("" clears).
@@ -757,6 +863,7 @@ version (WithUi)
         fTagGroup = fTag = null;
         fKeyword = null;
         fSimilar = 0;
+        fSemantic = null;
         fMemory = null;
         fMoment = null;
     }
@@ -833,6 +940,29 @@ version (WithUi)
 
     private void reload(int offset, int limit)
     {
+        if (fSemantic.length)
+        {
+            if (offset > 0)
+                return;   // one page: the blended search result
+            JSONValue sp = JSONValue.emptyObject;
+            sp["q"] = fSemantic;
+            sp["limit"] = 200;
+            immutable asked = fSemantic;
+            client.request("search.combined", sp, (r, e) {
+                if (e.type != JSONType.null_) { report("search.combined", e); return; }
+                if (fSemantic != asked) return;   // a newer query is in flight
+                items.length = 0;
+                foreach (it; r["items"].array)
+                    items ~= it;
+                JSONValue pg = JSONValue.emptyObject;
+                pg["total"] = items.length;
+                pg["offset"] = 0;
+                pg["items"] = JSONValue(items);
+                page = pg.toString();
+                pageChanged.emit();
+            });
+            return;
+        }
         if (fSimilar)
         {
             if (offset > 0)

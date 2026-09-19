@@ -44,6 +44,7 @@ struct Photo
 	string edits;      // edit/edits.d JSON; null = untouched
 	string editedHash; // the rendered result in the store
 	long durationMs;   // > 0 for a video (kind = 'video'); its running time
+	string ocrText;    // text read from the picture (OCR); null = not scanned or nothing found
 }
 
 /// Restricts a page or a count. Zero means "no restriction" for every field.
@@ -305,6 +306,37 @@ final class PhotoRepo
 		return out_;
 	}
 
+	/// Photos taken on the same calendar day(s) as any of `seedIds`, minus the seeds
+	/// themselves — the "you're adding photos of an event; here's the rest of that day"
+	/// suggestion. Newest first, capped at `limit`. Photos without a date are ignored.
+	Photo[] sameDayAs(long[] seedIds, long limit)
+	{
+		import std.algorithm : map;
+		import std.array : array, join;
+
+		if (seedIds.length == 0)
+			return null;
+		immutable ph = seedIds.map!(_ => "?").array.join(",");   // ?,?,… — one per seed id
+		auto s = db.prepare(selectColumns ~ " FROM photos p"
+			~ " WHERE p.taken_ts > 0"
+			~ " AND strftime('%Y-%m-%d', p.taken_ts, 'unixepoch', 'localtime') IN"
+			~ " (SELECT strftime('%Y-%m-%d', taken_ts, 'unixepoch', 'localtime')"
+			~ "  FROM photos WHERE id IN (" ~ ph ~ ") AND taken_ts > 0)"
+			~ " AND p.id NOT IN (" ~ ph ~ ")"
+			~ " AND (p.kind = 'photo' OR p.kind IS NULL)"
+			~ " ORDER BY p.taken_ts DESC, p.id DESC LIMIT ?");
+		int i = 0;
+		foreach (id; seedIds)
+			s.bind(++i, id);                       // the day-key subquery
+		foreach (id; seedIds)
+			s.bind(++i, id);                       // the NOT IN exclusion
+		s.bind(++i, limit < 1 ? 1 : limit);
+		Photo[] out_;
+		while (s.step())
+			out_ ~= readRow(s);
+		return out_;
+	}
+
 	Neighbours neighbours(long id, Filter f)
 	{
 		auto me = get(id);
@@ -384,6 +416,7 @@ final class PhotoRepo
 			"editedUrl": p.editedHash is null ? JSONValue(null) : JSONValue(fileUrl(store.pathFor(p.editedHash))),
 			"video": JSONValue(p.kind == "video"),
 			"duration": JSONValue(p.durationMs),
+			"ocrText": JSONValue(p.ocrText),
 		];
 		return j;
 	}
@@ -407,7 +440,7 @@ final class PhotoRepo
 		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'weather' AND t.tag <> ''),
 		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'holiday' AND t.tag <> ''),
 		(SELECT group_concat(k.keyword, char(31)) FROM (SELECT keyword FROM photo_keywords WHERE photo_id = p.id ORDER BY keyword) k),
-		p.edits, p.edited_hash, p.duration_ms`;
+		p.edits, p.edited_hash, p.duration_ms, p.ocr_text`;
 
 	private static Photo readRow(ref Statement s)
 	{
@@ -450,6 +483,7 @@ final class PhotoRepo
 		p.edits = s.getString(27);
 		p.editedHash = s.getString(28);
 		p.durationMs = s.getLong(29);
+		p.ocrText = s.getString(30);
 		return p;
 	}
 
@@ -516,9 +550,13 @@ final class PhotoRepo
 		}
 		if (f.text.length)
 		{
-			w.where ~= " AND p.path LIKE ? ESCAPE '\\'";
 			import std.string : replace;
-			w.add("%" ~ f.text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") ~ "%");
+
+			// the file/folder name, and the text read from inside the picture (OCR)
+			immutable like = "%" ~ f.text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") ~ "%";
+			w.where ~= " AND (p.path LIKE ? ESCAPE '\\' OR p.ocr_text LIKE ? ESCAPE '\\')";
+			w.add(like);
+			w.add(like);
 		}
 		if (f.year)
 		{

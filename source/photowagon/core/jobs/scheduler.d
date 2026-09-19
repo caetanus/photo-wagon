@@ -28,6 +28,7 @@ enum Priority : int
 	scenes = 2,
 	faces = 3,
 	fileTags = 4,
+	ocr = 5,       // reads text in screenshots/memes/documents; after kinds + scenes decide what to read
 }
 
 final class Scheduler

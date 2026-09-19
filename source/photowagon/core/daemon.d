@@ -19,7 +19,8 @@ import photowagon.core.api.album_api : registerAlbumApi;
 import photowagon.core.api.daemon_api : registerDaemonApi;
 import photowagon.core.api.device_api : registerDeviceApi;
 import photowagon.core.api.edit_api : registerEditApi;
-import photowagon.core.api.face_api : registerFaceApi;
+version (PW_NoVision) {} else import photowagon.core.api.face_api : registerFaceApi;
+version (PW_NoVision) {} else import photowagon.core.api.search_api : registerSearchApi;
 import photowagon.core.api.import_api : registerImportApi;
 import photowagon.core.api.usb_api : registerUsbApi;
 import photowagon.core.api.cast_api : registerCastApi;
@@ -30,12 +31,12 @@ import photowagon.core.api.moments_api : registerMomentsApi;
 import photowagon.core.api.p2p_api : registerP2pApi;
 import photowagon.core.api.pairing_api : registerPairingApi, ServerControl;
 import photowagon.core.api.places_api : registerPlacesApi;
-import photowagon.core.api.tags_api : registerTagsApi;
+version (PW_NoVision) {} else import photowagon.core.api.tags_api : registerTagsApi;
 import photowagon.core.config : Config;
 import photowagon.core.db.schema : migrate;
 import photowagon.core.db.sqlite : Database;
 import photowagon.core.faces.repo : FaceRepo;
-import photowagon.core.faces.service : FaceService;
+version (PW_NoVision) {} else import photowagon.core.faces.service : FaceService;
 import photowagon.core.indexer.indexer : Indexer;
 import photowagon.core.ipc.events : Events;
 import photowagon.core.ipc.handler : RequestHandler;
@@ -43,7 +44,7 @@ import photowagon.core.ipc.link : InProcessLink;
 import photowagon.core.ipc.protocol : Registry;
 import photowagon.core.ipc.server : IpcServer;
 import photowagon.core.jobs.scheduler : Scheduler, installScheduler;
-import photowagon.core.vision.worker : configureVision, VisionModels, releaseVision;
+version (PW_NoVision) {} else import photowagon.core.vision.worker : configureVision, VisionModels, releaseVision;
 import photowagon.core.p2p.ipc : IpcOverP2p;
 import photowagon.core.p2p.blobpush : BlobStash, BlobOverP2p;
 import photowagon.core.library.albums : AlbumRepo;
@@ -55,8 +56,9 @@ import photowagon.core.casting.service : CastService;
 import photowagon.core.library.kindjob : KindService;
 import photowagon.core.library.photos : PhotoRepo;
 import photowagon.core.library.places : Geocoder, PlaceService;
-import photowagon.core.library.scenes : SceneService;
-import photowagon.core.library.placemodel : PlaceModel;
+version (PW_NoVision) {} else import photowagon.core.library.scenes : SceneService;
+version (PW_NoVision) {} else import photowagon.core.library.ocr : OcrService;
+version (PW_NoVision) {} else import photowagon.core.library.placemodel : PlaceModel;
 import photowagon.core.library.keywords : KeywordService;
 import photowagon.core.metadata.filetags : FileTagWriter, applyFileSubjects;
 import photowagon.core.library.roots : RootRepo;
@@ -88,12 +90,13 @@ final class Daemon : ServerControl
 	private RequestHandler inproc;
 	private FiberGroup own;
 	private Indexer indexer;
-	private FaceService facesService;
+	version (PW_NoVision) {} else private FaceService facesService;
 	private KindService kinds;
 	private bool taggingArmed;   // a deferred "start tagging when quiet" retry is scheduled
 	private PlaceService places;
-	private SceneService scenes;
-	private PlaceModel placeModel;
+	version (PW_NoVision) {} else private SceneService scenes;
+	version (PW_NoVision) {} else private OcrService ocr;
+	version (PW_NoVision) {} else private PlaceModel placeModel;
 	private FileTagWriter fileTags;
 	private Node node;
 	private Sharing sharing;
@@ -117,7 +120,7 @@ final class Daemon : ServerControl
 	{
 		mkdirRecurse(cfg.dataDir);
 		installScheduler(new Scheduler(cfg.heavyJobs));
-		configureVision(VisionModels(cfg.clipModel, cfg.yunetModel, cfg.sfaceModel));
+		version (PW_NoVision) {} else configureVision(VisionModels(cfg.clipModel, cfg.yunetModel, cfg.sfaceModel, cfg.clipTextModel));
 		db = new Database(cfg.dbPath);
 		migrate(db);
 		auto store = new ContentStore(cfg.storeDir);
@@ -131,7 +134,7 @@ final class Daemon : ServerControl
 		auto moments = new MomentsService(db, store, photos);
 		indexer = new Indexer(cfg, photos, events);
 		auto faceRepo = new FaceRepo(db);
-		facesService = new FaceService(cfg, db, faceRepo, photos, store, events);
+		version (PW_NoVision) {} else facesService = new FaceService(cfg, db, faceRepo, photos, store, events);
 		kinds = new KindService(db, photos, faceRepo, store, events);
 		// index → kinds → faces: faces are only looked for in photographs
 		try
@@ -154,12 +157,18 @@ final class Daemon : ServerControl
 				logWarn("places: pass failed: %s", e.msg);
 			startTaggingWhenQuiet();
 		};
-		scenes = new SceneService(cfg, db, photos, store, events);
-		kinds.onDone = () { facesService.start(); scenes.start(); };   // both look only at photographs
+		version (PW_NoVision) {} else scenes = new SceneService(cfg, db, photos, store, events);
+		version (PW_NoVision) {} else kinds.onDone = () { facesService.start(); scenes.start(); };   // both look only at photographs
 		// learned places: recognise where a photo was taken by how it looks (no GPS needed),
 		// once the CLIP embeddings are current — and again whenever the user names a new place
-		placeModel = new PlaceModel(db, events);
-		scenes.onDone = () { placeModel.start(); };
+		version (PW_NoVision) {} else
+		{
+			placeModel = new PlaceModel(db, events);
+			ocr = new OcrService(cfg, db, photos, store, events);
+			// scenes run after kinds, so by onDone both `kind` and the 'Text' scene tag are
+			// known — exactly what OCR needs to pick screenshots/memes/documents.
+			scenes.onDone = () { placeModel.start(); ocr.start(); };
+		}
 
 		if (cfg.p2p)
 		{
@@ -183,11 +192,14 @@ final class Daemon : ServerControl
 		registerDaemonApi(registry, cfg, node, &requestStop);
 		registerDeviceApi(registry, deviceRepo, events, pairingMgr);
 		registerPairingApi(registry, this);
-		registerLibraryApi(registry, roots, photos, dates, indexer, events, kinds, () { facesService.start(); });
+		version (PW_NoVision)
+			registerLibraryApi(registry, roots, photos, dates, indexer, events, kinds, () {});
+		else
+			registerLibraryApi(registry, roots, photos, dates, indexer, events, kinds, () { facesService.start(); });
 		registerMediaApi(registry, photos, store);
 		auto blobStash = new BlobStash;
 		registerImportApi(registry, cfg, roots, photos, indexer, blobStash);
-		registerFaceApi(registry, faceRepo, facesService, store, events);
+		version (PW_NoVision) {} else registerFaceApi(registry, faceRepo, facesService, store, events);
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerMemoriesApi(registry, memories, photos);
 		registerMomentsApi(registry, moments, photos);
@@ -197,10 +209,14 @@ final class Daemon : ServerControl
 		fileTags = new FileTagWriter(db, events);
 		auto keywords = new KeywordService(db, store, events);
 		keywords.onUserChange = (const(long)[] ids) { fileTags.enqueue(ids); };
-		scenes.onUserChange = (const(long)[] ids) { fileTags.enqueue(ids); };
-		places.onUserChange = (const(long)[] ids) { fileTags.enqueue(ids); if (placeModel) placeModel.relearn(); };
+		version (PW_NoVision) {} else scenes.onUserChange = (const(long)[] ids) { fileTags.enqueue(ids); };
+		version (PW_NoVision)
+			places.onUserChange = (const(long)[] ids) { fileTags.enqueue(ids); };
+		else
+			places.onUserChange = (const(long)[] ids) { fileTags.enqueue(ids); if (placeModel) placeModel.relearn(); };
 		indexer.onFileSubjects = (long id, string[] subjects) { applyFileSubjects(db, id, subjects); };
-		registerTagsApi(registry, scenes, keywords, photos, fileTags);
+		version (PW_NoVision) {} else registerTagsApi(registry, scenes, keywords, photos, fileTags);
+		version (PW_NoVision) {} else registerSearchApi(registry, photos, db);
 		registerEditApi(registry, cfg, photos, store, events, (string path) {
 			import std.string : startsWith;
 			foreach (root; roots.list())
@@ -431,15 +447,20 @@ final class Daemon : ServerControl
 			indexer.close();
 		if (kinds)
 			kinds.close();
-		if (facesService)
-			facesService.close();
-		if (scenes)
-			scenes.close();
-		if (placeModel)
-			placeModel.close();
+		version (PW_NoVision) {} else
+		{
+			if (facesService)
+				facesService.close();
+			if (scenes)
+				scenes.close();
+			if (ocr)
+				ocr.close();
+			if (placeModel)
+				placeModel.close();
+		}
 		if (fileTags)
 			fileTags.close();
-		releaseVision();
+		version (PW_NoVision) {} else releaseVision();
 		if (sharing)
 			sharing.close();
 		if (node)

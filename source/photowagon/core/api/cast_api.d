@@ -28,7 +28,31 @@ void registerCastApi(Registry r, CastService svc)
 			throw new ApiError("cast_off", "casting runs only with the desktop UI");
 		svc.castSlideshow(requireString(p, "host"), cast(ushort) getLong(p, "port", 8009),
 			getString(p, "kind", "chromecast"), getString(p, "control", ""),
-			cast(int) getLong(p, "intervalMs", 5000));
+			cast(int) getLong(p, "intervalMs", 5000), getLongArray(p, "photoIds"));
+		return obj();
+	});
+
+	r.add("cast.next", (JSONValue p) {
+		if (svc !is null)
+			svc.slideNext();
+		return obj();
+	});
+
+	r.add("cast.prev", (JSONValue p) {
+		if (svc !is null)
+			svc.slidePrev();
+		return obj();
+	});
+
+	r.add("cast.pause", (JSONValue p) {
+		if (svc !is null)
+			svc.slidePause();
+		return obj();
+	});
+
+	r.add("cast.resume", (JSONValue p) {
+		if (svc !is null)
+			svc.slideResume();
 		return obj();
 	});
 

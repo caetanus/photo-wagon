@@ -24,6 +24,7 @@ struct VisionModels
 	string clip;
 	string yunet;
 	string sface;
+	string clipText;   // the CLIP text tower, for natural-language search
 }
 
 // ---- the parent side ---------------------------------------------------------------
@@ -156,6 +157,13 @@ private extern (C) nothrow @nogc
 	}
 
 	int pw_face_detect(const char* path, int maxEdge, int edgeHint, PwFace* out_, int maxFaces);
+	int pw_ocr_init(const char* langs);
+	void pw_ocr_release();
+	char* pw_ocr_image(const char* path, int* outConf);
+	void pw_ocr_free(char* s);
+	int pw_clip_text_init(const char* onnx);
+	void pw_clip_text_release();
+	int pw_clip_encode_text(const int* ids77, float* out512);
 }
 
 /// `photo-wagon --vision-worker <clip> <yunet> <sface>`: models load on first use,
@@ -164,7 +172,7 @@ int runVisionWorker(VisionModels m)
 {
 	import std.string : toStringz;
 
-	bool clipLoaded, facesLoaded;
+	bool clipLoaded, facesLoaded, ocrLoaded, clipTextLoaded;
 	stdout.writeln("ready");
 	stdout.flush();
 	foreach (line; stdin.byLineCopy)
@@ -216,6 +224,48 @@ int runVisionWorker(VisionModels m)
 						out_ ~= " " ~ v.to!string;
 				}
 			}
+			else if (req.startsWith("ocr "))
+			{
+				import std.base64 : Base64;
+				import std.string : fromStringz;
+
+				if (!ocrLoaded)
+				{
+					if (pw_ocr_init("por".toStringz) != 0)
+						throw new Exception("cannot load the OCR engine (Tesseract)");
+					ocrLoaded = true;
+				}
+				immutable path = req[4 .. $];
+				int conf;
+				auto p = pw_ocr_image(path.toStringz, &conf);
+				if (p is null)
+					throw new Exception("OCR failed for " ~ path);
+				auto text = p.fromStringz.idup;   // copy off the C buffer before freeing
+				pw_ocr_free(p);
+				// base64 so the recognised text (spaces, newlines, accents) survives the line protocol
+				out_ = "ok " ~ conf.to!string ~ " " ~ cast(string) Base64.encode(cast(ubyte[]) text);
+			}
+			else if (req.startsWith("cliptext "))
+			{
+				if (!clipTextLoaded)
+				{
+					if (!m.clipText.length || pw_clip_text_init(m.clipText.toStringz) != 0)
+						throw new Exception("cannot load the CLIP text model (" ~ m.clipText ~ ")");
+					clipTextLoaded = true;
+				}
+				auto parts = req[9 .. $].split(' ');
+				if (parts.length != 77)
+					throw new Exception("cliptext: expected 77 ids");
+				int[77] ids = void;
+				foreach (i, s; parts)
+					ids[i] = s.to!int;
+				float[512] e = void;
+				if (pw_clip_encode_text(ids.ptr, e.ptr) != 0)
+					throw new Exception("CLIP text encoding failed");
+				out_ = "ok";
+				foreach (v; e)
+					out_ ~= " " ~ v.to!string;
+			}
 			else
 				throw new Exception("unknown request");
 		}
@@ -226,5 +276,9 @@ int runVisionWorker(VisionModels m)
 	}
 	if (clipLoaded)
 		pw_clip_release();
+	if (ocrLoaded)
+		pw_ocr_release();
+	if (clipTextLoaded)
+		pw_clip_text_release();
 	return 0;
 }

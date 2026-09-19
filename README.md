@@ -188,6 +188,17 @@ to the face models: `models/clip_vision.onnx` is `onnx/vision_model.onnx` from
 (335 MB, fp32). Without it everything else works and those two sections stay empty.
 `data/scenes/make-prompts.py` regenerates the text side after you edit the vocabulary.
 
+**Natural-language search model** — searching by meaning ("a dog on the beach") adds
+the CLIP *text* tower: `models/clip_text.onnx` is `onnx/text_model.onnx` from the same
+[Xenova/clip-vit-base-patch32](https://huggingface.co/Xenova/clip-vit-base-patch32)
+(243 MB, fp32). Without it search still matches file names, the OCR text, tags, people
+and dates — only the by-meaning results drop out. The BPE tokenizer's vocabulary and
+merges are compiled in from `data/clip` (extracted from the model's `tokenizer.json`).
+
+**OCR** — reading the text in screenshots, memes and documents uses **Tesseract**
+(a system package; `por` here, add `tesseract-data-eng` for more English). No model to
+fetch; if Tesseract is absent the build says so and OCR is simply off.
+
 ## Resource discipline
 
 Background work runs on a leash (`core/jobs/scheduler.d`):

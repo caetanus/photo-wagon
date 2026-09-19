@@ -96,3 +96,68 @@ int pw_clip_encode(const char *image_path, float *out512)
         return -1;
     }
 }
+
+/* ---- the text tower (natural-language search) ---------------------------------- */
+
+static cv::dnn::Net g_text_net;
+static bool g_text_loaded = false;
+
+int pw_clip_text_init(const char *text_onnx_path)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_text_loaded)
+        return 0;
+    try {
+        cv::setNumThreads(2);
+        g_text_net = cv::dnn::readNetFromONNX(text_onnx_path);
+        g_text_net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+        g_text_net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+        g_text_loaded = !g_text_net.empty();
+        return g_text_loaded ? 0 : -1;
+    } catch (...) {
+        g_text_loaded = false;
+        return -1;
+    }
+}
+
+void pw_clip_text_release(void)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_text_net = cv::dnn::Net();
+    g_text_loaded = false;
+}
+
+int pw_clip_encode_text(const int *ids77, float *out512)
+{
+    if (!ids77 || !out512)
+        return -1;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_text_loaded)
+        return -1;
+    try {
+        int dims[2] = {1, 77};
+        cv::Mat ids(2, dims, CV_32S, const_cast<int *>(ids77));
+        g_text_net.setInput(ids, "input_ids");
+        /* two outputs (last_hidden_state, text_embeds); take the 512 one */
+        std::vector<cv::Mat> outs;
+        g_text_net.forward(outs, g_text_net.getUnconnectedOutLayersNames());
+        const cv::Mat *emb = nullptr;
+        for (const auto &o : outs)
+            if (o.total() == 512)
+                emb = &o;
+        if (!emb)
+            return -1;
+        const float *p = emb->ptr<float>();
+        double n = 0;
+        for (int i = 0; i < 512; ++i)
+            n += static_cast<double>(p[i]) * p[i];
+        n = std::sqrt(n);
+        if (n < 1e-12)
+            return -1;
+        for (int i = 0; i < 512; ++i)
+            out512[i] = static_cast<float>(p[i] / n);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}

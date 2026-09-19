@@ -16,23 +16,30 @@ ApplicationWindow {
     font.family: "Noto Sans"
     font.pixelSize: 13
 
-    // ---- theme: follows the system; light by default --------------------------------
+    // ---- theme: "mac" (default, hand-tuned) or "system" (the desktop's own Qt palette).
+    // Both follow the OS light/dark automatically: Mac via colorScheme, System via the
+    // active desktop palette. The choice is remembered between sessions (in _ui.theme).
+    property string themeMode: "mac"          // "mac" | "system"
     readonly property bool dark: Application.styleHints.colorScheme === Qt.ColorScheme.Dark
+    SystemPalette { id: sysPalette; colorGroup: SystemPalette.Active }
     readonly property QtObject theme: QtObject {
-        readonly property color window: root.dark ? "#1e1e1e" : "#ffffff"
-        readonly property color content: root.dark ? "#1e1e1e" : "#ffffff"
-        readonly property color sidebar: root.dark ? "#262628" : "#f2f2f7"
-        readonly property color panel: root.dark ? "#242426" : "#f7f7f9"
-        readonly property color toolbar: root.dark ? "#1e1e1e" : "#ffffff"
-        readonly property color viewerBg: root.dark ? "#161616" : "#f5f5f7"
-        readonly property color tile: root.dark ? "#2a2a2c" : "#ebebef"
-        readonly property color separator: root.dark ? "#3a3a3c" : "#e5e5ea"
-        readonly property color selection: root.dark ? "#3a3a3d" : "#dcdce1"
-        readonly property color hover: root.dark ? "#2e2e30" : "#e8e8ed"
-        readonly property color text: root.dark ? "#f5f5f7" : "#1d1d1f"
-        readonly property color muted: root.dark ? "#98989d" : "#86868b"
-        readonly property color accent: "#0a7aff"
-        readonly property color field: root.dark ? "#2c2c2e" : "#ececf0"
+        readonly property bool sys: root.themeMode === "system"
+        readonly property color window:    sys ? sysPalette.window        : (root.dark ? "#1e1e1e" : "#ffffff")
+        readonly property color content:   sys ? sysPalette.base          : (root.dark ? "#1e1e1e" : "#ffffff")
+        readonly property color sidebar:   sys ? sysPalette.alternateBase : (root.dark ? "#262628" : "#f2f2f7")
+        readonly property color panel:     sys ? sysPalette.alternateBase : (root.dark ? "#242426" : "#f7f7f9")
+        readonly property color toolbar:   sys ? sysPalette.window        : (root.dark ? "#1e1e1e" : "#ffffff")
+        readonly property color viewerBg:  sys ? sysPalette.base          : (root.dark ? "#161616" : "#f5f5f7")
+        readonly property color tile:      sys ? sysPalette.alternateBase : (root.dark ? "#2a2a2c" : "#ebebef")
+        readonly property color separator: sys ? sysPalette.mid           : (root.dark ? "#3a3a3c" : "#e5e5ea")
+        readonly property color selection: sys ? Qt.rgba(sysPalette.highlight.r, sysPalette.highlight.g, sysPalette.highlight.b, 0.35) : (root.dark ? "#3a3a3d" : "#dcdce1")
+        readonly property color hover:     sys ? Qt.rgba(sysPalette.highlight.r, sysPalette.highlight.g, sysPalette.highlight.b, 0.15) : (root.dark ? "#2e2e30" : "#e8e8ed")
+        readonly property color text:      sys ? sysPalette.text          : (root.dark ? "#f5f5f7" : "#1d1d1f")
+        readonly property color muted:     sys ? Qt.rgba(sysPalette.text.r, sysPalette.text.g, sysPalette.text.b, 0.55) : (root.dark ? "#98989d" : "#86868b")
+        // System accent: the exact desktop accent (GNOME accent-color → Adwaita) when known,
+        // else the platform palette's highlight. Mac keeps its signature blue.
+        readonly property color accent:    sys ? (library.systemAccent.length ? library.systemAccent : sysPalette.highlight) : "#0a7aff"
+        readonly property color field:     sys ? sysPalette.base           : (root.dark ? "#2c2c2e" : "#ececf0")
     }
     readonly property QtObject icons: Icons { }
 
@@ -44,10 +51,13 @@ ApplicationWindow {
     function _saveUi() {
         root._ui.win = { x: root.x, y: root.y, w: root.width, h: root.height }
         root._ui.folded = sidebar.foldSnapshot()
+        root._ui.theme = root.themeMode
         library.saveUiState(JSON.stringify(root._ui))
     }
     Component.onCompleted: {
         try { root._ui = JSON.parse(library.uiState) || {} } catch (e) { root._ui = {} }
+        if (root._ui.theme === "mac" || root._ui.theme === "system") root.themeMode = root._ui.theme
+        library.refreshSystemAccent()
         const w = root._ui.win
         if (w) {
             if (w.w > 300) root.width = w.w
@@ -95,6 +105,9 @@ ApplicationWindow {
     readonly property var momentsData: JSON.parse(library.moments).moments
     property string currentMomentTitle: ""
     readonly property var castDevicesData: { try { return JSON.parse(library.castDevices).devices } catch (e) { return [] } }
+    property bool castingActive: false   // a slideshow is playing on a TV → show the control bar
+    property bool castPaused: false
+    readonly property var dayMatesData: { try { return JSON.parse(library.dayMates).items } catch (e) { return [] } }
     readonly property int currentPhotoId: { try { return JSON.parse(library.current).id || 0 } catch (e) { return 0 } }
     readonly property var tagsData: JSON.parse(library.tags)
     readonly property var keywordsData: JSON.parse(library.keywords).keywords
@@ -400,7 +413,9 @@ ApplicationWindow {
                                 color: root.mode === modelData[0] ? theme.window : "transparent"
                                 border.color: root.mode === modelData[0] ? theme.separator : "transparent"
                                 Label { id: segLabel; anchors.centerIn: parent; text: modelData[1]; font.pixelSize: 12; color: theme.text }
-                                TapHandler { onTapped: root.mode = modelData[0] }
+                                // a granularity tab clears any date narrowing (and exits a search/
+                                // similar/moment view) so it always shows everything at that level
+                                TapHandler { onTapped: { root.mode = modelData[0]; library.filterDate(0, 0, 0) } }
                             }
                         }
                     }
@@ -434,7 +449,7 @@ ApplicationWindow {
                     visible: !root.viewing && grid.selectedIds().length > 0
                     icon_: icons.folderPlus
                     ToolTip.text: "Add to Album"; ToolTip.visible: hovered
-                    onClicked: { albumDialog.photoIds = grid.selectedIds(); albumDialog.open() }
+                    onClicked: { const sel = grid.selectedIds(); albumDialog.photoIds = sel; library.loadDayMates(JSON.stringify(sel)); albumDialog.open() }
                 }
                 ToolIcon {
                     visible: !root.viewing && grid.selectedIds().length > 0
@@ -455,6 +470,24 @@ ApplicationWindow {
                     onClicked: { for (const id of grid.selectedIds()) library.toggleFavorite(id) }
                 }
                 ToolIcon {
+                    visible: !root.viewing && grid.selectedIds().length > 0
+                    icon_: icons.cast
+                    ToolTip.text: "Cast selection to TV"; ToolTip.visible: hovered
+                    onClicked: { library.loadCastDevices(); castSelMenu.popup() }
+                    Menu {
+                        id: castSelMenu
+                        MenuItem { enabled: false; text: root.castDevicesData.length ? "Slideshow of the selection on:" : "Looking for TVs…" }
+                        Repeater {
+                            model: root.castDevicesData
+                            MenuItem {
+                                required property var modelData
+                                text: modelData.name
+                                onTriggered: { library.castSlideshow(modelData.host, parseInt(modelData.port), modelData.kind || "chromecast", modelData.control || "", JSON.stringify(grid.selectedIds())); root.castingActive = true; root.castPaused = false }
+                            }
+                        }
+                    }
+                }
+                ToolIcon {
                     visible: !root.viewing
                     icon_: icons.plus
                     ToolTip.text: "Add folder to the library"; ToolTip.visible: hovered
@@ -473,7 +506,7 @@ ApplicationWindow {
                             MenuItem {
                                 required property var modelData
                                 text: modelData.name
-                                onTriggered: library.castTo(modelData.host, parseInt(modelData.port), modelData.kind || "chromecast", modelData.control || "", root.currentPhotoId)
+                                onTriggered: { library.castTo(modelData.host, parseInt(modelData.port), modelData.kind || "chromecast", modelData.control || "", root.currentPhotoId); root.castingActive = false }
                             }
                         }
                         MenuSeparator { visible: root.castDevicesData.length > 0 }
@@ -483,11 +516,11 @@ ApplicationWindow {
                             MenuItem {
                                 required property var modelData
                                 text: modelData.name
-                                onTriggered: library.castSlideshow(modelData.host, parseInt(modelData.port), modelData.kind || "chromecast", modelData.control || "")
+                                onTriggered: { library.castSlideshow(modelData.host, parseInt(modelData.port), modelData.kind || "chromecast", modelData.control || "", ""); root.castingActive = true; root.castPaused = false }
                             }
                         }
                         MenuSeparator { }
-                        MenuItem { text: "Stop casting"; onTriggered: library.castStop() }
+                        MenuItem { text: "Stop casting"; onTriggered: { library.castStop(); root.castingActive = false } }
                     }
                 }
 
@@ -508,6 +541,23 @@ ApplicationWindow {
                         onTextEdited: searchDebounce.restart()
                         onAccepted: { searchDebounce.stop(); root.search(text) }
                         Keys.onEscapePressed: { text = ""; searchDebounce.stop(); root.search("") }
+                    }
+                }
+                ToolIcon {
+                    icon_: icons.appearance
+                    ToolTip.text: "Appearance"; ToolTip.visible: hovered
+                    onClicked: appearanceMenu.popup()
+                    Menu {
+                        id: appearanceMenu
+                        MenuItem { enabled: false; text: "Theme" }
+                        MenuItem {
+                            text: (root.themeMode === "mac" ? "✓  " : "      ") + "Mac"
+                            onTriggered: { root.themeMode = "mac"; root._scheduleSaveUi() }
+                        }
+                        MenuItem {
+                            text: (root.themeMode === "system" ? "✓  " : "      ") + "System (desktop)"
+                            onTriggered: { root.themeMode = "system"; root._scheduleSaveUi() }
+                        }
                     }
                 }
             }
@@ -666,7 +716,7 @@ ApplicationWindow {
         onCopyPath: (ids) => library.copyText(root.pathsOf(ids).join("\n"))
         onOpenFolder: (path) => Qt.openUrlExternally(root.folderUrl(path))
         onToggleFavorite: (ids) => { for (const id of ids) library.toggleFavorite(id) }
-        onAddToAlbum: (ids) => { albumDialog.photoIds = ids; albumDialog.open() }
+        onAddToAlbum: (ids) => { albumDialog.photoIds = ids; library.loadDayMates(JSON.stringify(ids)); albumDialog.open() }
         onSetPlace: (ids) => { placeDialog.photoIds = ids; placeDialog.open() }
         onSetTag: (ids, group, tag) => library.setTag(JSON.stringify(ids), group, tag)
         onAddTags: (ids) => { keywordDialog.photoIds = ids; keywordDialog.open() }
@@ -716,6 +766,7 @@ ApplicationWindow {
         id: albumDialog
         theme: root.theme
         albums: root.albumsData
+        dayMates: root.dayMatesData
         anchors.centerIn: parent
         width: 380
         onAddTo: (albumId, ids) => library.addToAlbum(albumId, JSON.stringify(ids))
@@ -994,6 +1045,61 @@ ApplicationWindow {
             console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length, "source", root.source, "filter", library.filter)
             library.quit()
         })
+    }
+
+    // ---- slideshow control bar (drives the running cast from the PC) -----------------
+    Rectangle {
+        id: castBar
+        visible: root.castingActive
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 24
+        z: 2000
+        radius: 26
+        height: 52
+        width: castRow.width + 28
+        color: root.theme.panel
+        border.color: root.theme.separator
+        border.width: 1
+
+        Row {
+            id: castRow
+            anchors.centerIn: parent
+            spacing: 4
+            ToolButton {
+                icon.source: root.icons.tint(root.icons.chevronLeft, root.theme.text)
+                icon.width: 20; icon.height: 20
+                ToolTip.text: "Previous"; ToolTip.visible: hovered
+                onClicked: library.castPrev()
+            }
+            ToolButton {
+                ToolTip.text: root.castPaused ? "Resume" : "Pause"; ToolTip.visible: hovered
+                contentItem: Label {
+                    text: root.castPaused ? "▶" : "⏸"
+                    color: root.theme.text
+                    font.pixelSize: 16
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                onClicked: {
+                    if (root.castPaused) { library.castResume(); root.castPaused = false }
+                    else { library.castPause(); root.castPaused = true }
+                }
+            }
+            ToolButton {
+                icon.source: root.icons.tint(root.icons.chevronRight, root.theme.text)
+                icon.width: 20; icon.height: 20
+                ToolTip.text: "Next"; ToolTip.visible: hovered
+                onClicked: library.castNext()
+            }
+            Rectangle { width: 1; height: 26; color: root.theme.separator; anchors.verticalCenter: parent.verticalCenter }
+            ToolButton {
+                icon.source: root.icons.tint(root.icons.close, root.theme.muted)
+                icon.width: 18; icon.height: 18
+                ToolTip.text: "Stop casting"; ToolTip.visible: hovered
+                onClicked: { library.castStop(); root.castingActive = false }
+            }
+        }
     }
 
 }

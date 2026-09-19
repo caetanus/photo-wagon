@@ -28,6 +28,15 @@ void registerAlbumApi(Registry r, AlbumRepo albums, PhotoRepo photos, Sharing sh
 		return obj();
 	});
 
+	// Photos from the same calendar day as the ones being added — the "smart album"
+	// suggestion (an album often is an event; the rest of that day likely belongs too).
+	r.add("album.dayMates", (JSONValue p) {
+		immutable limit = getLong(p, "limit", 60);
+		return JSONValue([
+			"items": photos.toJsonArray(photos.sameDayAs(getLongArray(p, "ids"), limit < 1 ? 1 : limit)),
+		]);
+	});
+
 	r.add("album.page", (JSONValue p) {
 		Filter f;
 		f.albumId = requireLong(p, "id");

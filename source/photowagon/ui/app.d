@@ -37,6 +37,13 @@ int runUi(Config cfg, InProcessLink link)
     if ("QT_QUICK_CONTROLS_STYLE" !in environment)
         environment["QT_QUICK_CONTROLS_STYLE"] = "Fusion";
 
+    // Stability: the threaded render loop segfaults here in QOpenGLContext::currentContext
+    // on the QSGRenderThread (Qt 6.11.2 + Wayland/GL, and worse with GL-heavy content such as
+    // the QtLocation map). The basic loop renders on the GUI thread and sidesteps it. Override
+    // with QSG_RENDER_LOOP=threaded to A/B test.
+    if ("QSG_RENDER_LOOP" !in environment)
+        environment["QSG_RENDER_LOOP"] = "basic";
+
     cast(void) createApp(APP_ID);
     QCoreApplication.setOrganizationName("PhotoWagon");
     QCoreApplication.setApplicationName(APP_ID);

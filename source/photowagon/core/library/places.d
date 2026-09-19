@@ -224,7 +224,8 @@ final class PlaceService
 	{
 		auto s = db.prepare(`SELECT p.place, p.country, count(*),
 			(SELECT q.thumb_hash FROM photos q WHERE q.place = p.place AND q.country IS p.country AND q.thumb_hash IS NOT NULL
-			 ORDER BY q.taken_ts DESC, q.id DESC LIMIT 1)
+			 ORDER BY q.taken_ts DESC, q.id DESC LIMIT 1),
+			AVG(p.lat), AVG(p.lon)
 			FROM photos p WHERE p.place IS NOT NULL GROUP BY p.place, p.country ORDER BY 3 DESC, 1`);
 		JSONValue[] out_;
 		while (s.step())
@@ -234,6 +235,24 @@ final class PlaceService
 			j["country"] = s.isNull(1) ? JSONValue(null) : JSONValue(s.getString(1));
 			j["count"] = s.getLong(2);
 			j["cover"] = coverUrl(s.isNull(3) ? null : s.getString(3), inline);
+			// coordinates for a map pin: the GPS average of this place's photos, else
+			// geocode the (canonical) place name against the built-in cities table.
+			// (A plain mean; it would misplace a place straddling the antimeridian,
+			// which a single real city never does.)
+			if (!s.isNull(4) && !s.isNull(5))
+			{
+				j["lat"] = s.getDouble(4);
+				j["lon"] = s.getDouble(5);
+			}
+			else
+			{
+				auto hits = geo.suggest(s.getString(0), 1);
+				if (hits.length)
+				{
+					j["lat"] = cast(double) hits[0].lat;
+					j["lon"] = cast(double) hits[0].lon;
+				}
+			}
 			out_ ~= j;
 		}
 		return JSONValue(["places": JSONValue(out_)]);

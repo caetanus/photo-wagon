@@ -11,13 +11,38 @@ Item {
     property var places: []
 
     signal open(string place, string country)
+    property int mode: 0   // 0 = grid of cards, 1 = map
 
     Rectangle { anchors.fill: parent; color: theme.content }
+
+    // grid / map toggle (top-right)
+    Row {
+        id: modeBar
+        z: 3
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.margins: 10
+        spacing: 6
+        Repeater {
+            model: [ { k: 0, t: "Grid" }, { k: 1, t: "Map" } ]
+            delegate: Rectangle {
+                required property var modelData
+                width: tlbl.implicitWidth + 20; height: 28; radius: 6
+                color: view.mode === modelData.k ? theme.accent : theme.panel
+                border.color: theme.separator; border.width: 1
+                Label { id: tlbl; anchors.centerIn: parent; text: modelData.t
+                        color: view.mode === modelData.k ? "white" : theme.text; font.pixelSize: 12 }
+                TapHandler { onTapped: view.mode = modelData.k }
+            }
+        }
+    }
 
     GridView {
         id: grid
         anchors.fill: parent
         anchors.margins: 12
+        anchors.topMargin: 46
+        visible: view.mode === 0
         clip: true
         cellWidth: Math.floor(width / Math.max(1, Math.floor(width / 232)))
         cellHeight: 244
@@ -90,9 +115,39 @@ Item {
         }
     }
 
+    // Map mode: MapView.qml is loaded on demand so `import QtLocation` only
+    // resolves when qt6-location is installed; setSource passes the required
+    // properties at creation. If the module is absent, show an install hint.
+    Loader {
+        id: mapLoader
+        anchors.fill: parent
+        anchors.topMargin: 46
+        active: view.mode === 1
+        onActiveChanged: if (active) setSource("MapView.qml", { theme: view.theme, places: view.places })
+        onLoaded: item.open.connect(view.open)
+    }
+    Connections {
+        target: view
+        function onPlacesChanged() { if (mapLoader.item) mapLoader.item.places = view.places }
+    }
+    Rectangle {
+        anchors.fill: parent
+        anchors.topMargin: 46
+        visible: view.mode === 1 && mapLoader.status === Loader.Error
+        color: theme.content
+        Label {
+            anchors.centerIn: parent
+            width: Math.min(440, parent.width - 40)
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            text: "The map needs the system QtLocation module.\nInstall it with:  sudo pacman -S qt6-location"
+            color: theme.muted; font.pixelSize: 13
+        }
+    }
+
     // Nothing placed yet: say where places come from.
     Column {
-        visible: view.places.length === 0
+        visible: view.places.length === 0 && view.mode === 0
         anchors.centerIn: parent
         spacing: 8
         width: Math.min(420, parent.width - 40)

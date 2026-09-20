@@ -15,6 +15,10 @@ set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 DSIDE=${DSIDE:-$HOME/lab/qt-dlang-gen}
 LDC_CONF=${LDC_CONF:-$HERE/toolchain/ldc2-android.conf}
+# Android is pinned to LDC 1.42 (see ldc2-android.conf): the 1.42 device runtime, so the
+# compiler must be 1.42 too. The host's PATH ldc2 may be newer (1.43+) and would emit
+# druntime symbols the 1.42 runtime / the device lacks. Override with LDC= if needed.
+LDC=${LDC:-$HOME/lab/android-d/ldc2-1.42.0-linux-x86_64/bin/ldc2}
 # ABI=arm64-v8a (the phone, default) or ABI=x86_64 (the emulator; see ANDROID.md)
 ABI=${ABI:-arm64-v8a}
 case "$ABI" in
@@ -50,6 +54,28 @@ for d in eventcore-0.9.39/eventcore vibe-core-2.14.0/vibe-core vibe-container-1.
     P2P_INCLUDES="$P2P_INCLUDES -I$DUBP/$d/source"
     P2P_SOURCES="$P2P_SOURCES $(find "$DUBP/$d/source" -name '*.d')"
 done
+# Optional: WSS-to-relay. The public libp2p relays are /dns4/.../tls/ws only, so the phone
+# needs a TLS-over-WebSocket transport to reach them. Off by default (plain /ws is compiled
+# in either way). P2P_TLS=1 turns WSS on: it compiles libp2p's ws_tls_openssl.d (guarded by
+# version LibP2P_OpensslTls), adds the deimos openssl binding to the include path, and links
+# the arm64 libssl/libcrypto archives cross-built into toolchain/android-libs (see ANDROID.md).
+# The security is still Noise (which authenticates the peer); the WSS TLS is transport compat,
+# so the provider uses verify_none — no CA trust store on the phone.
+TLS_VERSION=""
+TLS_INCLUDES=""
+TLS_LIBS=""
+if [ -n "${P2P_TLS:-}" ]; then
+    OPENSSL_DI=$(ls -d "$DUBP"/openssl-3.4.0/openssl/source 2>/dev/null | head -1)
+    [ -n "$OPENSSL_DI" ] || { echo "P2P_TLS set but the deimos openssl-3.4.0 binding is not under $DUBP" >&2; exit 1; }
+    for a in libssl.a libcrypto.a; do
+        [ -e "$HERE/toolchain/android-libs/$ABI_DIR/$a" ] || { echo "P2P_TLS set but $a is missing for $ABI_DIR (cross-build openssl, see ANDROID.md)" >&2; exit 1; }
+    done
+    TLS_VERSION="-d-version=LibP2P_OpensslTls"
+    TLS_INCLUDES="-I$OPENSSL_DI"
+    # start-group: libssl references libcrypto and vice-versa; let the linker resolve both ways.
+    TLS_LIBS="-L--start-group -L=$HERE/toolchain/android-libs/$ABI_DIR/libssl.a -L=$HERE/toolchain/android-libs/$ABI_DIR/libcrypto.a -L--end-group"
+    echo "P2P_TLS: WSS-to-relay ON (deimos $OPENSSL_DI + arm64 libssl/libcrypto)"
+fi
 link() {
     # -shared: Qt for Android loads lib<app>_<abi>.so and calls its exported main().
     # -relocation-model=pic: everything in a .so must be PIC (the binding archive was built so too).
@@ -59,7 +85,7 @@ link() {
     # Compiled with the NDK clang for this ABI/API and linked into the .so below.
     CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/${TRIPLE}35-clang"
     "$CC" -c -fPIC -O2 "$HERE/jni/videothumb.c" -o "$OUT/videothumb_$ABI.o"
-    ldc2 -conf="$LDC_CONF" -mtriple=$TRIPLE -shared -relocation-model=pic -O \
+    "$LDC" -conf="$LDC_CONF" -mtriple=$TRIPLE -shared -relocation-model=pic -O -lowmem \
         -d-version=PhotoWagonMobile \
         -of="$OUT/lib${APP}_${ABI}.so" \
         source/photowagon/mobile/main.d source/photowagon/mobile/plog.d source/photowagon/mobile/tcpbridge.d \
@@ -67,8 +93,9 @@ link() {
         source/photowagon/mobile/localbridge.d source/photowagon/mobile/phoneindex.d \
         ../source/photowagon/ui/backend.d ../source/photowagon/ui/transport.d ../source/photowagon/ui/bridge.d \
         ../source/photowagon/core/ipc/link.d ../source/photowagon/core/p2p/identity.d \
-        $P2P_SOURCES -d-version=LibP2P_Lite -d-version=EventcoreEpollDriver $P2P_INCLUDES \
+        $P2P_SOURCES -d-version=LibP2P_Lite -d-version=EventcoreEpollDriver $TLS_VERSION $P2P_INCLUDES $TLS_INCLUDES \
         ../source/photowagon/core/indexer/scan.d ../source/photowagon/core/library/calendar.d ../source/photowagon/core/jobs/memguard.d \
+        ../source/photowagon/core/library/kind.d ../source/photowagon/core/thumbs/imagestats.d \
         ../source/photowagon/core/metadata/exifparse.d ../source/photowagon/core/metadata/datefromname.d \
         ../source/photowagon/core/pairingcode.d \
         "$DSIDE/runtime/qrc/qrc.d" \
@@ -77,12 +104,19 @@ link() {
         -L--start-group -L="$BUILD/libbinding_ldc2.a" -L="$BUILD/libshims.a" -L--end-group \
         -L="$OUT/videothumb_$ABI.o" \
         -L="$HERE/toolchain/android-libs/$ABI_DIR/libsodium.a" \
+        $TLS_LIBS \
         -L-L"$QT_ANDROID/lib" \
         -L-lQt6Quick_${ABI} -L-lQt6QmlModels_${ABI} -L-lQt6Qml_${ABI} -L-lQt6Network_${ABI} \
         -L-lQt6Gui_${ABI} -L-lQt6Core_${ABI} \
         -L-lc++_shared -L-llog -L-landroid
-    "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" -D "$OUT/lib${APP}_${ABI}.so" | grep -q ' T main$'
-    echo "-> $OUT/lib${APP}_${ABI}.so"
+    NM_BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+    "$NM_BIN" -D "$OUT/lib${APP}_${ABI}.so" | grep -q ' T main$'
+    # pre-flight: catch symbols Android's bionic does not provide (glibc-only) HERE, as an
+    # abort, instead of as a "cannot locate symbol" dlopen crash on the phone. (2026-09-19:
+    # memguard's mallinfo2/malloc_trim did exactly that.)
+    BAD=$("$NM_BIN" -D -u "$OUT/lib${APP}_${ABI}.so" | grep -oE 'mallinfo2|malloc_trim|malloc_stats|malloc_info|secure_getenv|\<pthread_cancel\>' | sort -u | tr '\n' ' ')
+    [ -n "$BAD" ] && { echo "ABORT: libphotowagon references symbols bionic lacks: $BAD" >&2; exit 1; }
+    echo "-> $OUT/lib${APP}_${ABI}.so (nm pre-flight ok)"
 }
 
 settings() {

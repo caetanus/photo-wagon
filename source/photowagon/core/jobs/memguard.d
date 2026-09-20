@@ -63,8 +63,14 @@ private struct MallInfo2
 	size_t arena, ordblks, smblks, hblks, hblkhd, usmblks, fsmblks, uordblks, fordblks, keepcost;
 }
 
-private extern (C) MallInfo2 mallinfo2() @nogc nothrow;
-private extern (C) int malloc_trim(size_t pad) @nogc nothrow;
+// glibc-only introspection; Android's bionic exports neither mallinfo2 nor malloc_trim,
+// so the C-heap probe (and these declarations) are compiled out there — otherwise the
+// phone's libphotowagon.so fails to dlopen with "cannot locate symbol mallinfo2".
+version (Android) {} else
+{
+    private extern (C) MallInfo2 mallinfo2() @nogc nothrow;
+    private extern (C) int malloc_trim(size_t pad) @nogc nothrow;
+}
 
 /// Debug (PW_MEMSAMPLE=1): every guard tick log VmRSS + GC used/free + glibc c_used/c_free
 /// (texture); every ~30s the decisive experiment — GC.collect x2 then GC.minimize() (D heap),
@@ -82,28 +88,37 @@ private void memSample(long tick) nothrow
 		import std.stdio : stderr;
 
 		auto s = GC.stats;
-		auto mi = mallinfo2();
-		stderr.writefln(
-			"MEMSAMPLE t=%d rss=%dMB gc_used=%dMB gc_free=%dMB c_used=%dMB c_free=%dMB c_mmap=%dMB",
-			tick, vmRssMb(), cast(long)(s.usedSize / 1048576), cast(long)(s.freeSize / 1048576),
-			cast(long)(mi.uordblks / 1048576), cast(long)(mi.fordblks / 1048576),
-			cast(long)(mi.hblkhd / 1048576));
-		if (tick > 0 && tick % 15 == 0)
+		version (Android)
 		{
-			GC.collect();
-			GC.collect();
-			auto sc = GC.stats;
-			immutable rssPostCollect = vmRssMb();
-			GC.minimize();
-			immutable rssPostMin = vmRssMb();
-			malloc_trim(0);
-			immutable rssPostTrim = vmRssMb();
-			auto mi2 = mallinfo2();
+			// bionic has no mallinfo2/malloc_trim: the D heap only.
+			stderr.writefln("MEMSAMPLE t=%d rss=%dMB gc_used=%dMB gc_free=%dMB",
+				tick, vmRssMb(), cast(long)(s.usedSize / 1048576), cast(long)(s.freeSize / 1048576));
+		}
+		else
+		{
+			auto mi = mallinfo2();
 			stderr.writefln(
-				"MEMPROBE t=%d post_collect rss=%dMB gc_used=%dMB | post_minimize rss=%dMB | post_trim rss=%dMB trim_drop=%dMB | c_used=%dMB c_free=%dMB",
-				tick, rssPostCollect, cast(long)(sc.usedSize / 1048576), rssPostMin,
-				rssPostTrim, rssPostMin - rssPostTrim,
-				cast(long)(mi2.uordblks / 1048576), cast(long)(mi2.fordblks / 1048576));
+				"MEMSAMPLE t=%d rss=%dMB gc_used=%dMB gc_free=%dMB c_used=%dMB c_free=%dMB c_mmap=%dMB",
+				tick, vmRssMb(), cast(long)(s.usedSize / 1048576), cast(long)(s.freeSize / 1048576),
+				cast(long)(mi.uordblks / 1048576), cast(long)(mi.fordblks / 1048576),
+				cast(long)(mi.hblkhd / 1048576));
+			if (tick > 0 && tick % 15 == 0)
+			{
+				GC.collect();
+				GC.collect();
+				auto sc = GC.stats;
+				immutable rssPostCollect = vmRssMb();
+				GC.minimize();
+				immutable rssPostMin = vmRssMb();
+				malloc_trim(0);
+				immutable rssPostTrim = vmRssMb();
+				auto mi2 = mallinfo2();
+				stderr.writefln(
+					"MEMPROBE t=%d post_collect rss=%dMB gc_used=%dMB | post_minimize rss=%dMB | post_trim rss=%dMB trim_drop=%dMB | c_used=%dMB c_free=%dMB",
+					tick, rssPostCollect, cast(long)(sc.usedSize / 1048576), rssPostMin,
+					rssPostTrim, rssPostMin - rssPostTrim,
+					cast(long)(mi2.uordblks / 1048576), cast(long)(mi2.fordblks / 1048576));
+			}
 		}
 		stderr.flush();
 	}

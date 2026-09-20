@@ -8,12 +8,14 @@
 		"libp2p": {"path":"../libp2p-dlang"},
 		"libsodiumd": "0.2.0+1.0.18",
 		"openssl": "3.4.0",
+		"openssl-static": "1.0.5+3.0.8",
 		"silly": "1.2.0-dev.2",
 		"stdx-allocator": "2.77.5",
 		"taggedalgebraic": "1.0.1",
 		"unit-threaded": "2.2.5",
 		"vibe-container": "1.7.1",
 		"vibe-core": "2.14.0",
+		"vibe-stream": "1.4.1",
 		"webrtc": {"path":"../d-webrtc-v3"}
 	}
 }

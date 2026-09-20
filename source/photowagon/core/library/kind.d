@@ -11,7 +11,7 @@ module photowagon.core.library.kind;
 import std.path : baseName, dirName;
 import std.string : toLower, indexOf, startsWith, endsWith;
 
-import photowagon.core.thumbs.vips : ImageStats;
+import photowagon.core.thumbs.imagestats : ImageStats;
 
 enum Kind : string
 {

@@ -231,6 +231,13 @@ the phone's `127.0.0.1:47111` reach a core started with `--serve --port 47111`.
   storage that folder sits in (`main.d`, `photoRoots`).
 - The photo permission is asked by the D side (`pwperm://request`) once the
   window is up; asking in `onCreate` left the window black on the SM-M625F.
+- The `QQmlApplicationEngine` must be parented to `QCoreApplication.instance()`.
+  DSide collects an unparented, D-owned engine after its last D reference dies;
+  its finalizer schedules `deleteLater()`, destroying the QML window while the
+  indexer and Android activity keep running. On the SM-M625F this left a black
+  app with no QML heartbeats within seconds of launch. The application parent
+  pins the engine for the entire event loop. Check both screenshots and `ui alive`
+  messages with the adb harness; a live process alone does not prove a live UI.
 - New D modules must be added to the source list in `build-android.sh`.
 - `main()` must not return: Qt's Back key closes the window and `exec()`
   returns; a D `main` returning runs `rt_term` while the decoder, sync and

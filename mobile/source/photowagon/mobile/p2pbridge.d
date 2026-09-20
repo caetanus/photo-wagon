@@ -401,12 +401,29 @@ final class P2pBridge : Bridge
         import vibe.core.core : sleep;
         import libp2p.host.host : Host, HostConfig;
         import libp2p.transport.tcp : TcpTransport;
+        import libp2p.transport.ws : WsTransport;
+        import libp2p.transport.transport : Transport;
+        version (LibP2P_OpensslTls) import libp2p.transport.ws_tls_openssl : OpensslTlsProvider;
         import photowagon.core.p2p.identity : loadOrCreateIdentity;
 
         auto identity = loadOrCreateIdentity(identityFile);
         HostConfig hc;
         hc.agentVersion = "photowagon-mobile/0.5.0";
-        auto host = new Host(identity, [new TcpTransport], hc);
+        // Off-LAN (4G) the computer's two direct addresses are both dead ends — the LAN
+        // address has no route and the public one is behind CGNAT and cannot accept an
+        // inbound SYN — so each one otherwise burns the full 10 s dial timeout before the
+        // relay path is even tried (~16 s to connect). A reachable relay answers in well
+        // under a second, so a shorter dial timeout only cuts the dead direct dials.
+        hc.swarm.dialTimeout = 5.seconds;
+        // WebSocket transport: the public libp2p relays are WSS-only (/dns4/.../tls/ws), so the
+        // phone needs /tls/ws to even reach them off-LAN. Plain /ws until openssl is linked; the
+        // TLS provider lights up under -version=LibP2P_OpensslTls (see mobile/build-android.sh).
+        version (LibP2P_OpensslTls)
+            auto ws = new WsTransport(new OpensslTlsProvider());
+        else
+            auto ws = new WsTransport();
+        Transport[] transports = [cast(Transport) new TcpTransport, ws];   // cast: else the literal infers Object[]
+        auto host = new Host(identity, transports, hc);
         // NAT-traversal (relay transport + DCUtR) is ON here too. The stall this once caused was
         // the in-process UI link race on the desktop (now fixed); the relay transport lets the
         // phone reach the computer over a /p2p-circuit off-LAN, and DCUtR then tries for a direct
@@ -418,6 +435,10 @@ final class P2pBridge : Bridge
         if (natTraversal)
         {
             relay = new Relay(host);
+            // session() drives the punch explicitly on a relayed connection, so turn off the
+            // library's auto-DCUtR: otherwise both fire on the same circuit and each spawns a
+            // dial storm to the computer's addresses — needless churn on the relay path.
+            relay.autoHolePunch = false;
             host.swarm.addTransport(relay);
         }
         plog("p2p: this phone is ", host.id.toString);
@@ -535,6 +556,14 @@ final class P2pBridge : Bridge
                 peer = PeerId.fromBytes(comps[$ - 1].value);
                 havePeer = true;
             }
+            // This build dials over TCP (and, with the TLS provider, /ws) and has no DNS
+            // resolver: addresses that need DNS, QUIC or WebRTC are undialable here. Most of
+            // the computer's advertised relays are /dns4/.../tls/ws (and some quic/webrtc), so
+            // without this the phone spends a full dial timeout on each dead relay before it
+            // reaches a usable /ip4/.../tcp one — ~16 s to connect on 4G. Keep only what we
+            // can actually reach, and the reachable ip4 relay is tried first.
+            if (text.canFind("/dns") || text.canFind("/quic") || text.canFind("/webrtc"))
+                continue;
             if (comps.canFind!(c => c.name == "p2p-circuit"))
                 circuit ~= full;
             else if (isPrivateIp4(text))
@@ -550,6 +579,11 @@ final class P2pBridge : Bridge
         // answers and would only burn the timeout ahead of the circuit.
         auto addrs = lan ~ circuit ~ other;
         auto conn = host.connect(peer, addrs);
+        // Which route won — a direct /ip4/.../tcp or a /p2p-circuit relay. On the same LAN this
+        // must be the direct LAN address; a relay here means the direct route was missing or lost
+        // and the link then inherits the relay's short circuit budget.
+        if (conn !is null)
+            plog("p2p: connected via ", conn.remoteAddr.toString);
         // If we reached the computer through a relay (a /p2p-circuit address, the 4G case),
         // punch a direct connection with DCUtR so the photos flow peer-to-peer, not through
         // the relay. Best-effort: if the NAT will not cooperate we simply stay on the relay.

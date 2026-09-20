@@ -8,5 +8,9 @@
     <file>mobile/DateTreeSidebar.qml</file>
     <file>mobile/PhotoFocusView.qml</file>
     <file>mobile/EditView.qml</file>
+    <file>mobile/AlbumsPage.qml</file>
+    <file>mobile/ComputerPage.qml</file>
+    <file>mobile/SearchPage.qml</file>
+    <file>mobile/LibraryPage.qml</file>
   </qresource>
 </RCC>

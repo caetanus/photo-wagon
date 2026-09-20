@@ -12,6 +12,7 @@
 module photowagon.mobile.localbridge;
 
 import photowagon.mobile.plog : plog, timed, useCrashStack;
+import photowagon.core.library.calendar : fileUrl;
 
 import std.algorithm : min;
 import std.base64 : Base64;
@@ -102,7 +103,8 @@ final class LocalBridge : Bridge
     private JSONValue[] served;        // everything handed out so far, merged order
     private bool[string] localKeys;    // "name|size" of local photos, for dedupe
     private long dupes;
-    private string[long] thumbCache;   // remote id → data: URL
+    private string[long] thumbCache;   // remote id → thumb URL (a file:// on disk, or a data: URL fallback)
+    private string remoteThumbDir;     // desktop thumbs cached as JPEG files (EGL file→texture, low RAM, survive drops)
 
     this(PhoneIndex index, Bridge computer, string settingsDir = null)
     {
@@ -113,6 +115,14 @@ final class LocalBridge : Bridge
             autoSyncFile = buildPath(settingsDir, "autosync");
             syncStatusFile = buildPath(settingsDir, "sync-status");
             autoSync = autoSyncFile.exists;
+            // Desktop thumbnails land here as JPEG files (a sibling of settings/), so the
+            // grid loads them as file:// textures (EGL) instead of base64 in memory, and
+            // they survive the p2p link dropping.
+            remoteThumbDir = buildPath(dirName(settingsDir), "remote-thumbs");
+            try
+                mkdirRecurse(remoteThumbDir);
+            catch (Exception)
+                remoteThumbDir = null;
         }
         prepPoll = new QTimer(cast(cppq.QObject) null);
         prepPoll.setInterval(50);
@@ -124,6 +134,10 @@ final class LocalBridge : Bridge
         syncDeadline.setSingleShot(true);
         syncDeadline.connectTimeout(&onSyncTimeout);
         index.onChanged = () { emit("library.changed", JSONValue.emptyObject); };
+        // Background never hurts foreground: while a photo is being pushed to the computer,
+        // the indexer's decode slice yields so it can't starve the socket (the video-push
+        // drops) or jank the UI. It resumes the instant the push ends.
+        index.shouldYield = () => sending || negotiating;
         index.onProgress = (long done, long total) {
             emit("index.progress", JSONValue([
                 "rootId": JSONValue(0), "scanned": JSONValue(done), "imported": JSONValue(done),
@@ -466,31 +480,69 @@ final class LocalBridge : Bridge
                 continue;
             immutable rid = it["id"].integer - remoteBase;
             if (auto t = rid in thumbCache)
+            {
                 it["thumbUrl"] = *t;
-            else
-                want ~= JSONValue(rid);
+                continue;
+            }
+            // already on disk from a previous fetch? use it, no round-trip over the link.
+            if (remoteThumbDir.length)
+            {
+                immutable fp = buildPath(remoteThumbDir, rid.to!string ~ ".jpg");
+                if (fp.exists)
+                {
+                    immutable url = fileUrl(fp);
+                    thumbCache[rid] = url;
+                    it["thumbUrl"] = url;
+                    continue;
+                }
+            }
+            want ~= JSONValue(rid);
         }
+        // Deliver the page NOW, with whatever thumbs are already cached. The remote
+        // thumbnails ride the (possibly flaky) computer link as base64 blobs; blocking
+        // the grid on that request made the whole timeline hang with no timeout whenever
+        // a circuit stalled ("muitíssimo lento"). So never wait on it: fetch the missing
+        // ones in the background and, when they land, emit library.changed so the UI
+        // reloads and fills them in. A dead/absent link just leaves those cells blank
+        // instead of freezing the app.
+        done();
         if (want.length == 0 || !computer.connected)
-        {
-            done();
             return;
-        }
         JSONValue params = JSONValue.emptyObject;
         params["ids"] = JSONValue(want);
         computer.request("library.thumbs", params, (r, e) {
+            bool got;
             if (e.type == JSONType.null_ && "thumbs" in r)
                 foreach (key, b64; r["thumbs"].object)
-                    thumbCache[key.to!long] = "data:image/jpeg;base64," ~ b64.str;
-            foreach (ref it; items)
-                if (it["id"].integer >= remoteBase)
-                    if (auto t = (it["id"].integer - remoteBase) in thumbCache)
-                        it["thumbUrl"] = *t;
-            // also patch what was served, so neighbours/viewer see the thumbs
+                {
+                    immutable rid = key.to!long;
+                    string url;
+                    // Decode the base64 once and keep the JPEG on disk: the grid then loads
+                    // it as a file:// texture (EGL, off the GUI thread) instead of holding a
+                    // big base64 string in memory, and it persists across p2p drops.
+                    if (remoteThumbDir.length)
+                    {
+                        try
+                        {
+                            immutable fp = buildPath(remoteThumbDir, rid.to!string ~ ".jpg");
+                            write(fp, Base64.decode(b64.str));
+                            url = fileUrl(fp);
+                        }
+                        catch (Exception)
+                            url = "data:image/jpeg;base64," ~ b64.str;
+                    }
+                    else
+                        url = "data:image/jpeg;base64," ~ b64.str;
+                    thumbCache[rid] = url;
+                    got = true;
+                }
+            // patch what was already served, so a reload / the viewer see the thumbs
             foreach (ref it; served)
                 if (it["id"].integer >= remoteBase && it["thumbUrl"].type == JSONType.null_)
                     if (auto t = (it["id"].integer - remoteBase) in thumbCache)
                         it["thumbUrl"] = *t;
-            done();
+            if (got)
+                emit("library.changed", JSONValue.emptyObject);
         });
     }
 

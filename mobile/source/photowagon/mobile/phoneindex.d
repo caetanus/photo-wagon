@@ -31,6 +31,8 @@ import core.time : MonoTime, seconds;
 import photowagon.core.indexer.scan : Candidate, scanImages;
 import photowagon.core.library.calendar : dateRange, fileUrl, isoTime, localDate;
 import photowagon.core.metadata.exifparse : readExifCore, parseExifTimestamp;
+import photowagon.core.library.kind : classify, Signals;
+import photowagon.core.thumbs.imagestats : ImageStats, statsOf;
 
 // videothumb.c: a representative frame of a video, saved as a JPEG scaled to fit
 // maxSize, via the Android MediaMetadataRetriever. Returns the duration in ms
@@ -54,6 +56,7 @@ struct PhonePhoto
     int tries;      // failed sends; after `maxTries` the photo waits for a manual retry
     bool isVideo;   // a camera video: no frame thumbnail here (the computer makes one on sync)
     long durationMs;
+    string kind;    // photo | screenshot | meme (kind.d); "" = not classified yet
 
     JSONValue toJson() const
     {
@@ -76,6 +79,7 @@ struct PhonePhoto
             "size": JSONValue(size),
             "remote": JSONValue(false),
             "sent": JSONValue(sent),
+            "kind": kind.length ? JSONValue(kind) : JSONValue("photo"),
         ]);
     }
 }
@@ -93,6 +97,10 @@ final class PhoneIndex
     void delegate(long done, long total) onProgress;   /// decoding progress
     void delegate(long added, long removed) onDone;
     void delegate(size_t found) onScanned;             /// a walk finished
+    /// When this returns true, the decode slice yields for this tick: a sync push is in
+    /// flight and heavy QImageReader work on the Qt thread would starve the socket (the
+    /// video-push drops we saw) and jank the UI. Indexing resumes the moment the push ends.
+    bool delegate() shouldYield;
 
     private string[] roots;
     private string indexFile;
@@ -119,7 +127,9 @@ final class PhoneIndex
         lock = new Mutex;
         load();
         pump = new QTimer(cast(cppq.QObject) null);
-        pump.setInterval(30);
+        pump.setInterval(50);   // more breathing room between decode slices so scrolling/rendering
+                                // stays smooth (a single big-image decode can blow a frame; a wider
+                                // gap between ticks keeps the UI fluid). Indexing is a touch slower.
         pump.connectTimeout(&step);
     }
 
@@ -220,7 +230,7 @@ final class PhoneIndex
             // entry pointing at the evicted cache dir must be regenerated into files/thumbs,
             // or the grid shows dark tiles (the "black screen") for images Android deleted.
             if (known && known.size == c.size && known.mtimeMs == c.mtimeMs && known.thumb !is null
-                && known.thumb.startsWith(thumbDir) && known.thumb.exists)
+                && known.thumb.startsWith(thumbDir) && known.thumb.exists && known.kind.length)
                 continue;
             todo ~= c;
         }
@@ -285,7 +295,10 @@ final class PhoneIndex
         if (haveWalk)
             afterWalk(found);
 
-        if (work.length)
+        // Yield the whole decode slice while a sync push is running — the push and the UI
+        // come first (see shouldYield). The pump keeps ticking, so decoding resumes as soon
+        // as the push finishes.
+        if (work.length && !(shouldYield !is null && shouldYield()))
         {
             if (!decodeReady)
             {
@@ -401,23 +414,34 @@ final class PhoneIndex
         if (c.isVideo)
         {
             import photowagon.core.metadata.datefromname : dateFromPath;
-            import std.string : toStringz;
-            import qt.quick.qjnienvironment : QJniEnvironment;
 
             immutable named = dateFromPath(c.path);
             p.takenTs = named ? named : c.mtimeMs / 1000;
             p.isVideo = true;
 
-            immutable vthumb = buildPath(thumbDir, toHexString!(LetterCase.lower)(sha1Of(c.path ~ "@" ~ c.mtimeMs.to!string)).idup ~ ".jpg");
-            auto env = QJniEnvironment.getJniEnv();
-            immutable dur = pw_video_thumb(cast(void*) env, c.path.toStringz, vthumb.toStringz, 512);
-            if (dur >= 0 && vthumb.exists)
+            // The frame comes from the Android platform (MediaMetadataRetriever via the JNI
+            // shim). The desktop test build has no JNI, so it falls back to the grey tile +
+            // play glyph — exactly what the phone does when the retriever fails.
+            version (Android)
             {
-                p.thumb = vthumb;
-                p.durationMs = dur;
+                import std.string : toStringz;
+                import qt.quick.qjnienvironment : QJniEnvironment;
+
+                immutable vthumb = buildPath(thumbDir,
+                    toHexString!(LetterCase.lower)(sha1Of(c.path ~ "@" ~ c.mtimeMs.to!string)).idup ~ ".jpg");
+                auto env = QJniEnvironment.getJniEnv();
+                immutable dur = pw_video_thumb(cast(void*) env, c.path.toStringz, vthumb.toStringz, 512);
+                if (dur >= 0 && vthumb.exists)
+                {
+                    p.thumb = vthumb;
+                    p.durationMs = dur;
+                }
+                else
+                    p.thumb = null;
             }
             else
                 p.thumb = null;
+            p.kind = "photo";   // a camera video is real content — sync it, show it
             return p;
         }
         auto exif = readExifCore(c.path);
@@ -431,16 +455,26 @@ final class PhoneIndex
         }
         immutable thumbPath = buildPath(thumbDir, toHexString!(LetterCase.lower)(sha1Of(c.path ~ "@" ~ c.mtimeMs.to!string)).idup ~ ".jpg");
         int w, h;
-        makeThumb(reader, img, c.path, thumbPath, p.orientation, w, h);
+        ImageStats stats;
+        makeThumb(reader, img, c.path, thumbPath, p.orientation, w, h, stats);
         p.width = w;
         p.height = h;
         p.thumb = thumbPath;
+        // photo / screenshot / meme — so the grid can hide stickers & banners and the sync
+        // sends only real photos. WhatsApp strips EXIF, so a received photo has no camera and
+        // the pixel stats decide: a real photo stays 'photo', a banner/sticker becomes 'meme'.
+        Signals sig = {
+            path: c.path, width: w, height: h,
+            hasCamera: exif.found && exif.dateTimeOriginal.length > 0,
+            stats: stats
+        };
+        p.kind = stats.ok ? cast(string) classify(sig) : "photo";
         return p;
     }
 
     /// Decodes `src` scaled so its longest edge is `thumbEdge`, rotated by EXIF,
     /// and writes a JPEG at `dst`. Reports the rotated full-size dimensions.
-    private static void makeThumb(QImageReader reader, QImage img, string src, string dst, int orientation, out int width, out int height)
+    private static void makeThumb(QImageReader reader, QImage img, string src, string dst, int orientation, out int width, out int height, out ImageStats stats)
     {
         reader.setFileName(src);
         reader.setAutoTransform(true);
@@ -452,7 +486,18 @@ final class PhoneIndex
         width = swap ? rh : rw;
         height = swap ? rw : rh;
         if (dst.exists)
+        {
+            // already thumbnailed: feed the kind classifier from the small cached JPEG, not a
+            // full re-decode of the (up to 100 MP) original. This keeps the one-time migration
+            // — when kinds were added, every cached photo needs classifying — cheap: decoding a
+            // 512 px thumb is fast, decoding every original is what stalled the index.
+            reader.setFileName(dst);
+            auto natural = QSize.__make(-1, -1);   // invalid = no scaling; ref const needs an lvalue
+            reader.setScaledSize(natural);         // read the thumb at its own (already small) size
+            if (reader.read(cast(QImage*) img.ptr()) && !img.isNull())
+                stats = statsFromQImage(img);
             return;
+        }
         // fit the longest edge (of the raw image; the transform only swaps axes)
         int tw = rw, th = rh;
         if (rw >= rh && rw > thumbEdge) { tw = thumbEdge; th = cast(int)(cast(long) rh * thumbEdge / rw); }
@@ -462,8 +507,40 @@ final class PhoneIndex
         // read() returning QImage by value is mis-bound (sret); the pointer overload is safe
         if (!reader.read(cast(QImage*) img.ptr()) || img.isNull())
             throw new Exception("decode failed");
+        stats = statsFromQImage(img);
         if (!img.save(dst, "JPEG".ptr, 84))
             throw new Exception("cannot write thumbnail");
+    }
+
+    /// The kind classifier's pixel statistics, from the decoded thumbnail. The colour
+    /// order (BGRA vs RGBA) does not matter here — every statistic is order-agnostic.
+    private static ImageStats statsFromQImage(QImage img)
+    {
+        ImageStats none;
+        if (img.isNull())
+            return none;
+        immutable w = img.width(), h = img.height();
+        if (w <= 0 || h <= 0)
+            return none;
+        immutable fmt = img.format();
+        int bands;
+        if (fmt == QImage.Format.Format_RGB888)
+            bands = 3;
+        else if (fmt == QImage.Format.Format_RGB32 || fmt == QImage.Format.Format_ARGB32
+                || fmt == QImage.Format.Format_ARGB32_Premultiplied || fmt == QImage.Format.Format_RGBX8888
+                || fmt == QImage.Format.Format_RGBA8888 || fmt == QImage.Format.Format_RGBA8888_Premultiplied)
+            bands = 4;
+        else
+            return none;   // an unusual format: skip stats, the photo stays 'photo'
+        immutable bpl = cast(size_t) img.bytesPerLine();
+        immutable rowBytes = cast(size_t) w * bands;
+        auto bits = img.constBits();
+        if (bits is null || bpl < rowBytes)
+            return none;
+        auto packed = new ubyte[rowBytes * h];   // tighten the (possibly padded) rows for statsOf
+        foreach (y; 0 .. h)
+            packed[y * rowBytes .. (y + 1) * rowBytes] = bits[y * bpl .. y * bpl + rowBytes];
+        return statsOf(packed, w, h, bands);
     }
 
     private void sortPhotos()
@@ -473,8 +550,19 @@ final class PhoneIndex
 
     // ---- queries -----------------------------------------------------------------
 
+    // Sent to the computer only if it is a real photo (or a video). Memes, stickers and
+    // screenshots stay on the phone. Not-yet-classified ("") counts as a photo so the first
+    // sync is not stalled; the next scan reclassifies and then blocks the junk.
+    private static bool syncable(ref const PhonePhoto p)
+    {
+        return p.kind.length == 0 || p.kind == "photo";
+    }
+
     private bool matches(ref const PhonePhoto p, PhoneFilter f) const
     {
+        // the grid hides stickers & banners (classified 'meme'); photos and screenshots stay
+        if (p.kind == "meme")
+            return false;
         if (f.year == 0)
             return true;
         auto r = dateRange(f.year, f.month, f.day);
@@ -577,7 +665,7 @@ final class PhoneIndex
     {
         long[] out_;
         foreach_reverse (ref p; photos)
-            if (!p.sent && !p.declined && p.tries < maxTries)
+            if (!p.sent && !p.declined && p.tries < maxTries && syncable(p))
                 out_ ~= p.id;
         return out_;
     }
@@ -586,7 +674,7 @@ final class PhoneIndex
     {
         long n;
         foreach (ref p; photos)
-            if (!p.sent && !p.declined && p.tries < maxTries)
+            if (!p.sent && !p.declined && p.tries < maxTries && syncable(p))
                 n++;
         return n;
     }
@@ -688,6 +776,7 @@ final class PhoneIndex
                 p.tries = "tries" in e ? cast(int) e["tries"].integer : 0;
                 p.isVideo = "video" in e ? e["video"].boolean : false;
                 p.durationMs = "duration" in e ? e["duration"].integer : 0;
+                p.kind = "kind" in e && e["kind"].type == JSONType.string ? e["kind"].str : null;
                 photos ~= p;
                 byPath[p.path] = p;
             }
@@ -755,6 +844,7 @@ final class PhoneIndex
                     "thumb": p.thumb is null ? JSONValue(null) : JSONValue(p.thumb), "sent": JSONValue(p.sent),
                     "declined": JSONValue(p.declined), "hash": p.hash.length ? JSONValue(p.hash) : JSONValue(null),
                     "tries": JSONValue(p.tries), "video": JSONValue(p.isVideo), "duration": JSONValue(p.durationMs),
+                    "kind": p.kind.length ? JSONValue(p.kind) : JSONValue(null),
                 ]);
             JSONValue j = ["nextId": JSONValue(nId), "photos": JSONValue(arr)];
             try

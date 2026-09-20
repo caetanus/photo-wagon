@@ -32,10 +32,16 @@ Item {
         const items = (page && page.items) ? page.items : []
         const m = items.length
         let i = 0
-        // shared prefix: same id in the same slot — keep the delegate, patch `sent`
+        // shared prefix: same id in the same slot — keep the delegate, patch what changed
+        // (its `sent` flag, and a thumbUrl that arrived late — remote thumbnails stream in
+        // from the computer after the page is first shown, so patch them in place instead
+        // of leaving the cell blank until it is rebuilt).
         while (i < model.count && i < m && model.get(i).pid === items[i].id) {
             if (model.get(i).sent !== (items[i].sent === true))
                 model.setProperty(i, "sent", items[i].sent === true)
+            const nt = items[i].thumbUrl || ""
+            if (model.get(i).thumbUrl !== nt)
+                model.setProperty(i, "thumbUrl", nt)
             i++
         }
         // drop whatever no longer matches from the first divergence on
@@ -63,6 +69,11 @@ Item {
         cellWidth: Math.floor(width / Math.max(3, Math.floor(width / 150)))
         cellHeight: cellWidth
         model: model
+        // Scroll feel: Qt's defaults (maxVel 2500, decel 1500) feel heavy next to native
+        // Android. A higher top speed lets a hard flick fly, and less friction lets it glide,
+        // so the grid keeps momentum instead of braking under your finger.
+        maximumFlickVelocity: 9000
+        flickDeceleration: 1100
         // Flyweight: keep in memory only what is on screen plus one screenful of buffer
         // above and below ("as visíveis mais 100% de view em offscreen"). GridView only
         // instantiates delegates within cacheBuffer of the viewport, so bounding it to the

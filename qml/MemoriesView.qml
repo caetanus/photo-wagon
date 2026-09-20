@@ -48,7 +48,7 @@ Item {
                     anchors.left: parent.left
                     anchors.right: parent.right
                     height: parent.height - 64
-                    color: theme.panelAlt
+                    color: theme.tile
                     Image {
                         id: cover
                         anchors.fill: parent

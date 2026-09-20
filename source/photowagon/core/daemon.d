@@ -29,6 +29,7 @@ import photowagon.core.api.media_api : registerMediaApi;
 import photowagon.core.api.memories_api : registerMemoriesApi;
 import photowagon.core.api.moments_api : registerMomentsApi;
 import photowagon.core.api.p2p_api : registerP2pApi;
+import photowagon.core.api.peernames_api : registerPeerNamesApi;
 import photowagon.core.api.pairing_api : registerPairingApi, ServerControl;
 import photowagon.core.api.places_api : registerPlacesApi;
 version (PW_NoVision) {} else import photowagon.core.api.tags_api : registerTagsApi;
@@ -224,6 +225,7 @@ final class Daemon : ServerControl
 					indexer.start(root.id, root.path);
 		});
 		registerP2pApi(registry, node, sharing);
+		registerPeerNamesApi(registry, db);
 		// USB import from a plugged-in phone (like Photos): desktop-UI only.
 		if (link !is null)
 			usbWatcher = new UsbWatcher(cfg, events, roots, indexer);

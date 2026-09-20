@@ -48,7 +48,7 @@ Item {
                     anchors.left: parent.left
                     anchors.right: parent.right
                     height: parent.height - 58
-                    color: theme.panelAlt
+                    color: theme.tile
                     Image {
                         anchors.fill: parent
                         source: card.modelData.cover || ""

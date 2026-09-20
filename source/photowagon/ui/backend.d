@@ -45,6 +45,7 @@ version (WithUi)
     Signal!() rootsChanged;
     Signal!() albumsChanged;
     Signal!() peersChanged;
+    Signal!() peerNamesChanged;
     Signal!() statusChanged;
     Signal!() helloChanged;
     Signal!() currentChanged;
@@ -74,6 +75,8 @@ version (WithUi)
     @Property("rootsChanged")   string roots  = `{"roots":[]}`;
     @Property("albumsChanged")  string albums = `{"albums":[]}`;
     @Property("peersChanged")   string peers  = `{"peerId":"","addrs":[],"peers":[]}`;
+    /// {peerId: nickname} — user-given names the Peers panel overlays onto the live peer list.
+    @Property("peerNamesChanged") string peerNames = `{}`;
     /// {"connected":bool,"indexing":bool,"text":"…"}
     @Property("statusChanged")  string status = `{"connected":false,"indexing":false,"text":"starting…"}`;
     @Property("helloChanged")   string hello  = `{}`;
@@ -1114,6 +1117,7 @@ version (WithUi)
         loadRoots();
         loadAlbums();
         loadPeers();
+        loadPeerNames();
         loadPeople();
         loadStats();
         reload(0, pageLimit);
@@ -1307,6 +1311,16 @@ version (WithUi)
         client.request("p2p.connect", params, (r, e) {
             if (e.type != JSONType.null_) { report("p2p.connect", e); return; }
             loadPeers();
+        });
+    }
+
+    /// Give a peer a nickname (empty name clears it), then refresh the panel.
+    @Slot void setPeerName(string peerId, string name)
+    {
+        JSONValue params = ["peerId": peerId, "name": name];
+        client.request("peer.setName", params, (r, e) {
+            if (e.type != JSONType.null_) { report("peer.setName", e); return; }
+            loadPeerNames();
         });
     }
 
@@ -1861,6 +1875,15 @@ version (WithUi)
             if (e.type != JSONType.null_) return;
             peers = r.toString();
             peersChanged.emit();
+        });
+    }
+
+    private void loadPeerNames()
+    {
+        client.request("peer.names", (r, e) {
+            if (e.type != JSONType.null_) return;
+            peerNames = ("names" in r) ? r["names"].toString() : `{}`;
+            peerNamesChanged.emit();
         });
     }
 

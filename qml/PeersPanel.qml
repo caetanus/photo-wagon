@@ -15,6 +15,13 @@ Popup {
     readonly property var hello: JSON.parse(library.hello)
     readonly property var peersData: JSON.parse(library.peers)
     readonly property var albumsData: JSON.parse(library.albums)
+    // {peerId: nickname} the user has given peers — overlaid onto the live list below.
+    readonly property var peerNames: JSON.parse(library.peerNames)
+
+    // A short, readable stand-in for a raw 12D3Koo… peer id.
+    function short(id) {
+        return (id && id.length > 15) ? id.slice(0, 8) + "…" + id.slice(-4) : (id || "")
+    }
 
     background: Rectangle {
         color: theme.panel
@@ -75,14 +82,59 @@ Popup {
         }
         ListView {
             Layout.fillWidth: true
-            Layout.preferredHeight: 120
+            Layout.preferredHeight: 150
             clip: true
+            spacing: 6
             model: panel.peersData.peers ? panel.peersData.peers : []
-            delegate: ItemDelegate {
+            ScrollBar.vertical: ScrollBar { }
+            delegate: Column {
+                id: peerRow
                 required property var modelData
                 width: ListView.view.width
-                text: modelData.peerId + (modelData.agent ? "   ·   " + modelData.agent : "")
-                font.pixelSize: 12
+                spacing: 2
+                property string pid: modelData.peerId
+                property string nick: panel.peerNames[pid] || ""
+                property bool editing: false
+
+                RowLayout {
+                    width: parent.width
+                    Label {
+                        Layout.fillWidth: true
+                        text: peerRow.nick.length ? peerRow.nick : panel.short(peerRow.pid)
+                        color: theme.text
+                        font.pixelSize: 13
+                        font.bold: peerRow.nick.length > 0
+                        elide: Text.ElideRight
+                    }
+                    Button {
+                        flat: true
+                        text: peerRow.editing ? "Cancel" : (peerRow.nick.length ? "Rename" : "Name")
+                        font.pixelSize: 11
+                        onClicked: peerRow.editing = !peerRow.editing
+                    }
+                }
+                Label {
+                    width: parent.width
+                    text: peerRow.pid + (modelData.agent ? "   ·   " + modelData.agent : "")
+                    color: theme.muted
+                    font.pixelSize: 10
+                    elide: Text.ElideRight
+                }
+                RowLayout {
+                    visible: peerRow.editing
+                    width: parent.width
+                    TextField {
+                        id: nickField
+                        Layout.fillWidth: true
+                        text: peerRow.nick
+                        placeholderText: "nickname"
+                        onAccepted: { library.setPeerName(peerRow.pid, text); peerRow.editing = false }
+                    }
+                    Button {
+                        text: "Save"
+                        onClicked: { library.setPeerName(peerRow.pid, nickField.text); peerRow.editing = false }
+                    }
+                }
             }
             Label {
                 anchors.centerIn: parent

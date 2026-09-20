@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 16;
+enum currentVersion = 17;
 
 void migrate(Database db)
 {
@@ -45,6 +45,8 @@ void migrate(Database db)
 			db.exec(schemaV15);
 		if (have < 16)
 			db.exec(schemaV16);
+		if (have < 17)
+			db.exec(schemaV17);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -248,6 +250,15 @@ ALTER TABLE photos ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0;
 private enum schemaV16 = `
 ALTER TABLE photos ADD COLUMN ocr_text TEXT;
 ALTER TABLE photos ADD COLUMN ocr_scanned INTEGER NOT NULL DEFAULT 0;
+`;
+
+// v17: a nickname the user gives a peer, keyed by its libp2p peer id, so the Peers panel
+// shows "Marcelo's phone" instead of 12D3Koo…. App-side only (never touches the p2p node).
+private enum schemaV17 = `
+CREATE TABLE peer_names (
+    peer_id  TEXT PRIMARY KEY,
+    name     TEXT NOT NULL
+);
 `;
 
 private void migrateV14(Database db)

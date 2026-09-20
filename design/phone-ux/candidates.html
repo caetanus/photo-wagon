@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Photo Wagon — 5 candidatos de UX</title>
+<style>
+  /* ---- shared geometry + the identical "photos" (only the chrome changes per candidate) ---- */
+  :root{
+    --pw: 288px;   /* phone width */
+    --ph: 604px;   /* phone height */
+    /* the 9 shared photo tiles — same subjects across every candidate for a fair comparison */
+    --p1: radial-gradient(circle at 38% 60%, #e8b48f 0 12%, transparent 13%), radial-gradient(circle at 62% 60%, #b96a4e 0 12%, transparent 13%), linear-gradient(#8fb7b0, #cbb894 62%);
+    --p2: linear-gradient(#a9cbd0 0 55%, #6a94a0 55%), radial-gradient(circle at 50% 52%, #d8623e 0 8%, transparent 9%);
+    --p3: linear-gradient(#cddfe0 0 60%, #d8c79c 60%), radial-gradient(circle at 42% 44%, #d8623e 0 14%, transparent 15%);
+    --p4: linear-gradient(120deg,#e4d6bd,#c9b48c), radial-gradient(circle at 30% 40%,#6f8f86 0 18%,transparent 19%);
+    --p5: radial-gradient(circle at 50% 42%, #e8a33d 0 16%, transparent 17%), linear-gradient(#dfe6df,#c3cfc0);
+    --p6: radial-gradient(circle at 50% 50%, #7a4a2c 0 22%, #b58a5e 23% 40%, #e6ddce 41%);
+    --p7: radial-gradient(circle at 50% 38%, #4d7a4a 0 26%, transparent 27%), linear-gradient(#e7e3d6,#cfd3c2);
+    --p8: linear-gradient(#bcd2d4 0 46%, #6f8f86 46% 68%, #4a6b62 68%);
+    --p9: linear-gradient(#b7d0d4 0 58%, #7fa1a6 58%), radial-gradient(circle at 55% 50%, #e8ddc8 0 9%, transparent 10%);
+    --av1: linear-gradient(135deg,#e6b78f,#b96a4e);
+    --av2: linear-gradient(135deg,#c9a06f,#7a4a2c);
+    --av3: linear-gradient(135deg,#9fb6ad,#4d6f66);
+    --map: linear-gradient(115deg,#cdه 0,#cddccb 0), conic-gradient(from 200deg at 60% 40%, #d8e0cf, #cdd8c6, #dfe6d6, #d8e0cf);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{color-scheme:light dark}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:#e9e7e1;color:#1c1c1a;line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  @media (prefers-color-scheme: dark){ body{background:#101012;color:#e9e9ea} }
+  .wrap{max-width:1280px;margin:0 auto;padding:40px 24px 80px}
+  header.top{margin-bottom:8px}
+  .eyebrow{font-size:11px;letter-spacing:.16em;text-transform:uppercase;opacity:.6;font-weight:700}
+  h1{font-size:30px;font-weight:800;letter-spacing:-.02em;margin:6px 0 4px}
+  .lede{max-width:70ch;opacity:.8;font-size:15px}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:16px;font-size:12px;opacity:.7}
+  .legend b{font-weight:700;opacity:1}
+
+  .cand{border-top:1px solid rgba(128,128,128,.28);margin-top:44px;padding-top:26px}
+  .cand-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 16px;margin-bottom:4px}
+  .cand-num{font-size:13px;font-weight:800;opacity:.5}
+  .cand-name{font-size:22px;font-weight:800;letter-spacing:-.01em}
+  .cand-for{font-size:12.5px;opacity:.65}
+  .cand-desc{max-width:78ch;font-size:13.5px;opacity:.82;margin:6px 0 4px}
+  .swatches{display:flex;gap:6px;margin:10px 0 18px}
+  .swatches i{width:26px;height:16px;border-radius:4px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.12)}
+  .frames{display:flex;gap:22px;flex-wrap:wrap}
+  .frame-wrap{display:flex;flex-direction:column;gap:8px}
+  .frame-cap{font-size:11px;letter-spacing:.06em;text-transform:uppercase;opacity:.55;font-weight:700}
+
+  /* ---- the phone shell ---- */
+  .phone{width:var(--pw);height:var(--ph);border-radius:34px;padding:8px;
+    background:#111;box-shadow:0 10px 34px rgba(0,0,0,.22);flex:0 0 auto}
+  .screen{width:100%;height:100%;border-radius:27px;overflow:hidden;position:relative;
+    display:flex;flex-direction:column;background:var(--bg);color:var(--text);
+    font-family:var(--font,inherit)}
+  .statusbar{display:flex;justify-content:space-between;align-items:center;
+    padding:7px 16px 3px;font-size:11px;font-weight:600;color:var(--text)}
+  .statusbar .dots{opacity:.7;letter-spacing:1px}
+  .appbar{display:flex;align-items:center;gap:8px;padding:6px 14px 8px}
+  .appbar .title{font-size:19px;font-weight:var(--title-w,800);letter-spacing:var(--title-ls,-.01em);
+    font-family:var(--display,var(--font));flex:1}
+  .appbar .ic{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
+    background:var(--icbg,transparent);font-size:15px;opacity:.85}
+  .body{flex:1;overflow:hidden;padding:0 12px}
+  .nav{display:flex;border-top:1px solid var(--border);background:var(--navbg,var(--surface))}
+  .nav div{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 0 10px;
+    font-size:10px;color:var(--muted)}
+  .nav div.on{color:var(--accent);font-weight:700}
+  .nav .g{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-size:14px}
+  .nav div.on .g{color:var(--accent)}
+
+  /* link chip + status */
+  .chip{display:flex;align-items:center;gap:8px;margin:2px 0 10px;padding:9px 12px;
+    border-radius:var(--chip-r,12px);background:var(--chip-bg);color:var(--chip-tx,var(--text));
+    font-size:12px;font-weight:600;border:1px solid var(--chip-bd,transparent)}
+  .chip .ld{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+  .chip.off .ld{background:var(--amber)}
+  .chip .arw{margin-left:auto;opacity:.5}
+
+  .density{display:flex;gap:6px;margin-bottom:9px;font-size:12px}
+  .density span{padding:4px 12px;border-radius:var(--pill-r,999px);color:var(--muted);border:1px solid var(--border)}
+  .density span.on{background:var(--accent);color:var(--onaccent);border-color:transparent;font-weight:700}
+  .datehdr{font-size:12px;font-weight:700;margin:2px 0 7px;opacity:.85;display:flex;justify-content:space-between}
+  .datehdr small{font-weight:500;opacity:.6}
+
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--gg,3px)}
+  .grid i{aspect-ratio:1;border-radius:var(--tile-r,3px);position:relative;overflow:hidden;
+    background-size:cover;background-position:center}
+  .t1{background-image:var(--p1)}.t2{background-image:var(--p2)}.t3{background-image:var(--p3)}
+  .t4{background-image:var(--p4)}.t5{background-image:var(--p5)}.t6{background-image:var(--p6)}
+  .t7{background-image:var(--p7)}.t8{background-image:var(--p8)}.t9{background-image:var(--p9)}
+  .bdg{position:absolute;right:4px;bottom:4px;width:15px;height:15px;border-radius:50%;
+    display:grid;place-items:center;font-size:9px;color:#fff;background:rgba(20,30,24,.72)}
+  .bdg.ok{background:var(--ok)}
+  .bdg.up{background:var(--amber)}
+  .vid{position:absolute;right:5px;top:5px;font-size:9px;color:#fff;background:rgba(0,0,0,.5);
+    padding:1px 5px;border-radius:5px;font-weight:600}
+  .scrub{position:absolute;right:2px;top:120px;font-size:8px;writing-mode:vertical-rl;
+    background:rgba(0,0,0,.35);color:#fff;padding:6px 2px;border-radius:6px;letter-spacing:1px}
+
+  /* search */
+  .sbox{display:flex;align-items:center;gap:8px;padding:11px 14px;border-radius:var(--sbox-r,14px);
+    background:var(--field);color:var(--muted);font-size:13px;margin:2px 0 12px;border:1px solid var(--field-bd,transparent)}
+  .sect{font-size:12px;font-weight:700;margin:12px 0 8px;display:flex;justify-content:space-between}
+  .sect small{font-weight:500;opacity:.55;color:var(--accent)}
+  .people{display:flex;gap:12px}
+  .person{display:flex;flex-direction:column;align-items:center;gap:5px;font-size:10px}
+  .person i{width:46px;height:46px;border-radius:50%;background-size:cover}
+  .a1{background-image:var(--av1)}.a2{background-image:var(--av2)}.a3{background-image:var(--av3)}
+  .a4{background:var(--field);display:grid;place-items:center;font-size:15px;color:var(--muted)}
+  .mapbox{height:88px;border-radius:var(--tile-r,12px);margin-bottom:4px;position:relative;overflow:hidden;
+    background:conic-gradient(from 210deg at 58% 42%, #d6e0cd, #cbd8c4, #e0e7d7, #d6e0cd)}
+  .mapbox b{position:absolute;width:22px;height:22px;border-radius:50%;background:var(--accent);color:var(--onaccent);
+    font-size:9px;display:grid;place-items:center;font-weight:700;transform:translate(-50%,-50%)}
+  .chips{display:flex;flex-wrap:wrap;gap:7px}
+  .chips span{padding:6px 12px;border-radius:var(--pill-r,999px);font-size:11.5px;background:var(--field);
+    color:var(--text);border:1px solid var(--field-bd,transparent)}
+
+  /* search result */
+  .res{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .rcard i{aspect-ratio:4/5;border-radius:var(--tile-r,10px);display:block;background-size:cover}
+  .tag{display:inline-block;margin-top:5px;font-size:9px;font-weight:700;padding:2px 7px;border-radius:5px;
+    color:#fff;letter-spacing:.03em}
+  .tag.txt{background:var(--amber)} .tag.vis{background:var(--accent);color:var(--onaccent)}
+  .rcap{font-size:10.5px;opacity:.7;margin-top:3px}
+
+  /* sync */
+  .card{border:1px solid var(--border);border-radius:var(--card-r,14px);padding:11px 12px;margin:2px 0 12px;background:var(--surface)}
+  .card .row1{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700}
+  .card .sub{font-size:11px;opacity:.6;margin-top:2px}
+  .bignum{font-size:13px;margin:2px 0 6px}
+  .bignum b{font-size:26px;font-weight:800;font-family:var(--display,var(--font))}
+  .bar{height:6px;border-radius:4px;background:var(--border);overflow:hidden;margin:6px 0 5px}
+  .bar i{display:block;height:100%;width:34%;background:var(--accent)}
+  .counts{display:flex;gap:12px;font-size:10.5px;opacity:.7}
+  .file{display:flex;align-items:center;gap:9px;padding:8px 2px;border-top:1px solid var(--border)}
+  .file .th{width:34px;height:34px;border-radius:8px;background-size:cover;flex:0 0 auto}
+  .file .fn{flex:1;font-size:11.5px;font-weight:600}
+  .file .fn small{display:block;font-weight:400;opacity:.55;font-size:10px}
+  .file .st{font-size:10px;font-weight:700}
+  .st.send{color:var(--accent)} .st.q{opacity:.5} .st.done{color:var(--ok)}
+  .paused{background:var(--amber-soft);border:1px solid var(--amber);border-radius:10px;padding:8px 10px;
+    font-size:10.5px;margin:4px 0;color:var(--amber-tx)}
+
+  /* ================= the 5 directions ================= */
+
+  /* 1 · Contact Sheet — warm paper + moss, serif accents */
+  .d-sheet{--bg:#f6f3ea;--surface:#fffdf7;--text:#232a24;--muted:#7d8478;--accent:#33553f;
+    --onaccent:#fff;--border:#e4e0d2;--field:#efece0;--ok:#3f8f63;--amber:#c8863a;--amber-soft:#f6ead6;
+    --amber-tx:#8a5a1c;--chip-bg:#ecefe6;--chip-bd:#dfe3d6;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    --display:Georgia,"Times New Roman",serif;--title-w:600;--title-ls:0;--tile-r:3px;--gg:3px;--pill-r:8px}
+  /* 2 · Clean Canvas — Material-You, bright + colorful */
+  .d-canvas{--bg:#f7f9fd;--surface:#ffffff;--text:#191c20;--muted:#5b6470;--accent:#2f6df6;
+    --onaccent:#fff;--border:#e5e9f0;--field:#eef1f7;--ok:#1f9d55;--amber:#f2a531;--amber-soft:#fdf0d8;
+    --amber-tx:#8a5a10;--chip-bg:#e7efff;--chip-bd:transparent;--chip-r:999px;
+    --font:Roboto,-apple-system,"Segoe UI",sans-serif;--display:inherit;--title-w:700;--title-ls:0;
+    --tile-r:14px;--gg:6px;--pill-r:999px;--sbox-r:999px;--card-r:20px;--tile-r:14px;--icbg:#eef1f7}
+  /* 3 · Gallery Noir — true black, photography-first, gold accent */
+  .d-noir{--bg:#0a0a0b;--surface:#141416;--text:#f3f2ef;--muted:#8b8b8f;--accent:#d9b46a;
+    --onaccent:#151208;--border:#232326;--field:#1a1a1d;--ok:#5fbf8a;--amber:#d9a24a;--amber-soft:#2a2113;
+    --amber-tx:#e9c98a;--chip-bg:#17171a;--chip-bd:#26262a;--font:-apple-system,"Segoe UI",Roboto,sans-serif;
+    --display:inherit;--title-w:300;--title-ls:.06em;--tile-r:2px;--gg:2px;--pill-r:999px;--navbg:#0a0a0b}
+  /* 4 · Studio Light — Apple-adjacent, soft neutrals, translucent */
+  .d-studio{--bg:#eef0f3;--surface:rgba(255,255,255,.72);--text:#22252a;--muted:#7b828c;--accent:#3d6ea8;
+    --onaccent:#fff;--border:rgba(120,130,145,.22);--field:rgba(255,255,255,.78);--ok:#34a06a;--amber:#e0983a;
+    --amber-soft:#f7ecd9;--amber-tx:#8a5a15;--chip-bg:rgba(255,255,255,.7);--chip-bd:rgba(120,130,145,.2);
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",sans-serif;--display:inherit;
+    --title-w:700;--title-ls:.01em;--tile-r:12px;--gg:5px;--pill-r:999px;--sbox-r:999px;--card-r:20px}
+  /* 5 · Wagon — bold local-first brand, terracotta + ink, link-chip as hero */
+  .d-wagon{--bg:#faf5ee;--surface:#fffefb;--text:#1b1613;--muted:#8a7d70;--accent:#d24e2a;
+    --onaccent:#fff;--border:#ece2d5;--field:#f1e8dc;--ok:#2f7d53;--amber:#e08a2c;--amber-soft:#f7e6cf;
+    --amber-tx:#8a4d12;--chip-bg:#124b40;--chip-tx:#eafff6;--chip-bd:transparent;--chip-r:999px;
+    --font:"Arial Black",Impact,-apple-system,sans-serif;--display:"Arial Black",Impact,sans-serif;
+    --title-w:900;--title-ls:-.02em;--tile-r:10px;--gg:4px;--pill-r:8px;--ok2:#2f7d53}
+  .d-wagon .body,.d-wagon .nav div,.d-wagon .card,.d-wagon .file,.d-wagon .sub,.d-wagon .rcap,.d-wagon .counts,
+  .d-wagon .cand-desc{font-family:-apple-system,"Segoe UI",Roboto,sans-serif}
+  .d-wagon .chip{box-shadow:0 2px 8px rgba(18,75,64,.25)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="eyebrow">Photo Wagon · estudo de UX do app de telefone</div>
+    <h1>5 candidatos — a mesma app, cinco linguagens</h1>
+    <p class="lede">O conteúdo, a arquitetura (Photos · Search · Library) e os recursos já convergiram:
+      busca semântica (CLIP) + texto em foto (OCR) + pessoas + lugares + moods, memórias, viewer com
+      folha de detalhes, e um <b>sync inspecionável e honesto</b> com o chip de estado do desktop.
+      Aqui só muda o <b>chrome</b> — paleta, tipografia, forma, densidade. As "fotos" são idênticas em
+      todos, de propósito, pra comparação justa. Escolha uma direção; o vencedor vira QML.</p>
+    <div class="legend">
+      <span><b>Chip de link:</b> "Desktop reachable · 16 left"</span>
+      <span><b>Badges por foto:</b> ✓ no computador · ↑ a enviar</span>
+      <span><b>Telas por candidato:</b> Grid · Busca · Sync</span>
+    </div>
+  </header>
+
+  <!-- macro that each candidate reuses is written out inline per direction -->
+
+  <!-- ============ 1 · CONTACT SHEET ============ -->
+  <section class="cand">
+    <div class="cand-head"><span class="cand-num">01</span><span class="cand-name">Contact Sheet</span>
+      <span class="cand-for">papel/musgo quente · serifa de acento · pra quem ama foto impressa e calor analógico</span></div>
+    <p class="cand-desc">A folha de contato: fundo papel <code>#f6f3ea</code>, musgo <code>#33553f</code>, âmbar para interrupções.
+      Serifa (Georgia) no título; grade densa de miniaturas quadradas com gutters mínimos. Sóbria, sem parecer nuvem.</p>
+    <div class="swatches"><i style="background:#f6f3ea"></i><i style="background:#33553f"></i><i style="background:#232a24"></i><i style="background:#c8863a"></i></div>
+    <div class="frames d-sheet">
+      <!-- GRID -->
+      <div class="frame-wrap"><div class="frame-cap">Photos</div>
+        <div class="phone"><div class="screen">
+          <div class="statusbar"><span>9:41</span><span class="dots">▪ ▪ ▪</span></div>
+          <div class="appbar"><span class="title">Photos</span><span class="ic">▦</span></div>
+          <div class="body">
+            <div class="chip"><span class="ld"></span>Desktop reachable · 16 left<span class="arw">›</span></div>
+            <div class="density"><span class="on">Days</span><span>Months</span><span>Years</span></div>
+            <div class="datehdr">18 September 2026 <small>Ubatuba</small></div>
+            <div class="grid">
+              <i class="t1"><b class="bdg up">↑</b></i><i class="t2"><span class="vid">0:24</span></i><i class="t9"></i>
+              <i class="t3"><b class="bdg ok">✓</b></i><i class="t4"><b class="bdg ok">✓</b></i><i class="t5"><b class="bdg ok">✓</b></i>
+              <i class="t8"><b class="bdg ok">✓</b></i><i class="t6"><b class="bdg ok">✓</b></i><i class="t7"><b class="bdg ok">✓</b></i>
+            </div>
+          </div>
+          <div class="nav"><div class="on"><span class="g">▦</span>Photos</div><div><span class="g">⌕</span>Search</div><div><span class="g">▤</span>Library</div></div>
+        </div></div>
+      </div>
+      <!-- SEARCH -->
+      <div class="frame-wrap"><div class="frame-cap">Search</div>
+        <div class="phone"><div class="screen">
+          <div class="statusbar"><span>9:41</span><span class="dots">▪ ▪ ▪</span></div>
+          <div class="appbar"><span class="title">Search</span></div>
+          <div class="body">
+            <div class="sbox">⌕ People, places, words in photos</div>
+            <div class="sect">People <small>See all</small></div>
+            <div class="people"><div class="person"><i class="a1"></i>Lia</div><div class="person"><i class="a2"></i>Rafa</div><div class="person"><i class="a3"></i>Marina</div><div class="person"><i class="a4">﹢</i>Unnamed</div></div>
+            <div class="sect">Places <small>Open map</small></div>
+            <div class="mapbox"><b style="left:64%;top:40%">84</b><b style="left:34%;top:64%">36</b></div>
+            <div class="sect">Things &amp; moods</div>
+            <div class="chips"><span>Beach</span><span>Food</span><span>Sunset</span><span>Documents</span><span>On this day</span><span>Trips</span></div>
+          </div>
+          <div class="nav"><div><span class="g">▦</span>Photos</div><div class="on"><span class="g">⌕</span>Search</div><div><span class="g">▤</span>Library</div></div>
+        </div></div>
+      </div>
+      <!-- SYNC -->
+      <div class="frame-wrap"><div class="frame-cap">Sync</div>
+        <div class="phone"><div class="screen">
+          <div class="statusbar"><span>9:41</span><span class="dots">▪ ▪ ▪</span></div>
+          <div class="appbar"><span class="title">Computer</span></div>
+          <div class="body">
+            <div class="card"><div class="row1">🖥 Paired computer · <span style="color:var(--ok)">Connected</span></div><div class="sub">192.168.1.24 · Auto-sync on</div></div>
+            <div class="bignum"><b>8</b> of 24 on the computer</div>
+            <div class="bar"><i></i></div>
+            <div class="counts"><span>1 sending</span><span>15 queued</span><span>8 done</span></div>
+            <div class="file"><i class="th t1"></i><div class="fn">IMG_4821.jpg<small>1.8 / 3.2 MB · this attempt</small></div><span class="st send">Sending</span></div>
+            <div class="file"><i class="th t2"></i><div class="fn">VID_4823.mp4<small>18.4 MB</small></div><span class="st q">Queued</span></div>
+            <div class="file"><i class="th t4"></i><div class="fn">IMG_4820.jpg<small>Confirmed on computer</small></div><span class="st done">✓ Done</span></div>
+          </div>
+          <div class="nav"><div><span class="g">▦</span>Photos</div><div><span class="g">⌕</span>Search</div><div class="on"><span class="g">▤</span>Library</div></div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 2 · CLEAN CANVAS ============ -->
+  <section class="cand">
+    <div class="cand-head"><span class="cand-num">02</span><span class="cand-name">Clean Canvas</span>
+      <span class="cand-for">Material You · claro e colorido · pra quem vem do Google Photos</span></div>
+    <p class="cand-desc">Branco arejado, acento vívido <code>#2f6df6</code>, campo de busca em pílula e chips coloridos.
+      Familiar na hora pra um usuário Android — sem ser um clone: cantos generosos, sombras leves, ritmo espaçado.</p>
+    <div class="swatches"><i style="background:#f7f9fd"></i><i style="background:#ffffff"></i><i style="background:#2f6df6"></i><i style="background:#f2a531"></i></div>
+    <div class="frames d-canvas">
+      <div class="frame-wrap"><div class="frame-cap">Photos</div>
+        <div class="phone"><div class="screen">
+          <div class="statusbar"><span>9:41</span><span class="dots">▪ ▪ ▪</span></div>
+          <div class="appbar"><span class="title">Photos</span><span class="ic">▦</span></div>
+          <div class="body">
+            <div class="chip"><span class="ld"></span>Desktop reachable · 16 left<span class="arw">›</span></div>
+            <div class="density"><span class="on">Days</span><span>Months</span><span>Years</span></div>
+            <div class="datehdr">18 September 2026 <small>Ubatuba</small></div>
+            <div class="grid">
+              <i class="t1"><b class="bdg up">↑</b></i><i class="t2"><span class="vid">0:24</span></i><i class="t9"></i>
+              <i class="t3"><b class="bdg ok">✓</b></i><i class="t4"><b class="bdg ok">✓</b></i><i class="t5"><b class="bdg ok">✓</b></i>
+              <i class="t8"><b class="bdg ok">✓</b></i><i class="t6"><b class="bdg ok">✓</b></i><i class="t7"><b class="bdg ok">✓</b></i>
+            </div>
+          </div>
+          <div class="nav"><div class="on"><span class="g">▦</span>Photos</div><div><span class="g">⌕</span>Search</div><div><span class="g">▤</span>Library</div></div>
+        </div></div>
+      </div>
+      <div class="frame-wrap"><div class="frame-cap">Search</div>
+        <div class="phone"><div class="screen">
+          <div class="statusbar"><span>9:41</span><span class="dots">▪ ▪ ▪</span></div>
+          <div class="appbar"><span class="title">Search</span></div>
+          <div class="body">
+            <div class="sbox">⌕ People, places, words in photos</div>
+            <div class="sect">People <small>See all</small></div>
+            <div class="people"><div class="person"><i class="a1"></i>Lia</div><div class="person"><i class="a2"></i>Rafa</div><div class="person"><i class="a3"></i>Marina</div><div class="person"><i class="a4">﹢</i>Unnamed</div></div>
+            <div class="sect">Places <small>Open map</small></div>
+            <div class="mapbox"><b style="left:64%;top:40%">84</b><b style="left:34%;top:64%">36</b></div>
+            <div class="sect">Things &amp; moods</div>
+            <div class="chips"><span>Beach</span><span>Food</span><span>Sunset</span><span>Documents</span><span>On this day</span><span>Trips</span></div>
+          </div>
+          <div class="nav"><div><span class="g">▦</span>Photos</div><div class="on"><span class="g">⌕</span>Search</div><div><span class="g">▤</span>Library</div></div>
+        </div></div>
+      </div>
+      <div class="frame-wrap"><div class="frame-cap">Search · resultado NL</div>
+        <div class="phone"><div class="screen">
+          <div class="statusbar"><span>9:41</span><span class="dots">▪ ▪ ▪</span></div>
+          <div class="appbar"><span class="title">“praia”</span></div>
+          <div class="body">
+            <div class="sbox" style="color:var(--text)">⌕ praia</div>
+            <div class="sub" style="font-size:11px;opacity:.6;margin-bottom:8px">4 matches · significado + palavras nas fotos</div>
+            <div class="res">
+              <div class="rcard"><i class="t6"></i><span class="tag txt">Text in photo</span><div class="rcap">“QUIOSQUE DA PRAIA” · recibo</div></div>
+              <div class="rcard"><i class="t3"></i><span class="tag vis">Visual match</span><div class="rcap">Beach umbrellas · Ubatuba</div></div>
+              <div class="rcard"><i class="t9"></i><span class="tag vis">Visual match</span><div class="rcap">Sailboat · Costa Verde</div></div>
+              <div class="rcard"><i class="t1"></i><span class="tag vis">Visual match</span><div class="rcap">On the sand · Lia &amp; Rafa</div></div>
+            </div>
+          </div>
+          <div class="nav"><div><span class="g">▦</span>Photos</div><div class="on"><span class="g">⌕</span>Search</div><div><span class="g">▤</span>Library</div></div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 3 · GALLERY NOIR ============ -->
+  <section class="cand">
+    <div class="cand-head"><span class="cand-num">03</span><span class="cand-name">Gallery Noir</span>
+      <span class="cand-for">preto OLED · foto em 1º plano · ouro discreto · premium/galeria</span></div>
+    <p class="cand-desc">Preto verdadeiro <code>#0a0a0b</code>, cromo mínimo, tipografia fina e espaçada, um único acento
+      metálico <code>#d9b46a</code>. As fotos saltam; tudo o mais recua. Sensação de galeria e de app profissional.</p>
+    <div class="swatches"><i style="background:#0a0a0b"></i><i style="background:#141416"></i><i style="background:#d9b46a"></i><i style="background:#f3f2ef"></i></div>
+    <div class="frames d-noir">
+      <div class="frame-wrap"><div class="frame-cap">Photos</div>
+        <div class="phone"><div class="screen">
+          <div class="statusbar"><span>9:41</span><span class="dots">▪ ▪ ▪</span></div>
+          <div class="appbar"><span class="title">Photos</span><span class="ic">▦</span></div>
+          <div class="body">
+            <div class="chip"><span class="ld"></span>Desktop reachable · 16 left<span class="arw">›</span></div>
+            <div class="density"><span class="on">Days</span><span>Months</span><span>Years</span></div>
+            <div class="datehdr">18 September 2026 <small>Ubatuba</small></div>
+            <div class="grid">
+              <i class="t1"><b class="bdg up">↑</b></i><i class="t2"><span class="vid">0:24</span></i><i class="t9"></i>
+              <i class="t3"><b class="bdg ok">✓</b></i><i class="t4"><b class="bdg ok">✓</b></i><i class="t5"><b class="bdg ok">✓</b></i>
+              <i class="t8"><b class="bdg ok">✓</b></i><i class="t6"><b class="bdg ok">✓</b></i><i class="t7"><b class="bdg ok">✓</b></i>
+            </div>
+          </div>
+          <div class="nav"><div class="on"><span class="g">▦</span>Photos</div><div><span class="g">⌕</span>Search</div><div><span class="g">▤</span>Library</div></div>
+        </div></div>
+      </div>
+      <div class="frame-wrap"><div class="frame-cap">Viewer</div>
+        <div class="phone"><div class="screen">
+          <div class="statusbar"><span>9:41</span><span class="dots">▪ ▪ ▪</span></div>
+          <div class="body" style="padding:0;position:relative;flex:1">
+            <div style="position:absolute;inset:0;background-image:var(--p1);background-size:cover;background-position:center"></div>
+            <div style="position:absolute;left:14px;top:12px;font-size:11px;background:rgba(0,0,0,.4);padding:4px 9px;border-radius:999px">On this phone</div>
+            <div style="position:absolute;right:12px;top:10px;width:26px;height:26px;border-radius:50%;background:rgba(0,0,0,.45);display:grid;place-items:center">✕</div>
+            <div style="position:absolute;left:12px;right:12px;bottom:12px;background:rgba(10,10,11,.72);backdrop-filter:blur(6px);border:1px solid var(--border);border-radius:14px;padding:11px 12px">
+              <div style="font-size:12px;font-weight:600">18 September 2026</div>
+              <div style="font-size:10px;opacity:.6;margin:2px 0 9px">16:42 · Pixel 8 · 4032×3024 · 3.2 MB · ⌃ swipe up for details</div>
+              <div style="display:flex;gap:8px">
+                <div style="flex:1;text-align:center;border:1px solid var(--border);border-radius:9px;padding:8px;font-size:11px">✎ Edit</div>
+                <div style="flex:1.4;text-align:center;background:var(--accent);color:var(--onaccent);border-radius:9px;padding:8px;font-size:11px;font-weight:700">↑ Send to computer</div>
+              </div>
+            </div>
+          </div>
+          <div class="nav"><div class="on"><span class="g">▦</span>Photos</div><div><span class="g">⌕</span>Search</div><div><span class="g">▤</span>Library</div></div>
+        </div></div>
+      </div>
+      <div class="frame-wrap"><div class="frame-cap">Sync · interrompido</div>
+        <div class="phone"><div class="screen">
+          <div class="statusbar"><span>9:43</span><span class="dots">▪ ▪ ▪</span></div>
+          <div class="appbar"><span class="title">Computer</span></div>
+          <div class="body">
+            <div class="card"><div class="row1">🖥 Paired computer · <span style="color:var(--amber)">Connection interrupted</span></div><div class="sub">192.168.1.24</div></div>
+            <div class="bignum"><b>8</b> of 24 on the computer <span style="float:right;color:var(--amber);font-weight:700">❚❚ Paused</span></div>
+            <div class="paused">Connection interrupted · 16 photos still need to be sent. The 8 completed photos stay on your computer.</div>
+            <div class="file"><i class="th t1"></i><div class="fn">IMG_4821.jpg<small>May restart when connected</small></div><span class="st" style="color:var(--amber)">Interrupted</span></div>
+            <div class="file"><i class="th t2"></i><div class="fn">VID_4823.mp4<small>Waiting for the computer</small></div><span class="st q">Queued</span></div>
+            <div class="file"><i class="th t4"></i><div class="fn">IMG_4820.jpg<small>Confirmed on computer</small></div><span class="st done">✓ Done</span></div>
+          </div>
+          <div class="nav"><div><span class="g">▦</span>Photos</div><div><span class="g">⌕</span>Search</div><div class="on"><span class="g">▤</span>Library</div></div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4 · STUDIO LIGHT ============ -->
+  <section class="cand">
+    <div class="cand-head"><span class="cand-num">04</span><span class="cand-name">Studio Light</span>
+      <span class="cand-for">estilo Apple Photos · neutros suaves + translúcido · pra quem vem do iPhone</span></div>
+    <p class="cand-desc">Cinzas neutros <code>#eef0f3</code>, superfícies translúcidas com blur, cantos grandes e arredondados,
+      acento calmo <code>#3d6ea8</code>. Silenciosa e content-first — mas previsível e legível (aprendeu com a rejeição do iOS 18).</p>
+    <div class="swatches"><i style="background:#eef0f3"></i><i style="background:#ffffff"></i><i style="background:#3d6ea8"></i><i style="background:#22252a"></i></div>
+    <div class="frames d-studio">
+      <div class="frame-wrap"><div class="frame-cap">Photos</div>
+        <div class="phone"><div class="screen">
+          <div class="statusbar"><span>9:41</span><span class="dots">▪ ▪ ▪</span></div>
+          <div class="appbar"><span class="title">Photos</span><span class="ic">▦</span></div>
+          <div class="body">
+            <div class="chip"><span class="ld"></span>Desktop reachable · 16 left<span class="arw">›</span></div>
+            <div class="density"><span class="on">Days</span><span>Months</span><span>Years</span></div>
+            <div class="datehdr">18 September 2026 <small>Ubatuba</small></div>
+            <div class="grid">
+              <i class="t1"><b class="bdg up">↑</b></i><i class="t2"><span class="vid">0:24</span></i><i class="t9"></i>
+              <i class="t3"><b class="bdg ok">✓</b></i><i class="t4"><b class="bdg ok">✓</b></i><i class="t5"><b class="bdg ok">✓</b></i>
+              <i class="t8"><b class="bdg ok">✓</b></i><i class="t6"><b class="bdg ok">✓</b></i><i class="t7"><b class="bdg ok">✓</b></i>
+            </div>
+          </div>
+          <div class="nav"><div class="on"><span class="g">▦</span>Photos</div><div><span class="g">⌕</span>Search</div><div><span class="g">▤</span>Library</div></div>
+        </div></div>
+      </div>
+      <div class="frame-wrap"><div class="frame-cap">Search</div>
+        <div class="phone"><div class="screen">
+          <div class="statusbar"><span>9:41</span><span class="dots">▪ ▪ ▪</span></div>
+          <div class="appbar"><span class="title">Search</span></div>
+          <div class="body">
+            <div class="sbox">⌕ People, places, words in photos</div>
+            <div class="sect">People <small>See all</small></div>
+            <div class="people"><div class="person"><i class="a1"></i>Lia</div><div class="person"><i class="a2"></i>Rafa</div><div class="person"><i class="a3"></i>Marina</div><div class="person"><i class="a4">﹢</i>Unnamed</div></div>
+            <div class="sect">Places <small>Open map</small></div>
+            <div class="mapbox"><b style="left:64%;top:40%">84</b><b style="left:34%;top:64%">36</b></div>
+            <div class="sect">Things &amp; moods</div>
+            <div class="chips"><span>Beach</span><span>Food</span><span>Sunset</span><span>Documents</span><span>On this day</span><span>Trips</span></div>
+          </div>
+          <div class="nav"><div><span class="g">▦</span>Photos</div><div class="on"><span class="g">⌕</span>Search</div><div><span class="g">▤</span>Library</div></div>
+        </div></div>
+      </div>
+      <div class="frame-wrap"><div class="frame-cap">Sync</div>
+        <div class="phone"><div class="screen">
+          <div class="statusbar"><span>9:41</span><span class="dots">▪ ▪ ▪</span></div>
+          <div class="appbar"><span class="title">Computer</span></div>
+          <div class="body">
+            <div class="card"><div class="row1">🖥 Paired computer · <span style="color:var(--ok)">Connected</span></div><div class="sub">192.168.1.24 · Auto-sync on</div></div>
+            <div class="bignum"><b>8</b> of 24 on the computer</div>
+            <div class="bar"><i></i></div>
+            <div class="counts"><span>1 sending</span><span>15 queued</span><span>8 done</span></div>
+            <div class="file"><i class="th t1"></i><div class="fn">IMG_4821.jpg<small>1.8 / 3.2 MB · this attempt</small></div><span class="st send">Sending</span></div>
+            <div class="file"><i class="th t2"></i><div class="fn">VID_4823.mp4<small>18.4 MB</small></div><span class="st q">Queued</span></div>
+            <div class="file"><i class="th t4"></i><div class="fn">IMG_4820.jpg<small>Confirmed on computer</small></div><span class="st done">✓ Done</span></div>
+          </div>
+          <div class="nav"><div><span class="g">▦</span>Photos</div><div><span class="g">⌕</span>Search</div><div class="on"><span class="g">▤</span>Library</div></div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 5 · WAGON ============ -->
+  <section class="cand">
+    <div class="cand-head"><span class="cand-num">05</span><span class="cand-name">Wagon</span>
+      <span class="cand-for">marca local-first ousada · terracota + tinta · o chip "mora em casa" como herói</span></div>
+    <p class="cand-desc">Uma identidade própria que abraça “suas fotos moram em casa, não na nuvem de alguém”. Cor-assinatura
+      terracota <code>#d24e2a</code>, título pesado, e o <b>chip verde de estado do desktop</b> como elemento de marca
+      (com sombra, destacado). Confiante, com personalidade — a direção que tem opinião.</p>
+    <div class="swatches"><i style="background:#faf5ee"></i><i style="background:#d24e2a"></i><i style="background:#124b40"></i><i style="background:#1b1613"></i></div>
+    <div class="frames d-wagon">
+      <div class="frame-wrap"><div class="frame-cap">Photos</div>
+        <div class="phone"><div class="screen">
+          <div class="statusbar"><span>9:41</span><span class="dots">▪ ▪ ▪</span></div>
+          <div class="appbar"><span class="title" style="color:var(--accent)">Photos</span><span class="ic">▦</span></div>
+          <div class="body">
+            <div class="chip"><span class="ld" style="background:#5fe0b0"></span>Desktop reachable · 16 left<span class="arw" style="color:#bfeadd">›</span></div>
+            <div class="density"><span class="on">Days</span><span>Months</span><span>Years</span></div>
+            <div class="datehdr">18 September 2026 <small>Ubatuba</small></div>
+            <div class="grid">
+              <i class="t1"><b class="bdg up">↑</b></i><i class="t2"><span class="vid">0:24</span></i><i class="t9"></i>
+              <i class="t3"><b class="bdg ok">✓</b></i><i class="t4"><b class="bdg ok">✓</b></i><i class="t5"><b class="bdg ok">✓</b></i>
+              <i class="t8"><b class="bdg ok">✓</b></i><i class="t6"><b class="bdg ok">✓</b></i><i class="t7"><b class="bdg ok">✓</b></i>
+            </div>
+          </div>
+          <div class="nav"><div class="on"><span class="g">▦</span>Photos</div><div><span class="g">⌕</span>Search</div><div><span class="g">▤</span>Library</div></div>
+        </div></div>
+      </div>
+      <div class="frame-wrap"><div class="frame-cap">Search</div>
+        <div class="phone"><div class="screen">
+          <div class="statusbar"><span>9:41</span><span class="dots">▪ ▪ ▪</span></div>
+          <div class="appbar"><span class="title" style="color:var(--accent)">Search</span></div>
+          <div class="body">
+            <div class="sbox">⌕ People, places, words in photos</div>
+            <div class="sect">People <small>See all</small></div>
+            <div class="people"><div class="person"><i class="a1"></i>Lia</div><div class="person"><i class="a2"></i>Rafa</div><div class="person"><i class="a3"></i>Marina</div><div class="person"><i class="a4">﹢</i>Unnamed</div></div>
+            <div class="sect">Places <small>Open map</small></div>
+            <div class="mapbox"><b style="left:64%;top:40%">84</b><b style="left:34%;top:64%">36</b></div>
+            <div class="sect">Things &amp; moods</div>
+            <div class="chips"><span>Beach</span><span>Food</span><span>Sunset</span><span>Documents</span><span>On this day</span><span>Trips</span></div>
+          </div>
+          <div class="nav"><div><span class="g">▦</span>Photos</div><div class="on"><span class="g">⌕</span>Search</div><div><span class="g">▤</span>Library</div></div>
+        </div></div>
+      </div>
+      <div class="frame-wrap"><div class="frame-cap">Sync</div>
+        <div class="phone"><div class="screen">
+          <div class="statusbar"><span>9:41</span><span class="dots">▪ ▪ ▪</span></div>
+          <div class="appbar"><span class="title" style="color:var(--accent)">Computer</span></div>
+          <div class="body">
+            <div class="card"><div class="row1">🖥 Paired computer · <span style="color:var(--ok)">Connected</span></div><div class="sub">192.168.1.24 · Auto-sync on</div></div>
+            <div class="bignum"><b>8</b> of 24 on the computer</div>
+            <div class="bar"><i></i></div>
+            <div class="counts"><span>1 sending</span><span>15 queued</span><span>8 done</span></div>
+            <div class="file"><i class="th t1"></i><div class="fn">IMG_4821.jpg<small>1.8 / 3.2 MB · this attempt</small></div><span class="st send">Sending</span></div>
+            <div class="file"><i class="th t2"></i><div class="fn">VID_4823.mp4<small>18.4 MB</small></div><span class="st q">Queued</span></div>
+            <div class="file"><i class="th t4"></i><div class="fn">IMG_4820.jpg<small>Confirmed on computer</small></div><span class="st done">✓ Done</span></div>
+          </div>
+          <div class="nav"><div><span class="g">▦</span>Photos</div><div><span class="g">⌕</span>Search</div><div class="on"><span class="g">▤</span>Library</div></div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <p style="margin-top:44px;font-size:13px;opacity:.7;max-width:78ch">
+    <b>Minha recomendação:</b> <b>Wagon</b> se você quer identidade própria e memorável (é a que menos parece
+    “mais um app de fotos”); <b>Contact Sheet</b> se quer o clima acolhedor que você já curtiu; <b>Clean Canvas</b>
+    se a meta é conversão fácil de gente saindo do Google Photos. Escolha uma (ou misture: ex. estrutura Clean
+    Canvas + cor/voz Wagon) e eu levo pro QML.
+  </p>
+</div>
+</body>
+</html>

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">
+  <title>Photo Wagon</title>
+  <desc>A wagon of photographs: warm amber, a teal landscape, and two ivory wheels.</desc>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#243E48"/>
+      <stop offset="1" stop-color="#10232C"/>
+    </linearGradient>
+    <g id="monochrome" fill="#FFFFFF">
+      <!-- A separate silhouette: the landscape and card gap are real cutouts. -->
+      <path d="M36 35 35.4 32.8Q34.8 29.8 37.8 29.2L65.8 24.1Q68.8 23.5 69.4 26.5L71.2 35H66.6L65.3 29 40.4 33.6 40.8 35Z"/>
+      <path fill-rule="evenodd" d="M33 39H75Q82 39 82 46V63Q82 70 75 70H33Q26 70 26 63V46Q26 39 33 39ZM34 44Q31 44 31 47V59L42 48 54 60 62 52 77 65V47Q77 44 74 44Z"/>
+      <path d="M69 49a3.5 3.5 0 1 1-7 0 3.5 3.5 0 1 1 7 0Z"/>
+      <path d="M43.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0ZM73.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0Z"/>
+    </g>
+  </defs>
+  <rect id="background" width="108" height="108" fill="url(#tile)"/>
+  <!-- Every essential contour stays inside the Android adaptive safe area. -->
+  <g id="mark">
+    <!-- The leaning print makes a collection, rather than a camera or shopping cart. -->
+    <path fill="#F8EBD4" d="M36 37 35 32.8Q34.4 29.8 37.4 29.2L65.8 24.1Q68.8 23.5 69.4 26.5L72 39Z"/>
+    <path fill="#5DBFB0" d="M40.2 33.6 65.3 29 67.3 39H41.4Z"/>
+    <path fill="#287C7B" d="M40.8 36 47.5 31.9 59 39H41.4Z"/>
+    <!-- The front print is also the wagon body. -->
+    <path fill="#F5B85B" d="M33 39H75Q82 39 82 46V63Q82 70 75 70H33Q26 70 26 63V46Q26 39 33 39Z"/>
+    <path fill="#123D48" d="M34 44H74Q77 44 77 47V62Q77 65 74 65H34Q31 65 31 62V47Q31 44 34 44Z"/>
+    <path fill="#FAEDD4" d="M69 49a3.5 3.5 0 1 1-7 0 3.5 3.5 0 1 1 7 0Z"/>
+    <path fill="#58BCAE" d="M31 59 42 48 59 65H34Q31 65 31 62Z"/>
+    <path fill="#32958F" d="M49 65 62 52 76.2 64.2Q75.4 65 74 65Z"/>
+    <path fill="#F8EBD4" d="M43.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0ZM73.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0Z"/>
+  </g>
+</svg>

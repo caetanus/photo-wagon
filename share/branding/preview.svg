@@ -1,0 +1,113 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 840" width="1280" height="840">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#243E48" />
+      <stop offset="1" stop-color="#10232C" />
+    </linearGradient>
+    <clipPath id="mask-circle">
+      <circle cx="54" cy="54" r="36" />
+    </clipPath>
+    <symbol id="circle" viewBox="18 18 72 72">
+      <g clip-path="url(#mask-circle)">
+        <rect id="background" width="108" height="108" fill="url(#tile)" />
+        <g id="mark">
+          <path fill="#F8EBD4" d="M36 37 35 32.8Q34.4 29.8 37.4 29.2L65.8 24.1Q68.8 23.5 69.4 26.5L72 39Z" />
+          <path fill="#5DBFB0" d="M40.2 33.6 65.3 29 67.3 39H41.4Z" />
+          <path fill="#287C7B" d="M40.8 36 47.5 31.9 59 39H41.4Z" />
+          <path fill="#F5B85B" d="M33 39H75Q82 39 82 46V63Q82 70 75 70H33Q26 70 26 63V46Q26 39 33 39Z" />
+          <path fill="#123D48" d="M34 44H74Q77 44 77 47V62Q77 65 74 65H34Q31 65 31 62V47Q31 44 34 44Z" />
+          <path fill="#FAEDD4" d="M69 49a3.5 3.5 0 1 1-7 0 3.5 3.5 0 1 1 7 0Z" />
+          <path fill="#58BCAE" d="M31 59 42 48 59 65H34Q31 65 31 62Z" />
+          <path fill="#32958F" d="M49 65 62 52 76.2 64.2Q75.4 65 74 65Z" />
+          <path fill="#F8EBD4" d="M43.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0ZM73.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0Z" />
+        </g>
+      </g>
+    </symbol>
+    <clipPath id="mask-rounded">
+      <rect x="18" y="18" width="72" height="72" rx="18" />
+    </clipPath>
+    <symbol id="rounded" viewBox="18 18 72 72">
+      <g clip-path="url(#mask-rounded)">
+        <rect id="background" width="108" height="108" fill="url(#tile)" />
+        <g id="mark">
+          <path fill="#F8EBD4" d="M36 37 35 32.8Q34.4 29.8 37.4 29.2L65.8 24.1Q68.8 23.5 69.4 26.5L72 39Z" />
+          <path fill="#5DBFB0" d="M40.2 33.6 65.3 29 67.3 39H41.4Z" />
+          <path fill="#287C7B" d="M40.8 36 47.5 31.9 59 39H41.4Z" />
+          <path fill="#F5B85B" d="M33 39H75Q82 39 82 46V63Q82 70 75 70H33Q26 70 26 63V46Q26 39 33 39Z" />
+          <path fill="#123D48" d="M34 44H74Q77 44 77 47V62Q77 65 74 65H34Q31 65 31 62V47Q31 44 34 44Z" />
+          <path fill="#FAEDD4" d="M69 49a3.5 3.5 0 1 1-7 0 3.5 3.5 0 1 1 7 0Z" />
+          <path fill="#58BCAE" d="M31 59 42 48 59 65H34Q31 65 31 62Z" />
+          <path fill="#32958F" d="M49 65 62 52 76.2 64.2Q75.4 65 74 65Z" />
+          <path fill="#F8EBD4" d="M43.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0ZM73.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0Z" />
+        </g>
+      </g>
+    </symbol>
+    <symbol id="desktop" viewBox="0 0 108 108">
+      <rect id="background" width="100" height="100" fill="url(#tile)" x="4" y="4" rx="25" stroke="#42606A" stroke-width="0.6" />
+      <g id="mark" transform="translate(54 54) scale(1.24) translate(-54 -54)">
+        <path fill="#F8EBD4" d="M36 37 35 32.8Q34.4 29.8 37.4 29.2L65.8 24.1Q68.8 23.5 69.4 26.5L72 39Z" />
+        <path fill="#5DBFB0" d="M40.2 33.6 65.3 29 67.3 39H41.4Z" />
+        <path fill="#287C7B" d="M40.8 36 47.5 31.9 59 39H41.4Z" />
+        <path fill="#F5B85B" d="M33 39H75Q82 39 82 46V63Q82 70 75 70H33Q26 70 26 63V46Q26 39 33 39Z" />
+        <path fill="#123D48" d="M34 44H74Q77 44 77 47V62Q77 65 74 65H34Q31 65 31 62V47Q31 44 34 44Z" />
+        <path fill="#FAEDD4" d="M69 49a3.5 3.5 0 1 1-7 0 3.5 3.5 0 1 1 7 0Z" />
+        <path fill="#58BCAE" d="M31 59 42 48 59 65H34Q31 65 31 62Z" />
+        <path fill="#32958F" d="M49 65 62 52 76.2 64.2Q75.4 65 74 65Z" />
+        <path fill="#F8EBD4" d="M43.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0ZM73.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0Z" />
+      </g>
+    </symbol>
+    <symbol id="themed" viewBox="18 18 72 72">
+      <g id="monochrome" fill="currentColor">
+        <path d="M36 35 35.4 32.8Q34.8 29.8 37.8 29.2L65.8 24.1Q68.8 23.5 69.4 26.5L71.2 35H66.6L65.3 29 40.4 33.6 40.8 35Z" />
+        <path fill-rule="evenodd" d="M33 39H75Q82 39 82 46V63Q82 70 75 70H33Q26 70 26 63V46Q26 39 33 39ZM34 44Q31 44 31 47V59L42 48 54 60 62 52 77 65V47Q77 44 74 44Z" />
+        <path d="M69 49a3.5 3.5 0 1 1-7 0 3.5 3.5 0 1 1 7 0Z" />
+        <path d="M43.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0ZM73.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0Z" />
+      </g>
+    </symbol>
+  </defs>
+  <rect x="0" y="0" width="640" height="840" fill="#F4F1E9" rx="0" />
+  <rect x="640" y="0" width="640" height="840" fill="#0C151C" rx="0" />
+  <text x="56" y="70" fill="#183A44" font-family="Noto Sans, sans-serif" font-size="36" font-weight="650">Photo Wagon</text>
+  <text x="56" y="108" fill="#66767A" font-family="Noto Sans, sans-serif" font-size="17" font-weight="400">Fotografias que vão com você.</text>
+  <text x="696" y="70" fill="#ECF0E9" font-family="Noto Sans, sans-serif" font-size="24" font-weight="550">Uma marca, em qualquer tema.</text>
+  <text x="696" y="108" fill="#93AAA9" font-family="Noto Sans, sans-serif" font-size="17" font-weight="400">Desktop · Android · ícone temático</text>
+  <text x="56" y="166" fill="#66767A" font-family="Noto Sans, sans-serif" font-size="12" font-weight="650">MODO CLARO</text>
+  <use href="#desktop" x="184" y="188" width="272" height="272" />
+  <text x="56" y="510" fill="#66767A" font-family="Noto Sans, sans-serif" font-size="12" font-weight="650">RECORTES DO ANDROID</text>
+  <use href="#circle" x="68" y="544" width="88" height="88" />
+  <use href="#rounded" x="204" y="544" width="88" height="88" />
+  <rect x="340" y="544" width="88" height="88" fill="#DCE8D5" rx="24" />
+  <use href="#themed" x="340" y="544" width="88" height="88" color="#234C43" />
+  <text x="75" y="663" fill="#66767A" font-family="Noto Sans, sans-serif" font-size="12" font-weight="400">Circular</text>
+  <text x="205" y="663" fill="#66767A" font-family="Noto Sans, sans-serif" font-size="12" font-weight="400">Adaptativo</text>
+  <text x="354" y="663" fill="#66767A" font-family="Noto Sans, sans-serif" font-size="12" font-weight="400">Temático</text>
+  <text x="56" y="721" fill="#66767A" font-family="Noto Sans, sans-serif" font-size="12" font-weight="650">TAMANHO REAL</text>
+  <use href="#desktop" x="64" y="749" width="48" height="48" />
+  <text x="64" y="818" fill="#66767A" font-family="Noto Sans, sans-serif" font-size="11" font-weight="400">48 px</text>
+  <use href="#desktop" x="156" y="765" width="32" height="32" />
+  <text x="156" y="818" fill="#66767A" font-family="Noto Sans, sans-serif" font-size="11" font-weight="400">32 px</text>
+  <use href="#desktop" x="232" y="773" width="24" height="24" />
+  <text x="232" y="818" fill="#66767A" font-family="Noto Sans, sans-serif" font-size="11" font-weight="400">24 px</text>
+  <use href="#desktop" x="300" y="781" width="16" height="16" />
+  <text x="300" y="818" fill="#66767A" font-family="Noto Sans, sans-serif" font-size="11" font-weight="400">16 px</text>
+  <text x="696" y="166" fill="#93AAA9" font-family="Noto Sans, sans-serif" font-size="12" font-weight="650">MODO ESCURO</text>
+  <use href="#desktop" x="824" y="188" width="272" height="272" />
+  <text x="696" y="510" fill="#93AAA9" font-family="Noto Sans, sans-serif" font-size="12" font-weight="650">RECORTES DO ANDROID</text>
+  <use href="#circle" x="708" y="544" width="88" height="88" />
+  <use href="#rounded" x="844" y="544" width="88" height="88" />
+  <rect x="980" y="544" width="88" height="88" fill="#283F38" rx="24" />
+  <use href="#themed" x="980" y="544" width="88" height="88" color="#BCE5CB" />
+  <text x="715" y="663" fill="#93AAA9" font-family="Noto Sans, sans-serif" font-size="12" font-weight="400">Circular</text>
+  <text x="845" y="663" fill="#93AAA9" font-family="Noto Sans, sans-serif" font-size="12" font-weight="400">Adaptativo</text>
+  <text x="994" y="663" fill="#93AAA9" font-family="Noto Sans, sans-serif" font-size="12" font-weight="400">Temático</text>
+  <text x="696" y="721" fill="#93AAA9" font-family="Noto Sans, sans-serif" font-size="12" font-weight="650">TAMANHO REAL</text>
+  <use href="#desktop" x="704" y="749" width="48" height="48" />
+  <text x="704" y="818" fill="#93AAA9" font-family="Noto Sans, sans-serif" font-size="11" font-weight="400">48 px</text>
+  <use href="#desktop" x="796" y="765" width="32" height="32" />
+  <text x="796" y="818" fill="#93AAA9" font-family="Noto Sans, sans-serif" font-size="11" font-weight="400">32 px</text>
+  <use href="#desktop" x="872" y="773" width="24" height="24" />
+  <text x="872" y="818" fill="#93AAA9" font-family="Noto Sans, sans-serif" font-size="11" font-weight="400">24 px</text>
+  <use href="#desktop" x="940" y="781" width="16" height="16" />
+  <text x="940" y="818" fill="#93AAA9" font-family="Noto Sans, sans-serif" font-size="11" font-weight="400">16 px</text>
+</svg>

@@ -1,0 +1,15 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#243E48" />
+      <stop offset="1" stop-color="#10232C" />
+    </linearGradient>
+  </defs>
+  <g id="monochrome" fill="#FFFFFF">
+    <path d="M36 35 35.4 32.8Q34.8 29.8 37.8 29.2L65.8 24.1Q68.8 23.5 69.4 26.5L71.2 35H66.6L65.3 29 40.4 33.6 40.8 35Z" />
+    <path fill-rule="evenodd" d="M33 39H75Q82 39 82 46V63Q82 70 75 70H33Q26 70 26 63V46Q26 39 33 39ZM34 44Q31 44 31 47V59L42 48 54 60 62 52 77 65V47Q77 44 74 44Z" />
+    <path d="M69 49a3.5 3.5 0 1 1-7 0 3.5 3.5 0 1 1 7 0Z" />
+    <path d="M43.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0ZM73.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0Z" />
+  </g>
+</svg>

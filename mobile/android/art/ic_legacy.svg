@@ -1,54 +1,21 @@
+<?xml version='1.0' encoding='utf-8'?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">
-  <defs><radialGradient id="bg" cx="0.5" cy="0.45" r="0.72"><stop offset="0" stop-color="#2c211a"/><stop offset="1" stop-color="#0e0b09"/></radialGradient></defs>
-  <rect x="12" y="12" width="84" height="84" rx="19" fill="url(#bg)"/>
-<defs>
-    <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8a5c37"/><stop offset="1" stop-color="#5e3b22"/></linearGradient>
-    <linearGradient id="red" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#5c0f0f"/><stop offset="0.45" stop-color="#9c1f1c"/><stop offset="1" stop-color="#5c0f0f"/></linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.55"><stop offset="0" stop-color="#3a2416"/><stop offset="0.7" stop-color="#15100c"/><stop offset="1" stop-color="#0c0908"/></radialGradient>
-    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2c4a86"/><stop offset="0.5" stop-color="#101a3a"/><stop offset="1" stop-color="#3a1d4a"/></linearGradient>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#243E48" />
+      <stop offset="1" stop-color="#10232C" />
+    </linearGradient>
   </defs>
-  <g transform="translate(54 54) scale(0.92) translate(-54 -54)">
-  <!-- the dark inside -->
-  <rect x="26" y="32" width="56" height="32" fill="url(#glow)"/>
-  <!-- the curtains, parted and tied back -->
-  <path d="M26 33H51Q50 40 46 45.5L40 48.5Q43 54 45 64H26Z" fill="url(#red)"/>
-  <path d="M82 33H57Q58 40 62 45.5L68 48.5Q65 54 63 64H82Z" fill="url(#red)"/>
-  <g stroke="#3f0a0a" stroke-width="0.9" fill="none" opacity="0.7">
-    <path d="M31 33q1 10 1 31M37 33q3 8 2 13M44 33q2 6-1 11"/>
-    <path d="M77 33q-1 10-1 31M71 33q-3 8-2 13M64 33q-2 6 1 11"/>
-  </g>
-  <g stroke="#a88a4a" stroke-width="1.8" fill="none" stroke-linecap="round">
-    <path d="M37 48q4-2.5 8 0.5M71 48q-4-2.5-8 0.5"/>
-  </g>
-  <!-- the camera, in front of the curtains -->
-  <rect x="39.5" y="43.5" width="29" height="18" rx="2.5" fill="#1a1715"/>
-  <rect x="39" y="42" width="30" height="18.5" rx="2.5" fill="#2b2723"/>
-  <rect x="39" y="42" width="30" height="5" rx="2.5" fill="#3a352f"/>
-  <rect x="46" y="39.2" width="9" height="3.6" rx="0.9" fill="#2b2723"/>
-  <circle cx="63.5" cy="40.8" r="1.3" fill="#8a2a24"/>
-  <rect x="62" y="41.4" width="3" height="1.2" fill="#3a352f"/>
-  <circle cx="54" cy="51.5" r="10.5" fill="#26262b"/>
-  <circle cx="54" cy="51.5" r="10.5" fill="none" stroke="#6a6a72" stroke-width="0.9"/>
-  <circle cx="54" cy="51.5" r="8.6" fill="#141417"/>
-  <circle cx="54" cy="51.5" r="7.4" fill="none" stroke="#3a3a42" stroke-width="0.8"/>
-  <circle cx="54" cy="51.5" r="6.4" fill="url(#glass)"/>
-  <circle cx="54" cy="51.5" r="4.6" fill="none" stroke="#3b5a9a" stroke-width="0.7" opacity="0.7"/>
-  <circle cx="54" cy="51.5" r="2.8" fill="#070b16"/>
-  <path d="M49.4 48.7A5.4 5.4 0 0 1 52.6 46.3" fill="none" stroke="#c9d8f2" stroke-width="1.1" stroke-linecap="round" opacity="0.8"/>
-  <circle cx="56.8" cy="54.5" r="0.9" fill="#a56b3a" opacity="0.8"/>
-  <!-- the curved beam -->
-  <path d="M23 29Q54 20 85 29V36Q54 27 23 36Z" fill="url(#wood)"/>
-  <path d="M23 36Q54 27 85 36" fill="none" stroke="#3a2415" stroke-width="1.2"/>
-  <!-- the side rail -->
-  <rect x="22" y="62" width="64" height="12" fill="url(#wood)"/>
-  <path d="M22 68h64" stroke="#3a2415" stroke-width="0.9" opacity="0.9"/>
-  <path d="M41 62v12M67 62v12" stroke="#3a2415" stroke-width="0.9" opacity="0.7"/>
-  <rect x="22" y="60.5" width="5" height="14.5" fill="#6b4526"/>
-  <rect x="81" y="60.5" width="5" height="14.5" fill="#6b4526"/>
-  <!-- the chassis and wheels -->
-  <rect x="19" y="74.5" width="70" height="2.4" rx="1.2" fill="#2e2e33"/>
-  <rect x="26" y="74" width="56" height="4.5" fill="#1f1f24"/>
-  <circle cx="38" cy="82" r="7" fill="#1c1c20"/><circle cx="38" cy="82" r="4.4" fill="#3d3d45"/><circle cx="38" cy="82" r="1.6" fill="#8a7448"/>
-  <circle cx="70" cy="82" r="7" fill="#1c1c20"/><circle cx="70" cy="82" r="4.4" fill="#3d3d45"/><circle cx="70" cy="82" r="1.6" fill="#8a7448"/>
+  <rect id="background" width="100" height="100" fill="url(#tile)" x="4" y="4" rx="25" stroke="#42606A" stroke-width="0.6" />
+  <g id="mark" transform="translate(54 54) scale(1.24) translate(-54 -54)">
+    <path fill="#F8EBD4" d="M36 37 35 32.8Q34.4 29.8 37.4 29.2L65.8 24.1Q68.8 23.5 69.4 26.5L72 39Z" />
+    <path fill="#5DBFB0" d="M40.2 33.6 65.3 29 67.3 39H41.4Z" />
+    <path fill="#287C7B" d="M40.8 36 47.5 31.9 59 39H41.4Z" />
+    <path fill="#F5B85B" d="M33 39H75Q82 39 82 46V63Q82 70 75 70H33Q26 70 26 63V46Q26 39 33 39Z" />
+    <path fill="#123D48" d="M34 44H74Q77 44 77 47V62Q77 65 74 65H34Q31 65 31 62V47Q31 44 34 44Z" />
+    <path fill="#FAEDD4" d="M69 49a3.5 3.5 0 1 1-7 0 3.5 3.5 0 1 1 7 0Z" />
+    <path fill="#58BCAE" d="M31 59 42 48 59 65H34Q31 65 31 62Z" />
+    <path fill="#32958F" d="M49 65 62 52 76.2 64.2Q75.4 65 74 65Z" />
+    <path fill="#F8EBD4" d="M43.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0ZM73.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0Z" />
   </g>
 </svg>

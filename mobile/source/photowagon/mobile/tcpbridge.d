@@ -64,9 +64,14 @@ final class TcpBridge : Bridge
         token = info.token;
         hosts = info.hosts;
         hostIndex = 0;
-        applyHost(hosts[0]);
+        // A token-only code carries no host: the p2p client finds the computer by the
+        // token (DHT rendezvous + mDNS), so there is nothing for the TCP fallback to dial.
+        if (hosts.length)
+        {
+            applyHost(hosts[0]);
+            redial();
+        }
         saveEndpoint();
-        redial();
     }
 
     private void applyHost(string hp)
@@ -172,10 +177,16 @@ final class TcpBridge : Bridge
 
     // ---- connection lifecycle -------------------------------------------------
 
+    /// While the libp2p link has the floor there is nothing for this plain-TCP fallback to
+    /// do: no redialing the code's host:port every second (it points at the computer's
+    /// pairing listener, which is usually gone — or, worse, at a port that answers with
+    /// something else and refuses us in a loop). A connection already up is left alone.
+    bool standby;
+
     private void tick()
     {
         pollScanned();
-        if (host.length == 0)
+        if (host.length == 0 || standby)
             return;
         if (sock.state() != QAbstractSocket.SocketState.UnconnectedState)
             return;
@@ -278,7 +289,8 @@ final class TcpBridge : Bridge
                 auto info = parsePairingCode(v);
                 token = info.token;
                 hosts = info.hosts;
-                applyHost(hosts[0]);
+                if (hosts.length)
+                    applyHost(hosts[0]);
                 return;
             }
             immutable colon = v.indexOf(':');

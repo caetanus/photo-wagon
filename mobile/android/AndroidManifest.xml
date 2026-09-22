@@ -11,6 +11,7 @@
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+<uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <!-- %%INSERT_PERMISSIONS -->
     <!-- %%INSERT_FEATURES -->
@@ -45,6 +46,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="pwscan" />
                 <data android:scheme="pwperm" />
+                <data android:scheme="pw" />
             </intent-filter>
             <meta-data
                 android:name="android.app.lib_name"

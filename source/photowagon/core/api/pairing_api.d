@@ -28,7 +28,7 @@ void registerPairingApi(Registry r, ServerControl ctl)
 		if (en !is null)
 		{
 			if (en.type == JSONType.true_)
-				ctl.startServing("0.0.0.0");
+				ctl.startServing("0.0.0.0");   // = "enable phone pairing"; opens NO TCP listener — phones pair over p2p
 			else if (en.type == JSONType.false_)
 				ctl.stopServing();
 		}
@@ -52,7 +52,7 @@ void registerPairingApi(Registry r, ServerControl ctl)
 		JSONValue[] pa;
 		foreach (x; p2p)
 			pa ~= JSONValue(x);
-		immutable code = pairingCode(ctl.pairingToken, addrs.length ? addrs : ["127.0.0.1"], ctl.servingPort, p2p);
+		immutable code = pairingCode(ctl.pairingToken);   // token-only QR: no address published
 		return JSONValue([
 			"enabled": JSONValue(true),
 			"port": JSONValue(ctl.servingPort),

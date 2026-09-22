@@ -16,10 +16,12 @@ import photowagon.core.ipc.protocol;
 import photowagon.core.library.photos : PhotoRepo;
 import photowagon.core.library.roots : RootRepo;
 import photowagon.core.p2p.blobpush : BlobStash;
+import photowagon.core.store.partials : PartialStore;
+import photowagon.core.sync.pieces : PieceStore;
 import photowagon.core.store.store : sha256Hex;
 
 void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos, Indexer indexer,
-	BlobStash blobs = null)
+	BlobStash blobs = null, PartialStore partials = null, PieceStore pieces = null)
 {
 	immutable importsRoot = buildPath(cfg.dataDir, "imports");
 
@@ -80,11 +82,45 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 			if (h.length != 64)
 				throw new ApiError("bad_params", "sha256 must be 64 hex characters");
 			auto have = photos.byHash(h);
-			if (have.isNull)
-				return JSONValue(["existed": JSONValue(false)]);
-			return JSONValue(["id": JSONValue(have.get.id), "existed": JSONValue(true), "path": JSONValue(have.get.path)]);
+			if (!have.isNull)
+				return JSONValue(["id": JSONValue(have.get.id), "existed": JSONValue(true), "path": JSONValue(have.get.path)]);
+			// Not here yet — but part of it may be: tell the phone where to resume from, so an
+			// interrupted push continues instead of restarting the whole file (`have` = bytes
+			// spooled on the offset pipe; `pieces` = how many 1 MiB pieces the piece store holds).
+			immutable partial = partials is null ? 0L : partials.have(h);
+			immutable havePieces = pieces is null ? 0L : cast(long) pieces.have(h).haveCount;
+			return JSONValue(["existed": JSONValue(false), "have": JSONValue(partial), "pieces": JSONValue(havePieces)]);
 		}
-		// New path: the bytes came over the blob pipe; the phone tells us which ticket to claim.
+		// Resumable path: the bytes were appended to the partial spool by sha256 — in slices,
+		// possibly across several connections — and the phone now says the file is complete.
+		// finish() verifies the whole-file hash before we land it.
+		if (p.type == JSONType.object && "complete" in p && p["complete"].type == JSONType.true_)
+		{
+			immutable h = requireString(p, "sha256");
+			ubyte[] bytes;
+			try
+			{
+				// the piece store first (the piece protocol), the offset spool otherwise
+				if (pieces !is null && pieces.complete(h))
+				{
+					import std.file : read, remove;
+
+					immutable path = pieces.finish(h);
+					bytes = cast(ubyte[]) read(path);
+					remove(path);
+				}
+				else if (partials !is null)
+					bytes = partials.finish(h);
+				else
+					throw new ApiError("unavailable", "no partial store here");
+			}
+			catch (ApiError e)
+				throw e;
+			catch (Exception e)
+				throw new ApiError("bad_blob", e.msg);
+			return landBytes(name, getString(p, "takenAt"), bytes);
+		}
+		// Ticket path: the whole blob came over the pipe in one go (pre-resume wire).
 		if (p.type == JSONType.object && "ticket" in p && p["ticket"].type == JSONType.integer)
 		{
 			if (blobs is null)

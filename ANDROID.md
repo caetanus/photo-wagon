@@ -169,11 +169,105 @@ length-prefixed frames; the Qt thread reaches that thread through the same
 `InProcessLink` the desktop UI uses for its core (`mobile/…/p2pbridge.d`). A
 plain `host:port` typed by hand still goes over TCP (`tcpbridge.d` underneath).
 libsodium for arm64 is the archive in `toolchain/android-libs/arm64/`, built
-from the 1.0.20 release with `dist-build/android-armv8-a.sh`
-(`ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.2.12479018`); vibe-core, eventcore,
-vibe-container, taggedalgebraic, stdx-allocator and libsodiumd come from
-`~/.dub/packages` (a `dub build` in `mobile/` fetches them) and are compiled
-into the app's `.so` by `build-android.sh`.
+from the 1.0.20 release with
+`LIBSODIUM_FULL_BUILD=1 ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.2.12479018 dist-build/android-armv8-a.sh`
+(output `libsodium-android-armv8-a+crypto/lib/libsodium.a`). It MUST be the full
+build: the dist-build default is `--enable-minimal`, which drops
+`crypto_scalarmult_ed25519*`, and the hyperswarm transport archive needs
+`crypto_scalarmult_ed25519_noclamp` — a minimal archive links fine and only dies at
+`dlopen` on the phone (the nm pre-flight in `build-android.sh` now catches it).
+vibe-core, eventcore, vibe-container, taggedalgebraic, stdx-allocator and libsodiumd
+come from `~/.dub/packages` (a `dub build` in `mobile/` fetches them) and are
+compiled into the app's `.so` by `build-android.sh`.
+
+**The pipe is a DIRECT connection.** Off-LAN the phone meets the computer through a
+public relay (a `/p2p-circuit` address carries the DCUtR signalling, a few KB), then
+`Relay.ensureDirect` punches and hands back the direct connection — QUIC or TCP — and
+closes the circuit. IPC and the blob pipe open only on that connection: a public relay's
+circuit budget is ~128 KiB, which the first photo overruns in a second, and that was the
+"connects, then drops in 6 s". Direct or nothing; the loop dials again on failure.
+
+**QUIC (`/quic-v1`)** is the preferred transport (TLS 1.3 + native streams, and what the
+punch runs over); TCP+Noise is the fallback. libp2p's `transport/quic/*.d` compile under
+`-d-version=Libp2pQuic`, over ngtcp2 with its OpenSSL crypto backend — which needs
+OpenSSL **>= 3.5** (the QUIC TLS API, `SSL_set_quic_tls_cbs`). `build-android.sh` turns
+it on when these four archives are in `toolchain/android-libs/arm64/` (`PW_NO_QUIC=1`
+leaves it out): `libssl.a`, `libcrypto.a`, `libngtcp2.a`, `libngtcp2_crypto_ossl.a`.
+They are cross-built from the release tarballs (sources kept in `~/.cache/pw-android-src/`):
+
+```sh
+export ANDROID_NDK_ROOT=/opt/android-sdk/ndk/27.2.12479018
+TC=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin; export PATH=$TC:$PATH
+OUT=$HOME/.cache/pw-android-src/out-arm64
+# OpenSSL 3.6.4 (static libs only)
+./Configure android-arm64 -D__ANDROID_API__=35 no-shared no-tests no-apps no-docs --prefix=$OUT
+make -j8 build_libs && make install_dev
+# ngtcp2 1.25.0 (libs only, against that OpenSSL). -fPIC is a must: the archives go into
+# the app's shared object, and ld.lld refuses non-PIC relocations there.
+PKG_CONFIG_LIBDIR=$OUT/lib/pkgconfig CFLAGS="-fPIC -O2" CXXFLAGS="-fPIC -O2" \
+  CC=$TC/aarch64-linux-android35-clang CXX=$TC/aarch64-linux-android35-clang++ \
+  AR=$TC/llvm-ar RANLIB=$TC/llvm-ranlib ./configure --host=aarch64-linux-android --build=x86_64-linux-gnu \
+  --enable-lib-only --with-openssl --without-libnghttp3 --disable-shared --enable-static --prefix=$OUT
+make -j8 && make install
+cp $OUT/lib/{libssl,libcrypto,libngtcp2,libngtcp2_crypto_ossl}.a mobile/toolchain/android-libs/arm64/
+```
+
+The D side still uses the deimos `openssl-3.4.0` binding from `~/.dub/packages` for the
+declarations (the 3.x ABI is stable; the QUIC-specific calls live in the C backend). Two
+things dub does for that binding on the desktop that the raw ldc2 line has to repeat:
+its modules are *compiled* into the `.so` (the quic modules' `ModuleInfo` lists them, so
+theirs must link) — and since LDC generates no code for a `.di` on the command line, the
+script copies them to `.d` under `build-android/deimos-openssl/` and compiles those; and
+`-d-version=DeimosOpenSSL_3_0` picks the 3.x declarations (the default is
+1.1, whose `SSL_get_peer_certificate` no longer exists in 3.x). `quic/punch.d` also
+pulls `d-webrtc-v3/source/webrtc/stun/message.d` (the STUN codec, std + libsodium only).
+The same `libssl.a`/`libcrypto.a` serve `P2P_TLS=1` (WSS to the relays).
+
+**Parked: the UDX/hyperswarm transport** (`PW_UDX=1` to link it; its relayed hole punch
+never passed live acceptance against the public hyperdht nodes, 2026-09-20). It is two
+archives dropped next to libsodium: `libhsudx-android.a` (libudx's C core, compiled
+as plain C per file with the NDK clang — the host's C++ amalgam does not build with
+clang; note `-include sys/endian.h` for bionic's `ntohl`) and `libhsdswarm-android.a`
+(the D side: `facade.d`'s `hsuv_*` libuv shim, hyperswarm/dht/noise, the `Connection`
+surface). `build-android.sh` links both inside one start-group with libsodium when
+present, and its pre-flight aborts on any unresolved `hsuv_*`/`hs_udx_*`/`udx_*`/
+`crypto_*`. `UDX_WHOLE=1` forces `--whole-archive` so that check is a real
+dlopen-readiness proof even before anything references the API. They are built by
+`vendor/build-libudx-android.sh` and `build-dswarm-android.sh` in the d-hyperswarm tree.
+
+## The GC and thread-local storage (read this before chasing "impossible" crashes)
+
+On Android (LDC 1.42, bionic) druntime does **not** scan a thread's ELF TLS block, so a GC
+object referenced only from a thread-local variable — vibe-core's per-thread `TaskFiber`,
+its scheduler, any module-level D variable — is collected while in use. The symptom is
+random corruption right after the first collection of that thread: `OutOfMemoryError …
+Memory allocation failed` (an allocation of ~`size_t.max` from garbage lengths),
+`AssertError task.d: May not process events within an active yieldLock()`, stalls. It
+took the Waydroid rig (below) to pin down (2026-09-21). The app-level fix is
+`pinThreadTls()` in `mobile/source/photowagon/mobile/plog.d`: `dl_iterate_phdr` finds our
+`.so`'s `PT_TLS` block for the calling thread (bionic ≥ API 29 fills `dlpi_tls_data`) and
+registers it with `GC.addRange`. **Call it first thing in every D thread you create** (the
+Qt/main thread and the libp2p thread already do; look for `tls: … pinned TLS block` in
+logcat). The proper fix belongs in LDC's druntime (`rt.sections_elf_shared.getTLSRange`
+for a D shared library loaded by a non-D host) and is still owed upstream.
+
+## The Waydroid rig
+
+Waydroid (Android 13, x86_64, LXC on the desktop) runs the phone app with adb, logcat and
+a five-minute rebuild, no phone in hand: `ABI=x86_64 ./build-android.sh` (the x86_64 Qt
+kit needs `qtmultimedia`: `aqt install-qt linux android 6.11.1 android_x86_64 -m
+qtmultimedia --noarchives --outputdir ~/Qt`), `waydroid app install
+build-android/x86_64/photo-wagon-mobile-debug.apk`, adb at `192.168.240.112:5555`.
+Waydroid gives no root and `run-as` fails, so the app takes the pairing code as an intent
+too — the same path as the QR scan:
+`adb shell am start -a android.intent.action.VIEW -d 'pw://…' org.photowagon.mobile`.
+With the desktop started as `./photo-wagon --serve --port 45999`, a pairing knock is
+confirmed over the loopback IPC (`devices.confirm {peerId, code}`), no human needed.
+Build knobs for diagnosis: `EXTRA_DVERSIONS="-d-version=Libp2pReadTrace"` (libp2p-dlang's
+wire trace + Error reporter), `VIBE_CORE_SRC=<dir>` (build against a patched copy of
+vibe-core). What the rig cannot reproduce: Samsung's Wi-Fi sleep and app freezer — those
+still need the phone. `tools/waydroid-wg.sh` puts the container on the Hetzner WireGuard
+test VPN so the Android side reaches the desktop over the internet instead of the bridge.
 
 ## Faces on the phone
 

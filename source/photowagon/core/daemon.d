@@ -47,7 +47,13 @@ import photowagon.core.ipc.server : IpcServer;
 import photowagon.core.jobs.scheduler : Scheduler, installScheduler;
 version (PW_NoVision) {} else import photowagon.core.vision.worker : configureVision, VisionModels, releaseVision;
 import photowagon.core.p2p.ipc : IpcOverP2p;
-import photowagon.core.p2p.blobpush : BlobStash, BlobOverP2p;
+import photowagon.core.p2p.hsserve : HsServe;
+import photowagon.core.p2p.hsmux : HsMuxServe;
+import photowagon.core.sync.pieces : PieceService;
+import hyperswarm.connection : HsConn = Connection;   // the udx byte stream Node.onConnection hands over
+import photowagon.core.p2p.blobpush : BlobStash, BlobOverP2p, BlobPullOverP2p, PieceOverP2p;
+import photowagon.core.sync.pieces : PieceStore;
+import photowagon.core.store.partials : PartialStore;
 import photowagon.core.library.albums : AlbumRepo;
 import photowagon.core.library.dates : DateTree;
 import photowagon.core.library.memories : MemoriesService;
@@ -84,6 +90,7 @@ final class Daemon : ServerControl
 	private string ipcAddress;
 	private IpcServer lan;      // the phones' listener next to a loopback --port one
 	private ushort lanPort;
+	private bool pairingEnabled;   // phone pairing on: the token/QR is live; phones pair over p2p, never TCP
 	private Registry registry;
 	private Events events;
 	private string token;
@@ -199,7 +206,10 @@ final class Daemon : ServerControl
 			registerLibraryApi(registry, roots, photos, dates, indexer, events, kinds, () { facesService.start(); });
 		registerMediaApi(registry, photos, store);
 		auto blobStash = new BlobStash;
-		registerImportApi(registry, cfg, roots, photos, indexer, blobStash);
+		// resumable pushes spool here by sha256 until the phone says the file is complete
+		auto partials = new PartialStore(cfg.dataDir);
+		auto pieces = new PieceStore(buildPath(cfg.dataDir, "imports", ".pieces"));
+		registerImportApi(registry, cfg, roots, photos, indexer, blobStash, partials, pieces);
 		version (PW_NoVision) {} else registerFaceApi(registry, faceRepo, facesService, store, events);
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerMemoriesApi(registry, memories, photos);
@@ -237,7 +247,46 @@ final class Daemon : ServerControl
 		if (node !is null)
 		{
 			new IpcOverP2p(node.host, registry, events, token, deviceRepo, pairingMgr);   // the phone's way in over libp2p
-			new BlobOverP2p(node.host, blobStash, deviceRepo);   // the raw-bytes pipe for pushed photos/videos
+			// …and over hyperswarm/udx: each peer the swarm hands us becomes one HsServe (the
+			// same IPC protocol framed onto the single udx stream, plus resumable chunk pushes
+			// into the partial store). Fires on the udx/vibe thread.
+			// The piece service the hyperswarm flavor serves over the mux: complete files come
+			// from the library by sha256, arriving ones from the piece store — the same source
+			// as PieceOverP2p (libp2p).
+			// Thumbnails for the phone's grid go out as raw JPEG bytes on the piece stream
+			// (THUMB op), not as base64 inside a JSON reply: a third less on a cellular
+			// link, no encode/decode, no page-sized frame to hold at once.
+			const(ubyte)[] thumbSrc(long id)
+			{
+				try
+				{
+					auto photo = photos.get(id);
+					if (photo.thumbHash is null || !store.has(photo.thumbHash))
+						return null;
+					return store.get(photo.thumbHash);
+				}
+				catch (Exception)
+					return null;
+			}
+			auto hsPieces = new PieceService((string sha) {
+				import std.file : exists;
+
+				auto have = photos.byHash(sha);
+				return !have.isNull && have.get.path !is null && have.get.path.exists ? have.get.path : null;
+			}, pieces);
+			hsPieces.serveThumbsFrom(&thumbSrc);
+			node.onConnection = (HsConn c) nothrow {
+				try
+					new HsMuxServe(c, registry, events, token, deviceRepo, pairingMgr, hsPieces);
+				catch (Exception e)
+				{
+					try logInfo("hs/mux: could not start a session: %s", e.msg); catch (Exception) {}
+				}
+			};
+			new BlobOverP2p(node.host, blobStash, deviceRepo, partials);   // the raw-bytes pipes (whole-blob v1, resumable v2)
+			new BlobPullOverP2p(node.host, photos, deviceRepo);   // the phone downloads originals, resumably
+			auto p2pPieces = new PieceOverP2p(node.host, photos, deviceRepo, pieces);   // the piece protocol: sync today, sharing tomorrow
+			p2pPieces.serveThumbsFrom(&thumbSrc);
 		}
 
 		if (link !is null)
@@ -315,13 +364,17 @@ final class Daemon : ServerControl
 		// closing it would drop the very client that asked for the pairing.
 		if (ipc !is null && address == "0.0.0.0" && ipcAddress != "0.0.0.0")
 		{
-			if (lan is null)
-			{
-				lan = new IpcServer(registry, events, token);
-				lanPort = lan.listen("0.0.0.0", 0);
-				logInfo("core: also listening for phones on 0.0.0.0:%s", lanPort);
-			}
-			return lanPort;
+			// "Enable phone pairing". No TCP listener opens for phones any more: TCP can
+			// only authenticate by the shared token (no device identity), so a revoked
+			// phone still holding the token could walk back in (Codex review #1). Phones
+			// pair over the encrypted p2p transport — token → topic/DHT rendezvous, mDNS
+			// on the LAN — where HsMuxServe/PieceOverP2p admit per device via the
+			// DeviceRepo. The node announces the topic whenever pair.token exists, so
+			// enabling is just a flag.
+			if (!pairingEnabled)
+				logInfo("core: phone pairing enabled — phones pair over p2p (no LAN TCP listener)");
+			pairingEnabled = true;
+			return ipcPortInUse;
 		}
 		if (ipc !is null)
 			return ipcPortInUse;
@@ -336,6 +389,11 @@ final class Daemon : ServerControl
 
 	void stopServing()
 	{
+		if (pairingEnabled)
+		{
+			pairingEnabled = false;
+			return;
+		}
 		if (lan !is null)
 		{
 			lan.close();
@@ -356,12 +414,14 @@ final class Daemon : ServerControl
 
 	bool serving()
 	{
-		return lan !is null || (ipc !is null && ipcAddress == "0.0.0.0");
+		// pairingEnabled is the normal path; the other two only when the IPC listener was
+		// deliberately bound off loopback (a test rig), never for phones.
+		return pairingEnabled || lan !is null || (ipc !is null && ipcAddress == "0.0.0.0");
 	}
 
 	ushort servingPort()
 	{
-		return lan !is null ? lanPort : ipcPortInUse;
+		return lan !is null ? lanPort : ipcPortInUse;   // informational only: the QR is token-only
 	}
 
 	string pairingToken()

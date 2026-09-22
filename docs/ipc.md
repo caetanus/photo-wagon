@@ -43,7 +43,7 @@ has a matching response, even on failure.
 | `library.syncStatus` (phone) | `{}` | `{enabled, connected, active, pending, total, done, sent, skipped, failed, error}`; also pushed as the `sync.status` event |
 | `phone.pairing` | `{enable?: bool}` | `{enabled, port, addrs, code, qr: {width, rows}, qrImage}` — turns the LAN listener (0.0.0.0) on/off; `code` is `pw://<token>@<ip>:<port>[,…]`, `qrImage` a PNG data: URL of it |
 | `daemon.auth` | `{token}` | `{ok: true}` or `unauthorized` |
-| `library.import` | `{name, base64, takenAt?}` or `{name, sha256, probe: true}` | `{existed, path?, id?}` — the probe form only asks whether a file with that content hash is here (no bytes sent); the full form stores the bytes under `<data dir>/imports/<yyyy-mm>/` and indexes them; a photo already in the library (same hash) is reported with `existed: true` |
+| `library.import` | `{name, base64, takenAt?}`, `{name, sha256, probe: true}`, `{name, sha256, ticket, takenAt?}` or `{name, sha256, complete: true, takenAt?}` | `{existed, path?, id?, have?}` — the probe form asks whether a file with that content hash is here (no bytes) and, if not, how many bytes of it the computer has already spooled (`have`, the offset to resume from); the `complete` form claims the bytes that arrived on the resumable push pipe (below), verifies the whole-file sha256 and files them under `<data dir>/imports/<yyyy-mm>/`; `ticket` claims a whole blob from the v1 pipe; `base64` carries the bytes inline (a client with no pipe). A photo already in the library (same hash) is reported with `existed: true` |
 
 A client that is not on the loopback interface must send `daemon.auth` with the
 token from the pairing code before anything but `daemon.hello`; every other
@@ -230,6 +230,30 @@ there, and `photo.region` reads the edited result too.
 | `p2p.fetchAlbum` | `{peerId, manifest}` | `{albumId}` — fetches the manifest synchronously, creates the album, then fetches thumbnails in the background (`p2p.fetch` events) |
 
 Methods that need the node answer `{"error": {"code": "p2p_off"}}` when it is not running.
+
+## Raw-byte pipes (libp2p only)
+
+Bytes never travel as base64 inside a JSON line when the phone and the computer are joined by
+a direct libp2p connection: they get their own stream, beside the IPC one, so a video does not
+block the keepalive. All integers are big-endian.
+
+- `/photowagon/push/2.0.0` — **resumable upload**. Phone → computer: `(32 bytes sha256)(long size)
+  (long offset)`. Computer → phone: one status byte — `0` go on from `offset`, `2` wrong offset
+  followed by `(long have)` (re-probe and resume from there), `3` refused. Then the bytes from
+  `offset` to `size`; the computer appends each 64 KiB slice to `<data dir>/imports/.partial/
+  <sha256>.part` as it lands, so a dropped link keeps what got through. `1` back at the end;
+  the phone then sends `library.import {complete: true, …}`. The phone's side: probe → push
+  from `have` → complete, retried from a fresh probe up to 4 times while the link is up.
+- `/photowagon/push/1.0.0` — the whole-blob pipe of older phones: `(long ticket)(long size)(bytes)`,
+  `1` back; claimed with `library.import {ticket}`.
+- `/photowagon/pull/1.0.0` — **resumable download** of an original. Phone → computer: `(long id)
+  (long offset)`. Computer → phone: one status byte (`0` ok, `3` no such file / not allowed),
+  then `(long size)(32 bytes sha256)` and the bytes from `offset`. The phone appends to
+  `<data>/remote-files/<id>.<ext>.part`, hashes the whole file once complete, and renames it into
+  place; a retry continues from the `.part`. Exposed on the phone as `photo.download {id}` →
+  `{path, fileUrl, size}`.
+
+Only a device the computer has admitted (see `devices.*`) may use either pipe.
 
 ## Events
 

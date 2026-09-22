@@ -16,9 +16,15 @@ import libp2p.protocol.ping : Ping, PingConfig;
 import libp2p.protocol.relay.service : Relay;
 import libp2p.protocol.autonat.autonat : AutoNat, NatStatus;
 import libp2p.swarm.connection : Connection, Notifiee, Hold;
+import photowagon.core.p2p.hswarm : HsTransport;
+import hyperswarm.connection : HsConn = Connection; // aliased: libp2p Connection is above
 import libp2p.transport.tcp : TcpTransport;
 import libp2p.transport.ws : WsTransport;
 import libp2p.transport.transport : Transport;
+import std.algorithm.searching : canFind;
+version (Libp2pQuic) import libp2p.transport.quic.transport : QuicTransport;
+import libp2p.discovery.mdns : MdnsRendezvous;
+import libp2p.discovery.rendezvous : announceUnder, rendezvousKeyFor;
 version (LibP2P_OpensslTls) import libp2p.transport.ws_tls_openssl : OpensslTlsProvider;
 
 import photowagon.core.config : Config;
@@ -40,13 +46,20 @@ final class Node : Notifiee
 {
 	Host host;
 	Kademlia kad;
+	private MdnsRendezvous lanRv;        // the LAN rendezvous for the sharing key: this flavor's line (id + ports) on the shared record
 	private IdentifyService identify;
 	private Ping ping;
 	private Relay relay;
+	private HsTransport hs;              // hyperswarm/udx sync transport (the new phone<->desktop path)
+	/// Transport seam: each phone the swarm connects arrives here as a raw byte
+	/// stream; the desktop serve() (framing + DeviceRepo admission) wires onto it.
+	void delegate(HsConn) nothrow onConnection;
 	private AutoNat autonat;
 	private string[] circuitAddrsList; // complete /p2p-circuit addresses (already end in /p2p/<self>)
-	private string relayPeerId;        // the relay we currently hold a reservation on (empty = none)
-	private Hold relayHold;            // keeps that relay's connection off the idle-close timer
+	private ubyte[] meetKey;           // DHT rendezvous key from the pairing token (pairingcode.rendezvousKey); empty = no token yet
+	private enum maxRelays = 2;        // hold a slot on several relays: a phone's learned circuit stays dialable even if one drops
+	private static final class RelayEntry { string[] circuits; Hold hold; }
+	private RelayEntry[string] relays; // relay peer id -> its /p2p-circuit addresses + the hold keeping its connection alive
 	private PeerId[string] dhtPeers;   // currently-connected peers, candidates to reserve a relay slot on
 	private Connection[string] conns;  // live connection per peer, so we can hold the relay's open
 	// NAT-traversal: relay transport + AutoNat + DCUtR (hole punching). The desktop regression
@@ -77,6 +90,10 @@ final class Node : Notifiee
 			auto ws = new WsTransport();
 		Transport[] transports = [cast(Transport) new TcpTransport, ws];   // cast: else the literal infers Object[]
 		host = new Host(identity, transports, hc);
+		// QUIC (/quic-v1): TLS 1.3 + native streams, and the transport the DCUtR hole punch
+		// prefers — the phone's sync pipe. TCP+Noise stays as the fallback.
+		version (Libp2pQuic)
+			host.swarm.addCapableTransport(new QuicTransport(identity));
 		identify = new IdentifyService(host);
 		identify.onIdentified = &identified;
 		PingConfig pc;
@@ -144,24 +161,104 @@ final class Node : Notifiee
 			immutable p = boundPort();
 			if (p > 0)
 				write(portFile, p.to!string);
+			// QUIC on the same port number over UDP (its own port space), so the phone's
+			// saved address list stays valid across restarts for both transports.
+			version (Libp2pQuic)
+				if (p > 0)
+				{
+					try
+						host.listen(Multiaddr.parse("/ip4/0.0.0.0/udp/" ~ p.to!string ~ "/quic-v1"));
+					catch (Exception e)
+						logWarn("p2p: quic listen on udp/%s failed: %s", p, e.msg);
+				}
 		}
 		catch (Exception)
 		{
+		}
+		logInfo("p2p: addresses %s", addrs);
+		// The rendezvous key: the phone finds our current addresses in the DHT under it
+		// (published from the relay loop, since it carries the circuits) — see pairingcode.d.
+		{
+			immutable pairTokenFile = buildPath(cfg.dataDir, "pair.token");
+			if (pairTokenFile.exists)
+			{
+				immutable tok = readText(pairTokenFile).strip;
+				// One key names both the DHT rendezvous AND the mDNS label — the lib is the
+				// single source of it (rendezvousKeyFor), so desktop and phone agree.
+				meetKey = rendezvousKeyFor("pw", cast(const(ubyte)[]) tok);
+				// The LAN side of the same key: one mDNS label shared with the hyperswarm
+				// flavor, one TXT record; this flavor's line is `id=<PeerId>` + listen ports.
+				// A phone on this network reads it and dials us straight (quic/tcp + Noise) —
+				// by mDNS it is already at the exit door; the DHT above is only the entrance.
+				try
+					lanRv = new MdnsRendezvous(host, "pw", cast(const(ubyte)[]) tok);
+				catch (Exception e)
+					logWarn("p2p: LAN rendezvous not started: %s", e.msg);
+			}
 		}
 		if (natTraversal)
 		{
 			learnPublicIp();
 			reserveOnRelays();
 		}
+
+		// Hyperswarm/udx — the new phone<->desktop sync transport (punch-or-nothing,
+		// no relay). Announce the topic derived from the pairing token; each phone
+		// that connects arrives on onConnection as a raw byte stream, where the
+		// desktop serve() runs the framing (auth + IPC + push) and the DeviceRepo
+		// admission gate. The libp2p node above still runs during the transition.
+		// Parked unless PW_HS=1: the hyperswarm path's relayed hole punch never passed live
+		// acceptance, and the sync pipe is the direct libp2p connection (QUIC/TCP) instead.
+		import std.process : environment;
+
+		if (environment.get("PW_HS", "") == "1")
+		try
+		{
+			import std.file : read;
+
+			auto seed = cast(ubyte[]) read(cfg.identityPath);
+			immutable tokenFile = buildPath(cfg.dataDir, "pair.token");
+			if (exists(tokenFile))
+			{
+				// pair.token is written with a trailing newline; strip it so the topic
+				// matches the phone, which derives it from the newline-free QR token.
+				auto tok = cast(const(ubyte)[]) readText(tokenFile).strip;
+				hs = new HsTransport(HsTransport.defaultBootstrap(), seed);
+				hs.onPeer = (HsConn c) nothrow { if (onConnection !is null) onConnection(c); };
+				hs.start(tok, /*asServer*/ true);   // the KEY: the topic and this flavor's LAN line are derived inside
+				logInfo("p2p: hyperswarm sync topic announced");
+			}
+			else
+				logWarn("p2p: no pair.token yet — hyperswarm sync not announced");
+		}
+		catch (Exception e)
+			logWarn("p2p: hyperswarm transport not started: %s", e.msg);
 	}
 
 	/// Reserve a slot on each configured relay and remember the /p2p-circuit address it gives
 	/// us, so peers anywhere (a phone on 4G, both of us behind CGNAT) can reach us through the
 	/// relay. Re-reserves periodically, since a reservation expires. Off the start path.
+	private void rebuildCircuitList() nothrow
+	{
+		try
+		{
+			import std.algorithm : canFind;
+			string[] all;
+			foreach (_, e; relays)
+				foreach (c; e.circuits)
+					if (!all.canFind(c))
+						all ~= c;
+			circuitAddrsList = all;
+		}
+		catch (Exception)
+		{
+		}
+	}
+
 	private void reserveOnRelays()
 	{
 		import vibe.core.core : runTask, sleep;
-		import core.time : minutes, seconds;
+		import core.time : minutes, seconds, MonoTime;
 
 		if (cfg.p2pRelays.length == 0)
 			return;
@@ -169,6 +266,9 @@ final class Node : Notifiee
 			import std.algorithm : canFind;
 
 			bool joinedDht;
+			string[] providedCircuits; // the circuits the DHT last heard from us
+			MonoTime lastProvide;
+			bool publishing;           // a rendezvous publish task is in flight
 
 			// Reserve a slot on `pe` and return this node's cleaned /p2p-circuit addresses
 			// (empty if the peer refused or isn't a relay).
@@ -229,23 +329,24 @@ final class Node : Notifiee
 				// If the relay dropped in the DHT churn (the "bada" bug: it once kept a dead
 				// circuit for 30 min), throw the stale address away so we stop advertising a
 				// circuit nobody can dial, and go find a new relay below.
-				if (relayPeerId.length)
+				foreach (rp; relays.keys)
 				{
-					if (auto pe = relayPeerId in dhtPeers)
+					auto e = relays[rp];
+					if (auto pe = rp in dhtPeers)
 					{
 						auto fresh = reserveOn(*pe);
 						if (fresh.length)
-							circuitAddrsList = fresh;
+							e.circuits = fresh;
 						else
 						{
-							relayPeerId = null;
-							circuitAddrsList = null;
+							e.hold.release();
+							relays.remove(rp);
 						}
 					}
 					else
 					{
-						relayPeerId = null;
-						circuitAddrsList = null;
+						e.hold.release();
+						relays.remove(rp);
 						try
 							logInfo("p2p: relay connection lost, finding another");
 						catch (Exception)
@@ -253,12 +354,13 @@ final class Node : Notifiee
 						}
 					}
 				}
+				rebuildCircuitList();
 
 				// Acquire: no live reservation — try the configured relays first, then
 				// AutoRelay-lite over the public peers the DHT gave us (many go-libp2p nodes
 				// run a limited relay that grants a slot). Stop at the first that sticks; that
 				// relay stays ours (and gets refreshed above) until its connection drops.
-				if (relayPeerId.length == 0)
+				if (relays.length < maxRelays)
 				{
 					try
 						sleep(4.seconds); // let the DHT settle its connections
@@ -277,22 +379,29 @@ final class Node : Notifiee
 					int tried;
 					foreach (pe; cands)
 					{
-						if (relayPeerId.length || tried >= 40)
+						if (relays.length >= maxRelays || tried >= 40)
 							break;
+						string rp;
+						try
+							rp = pe.toString;
+						catch (Exception)
+							continue;
+						if (rp in relays)
+							continue;
 						tried++;
 						auto got = reserveOn(pe);
 						if (got.length)
 						{
-							circuitAddrsList = got;
 							try
 							{
-								immutable rp = pe.toString;
-								relayPeerId = rp;
+								auto e = new RelayEntry;
+								e.circuits = got;
 								// hold this relay's connection open so the DHT's idle-close
 								// churn can't drop the reservation out from under us
-								relayHold.release();
 								if (auto cp = rp in conns)
-									relayHold = (*cp).hold();
+									e.hold = (*cp).hold();
+								relays[rp] = e;
+								rebuildCircuitList();
 								logInfo("p2p: reachable via public relay: %s", got[0]);
 							}
 							catch (Exception)
@@ -300,7 +409,7 @@ final class Node : Notifiee
 							}
 						}
 					}
-					if (relayPeerId.length == 0)
+					if (relays.length == 0)
 						try
 							logWarn("p2p: no relay slot among %s peers tried", tried);
 						catch (Exception)
@@ -308,11 +417,45 @@ final class Node : Notifiee
 						}
 				}
 
+				// Meeting point, second half: tell the DHT where we are, under the pairing
+				// rendezvous key, with our current addresses — the circuits first (the only
+				// ones a phone off the LAN can dial). Re-published when the circuit changes
+				// (a relay reservation moved) and every 30 min regardless, so a phone whose
+				// saved addresses all died can still find us (p2pbridge.d discover()).
+				// On its own task: the publish is a DHT lookup + k writes and can take minutes
+				// against slow public peers, and the relay refresh must not wait on it.
+				if (meetKey.length && circuitAddrsList.length && !publishing
+					&& (circuitAddrsList != providedCircuits || MonoTime.currTime - lastProvide > 30.minutes))
+				{
+					publishing = true;
+					auto circuitsNow = circuitAddrsList.dup;
+					runTask(() nothrow {
+						scope (exit)
+							publishing = false;
+						try
+						{
+							Multiaddr[] mine;
+							foreach (s; addrs)
+								mine ~= Multiaddr.parse(s);
+							immutable took = announceUnder(kad, meetKey, mine);   // the DHT entrance under the sharing key
+							providedCircuits = circuitsNow;
+							lastProvide = MonoTime.currTime;
+							logInfo("p2p: rendezvous published — %s DHT peer(s) took %s address(es)", took, mine.length);
+						}
+						catch (Exception e)
+							try
+								logWarn("p2p: rendezvous publish failed: %s", e.msg);
+							catch (Exception)
+							{
+							}
+					});
+				}
+
 				// Wait before the next refresh/acquire, but wake early if the relay we hold
-				// drops: disconnected() clears relayPeerId the instant its connection ends, so
+				// drops: disconnected() drops that relay from `relays` the instant its connection ends, so
 				// a dead /p2p-circuit is dropped and replaced within seconds, not up to 5 min.
 				{
-					immutable held = relayPeerId.length > 0;
+					immutable held = relays.length > 0;
 					// refresh every ~100s when reserved — under the 120s swarm idle timeout, so
 					// the renewal traffic keeps the relay connection from idling out (which was
 					// dropping the reservation mid-churn); ~2 min between retries when none yet
@@ -327,7 +470,7 @@ final class Node : Notifiee
 							cancelled = true;
 							break;
 						}
-						if (held && relayPeerId.length == 0)
+						if (held && relays.length == 0)
 							break; // the relay dropped — re-acquire immediately
 					}
 					if (cancelled)
@@ -603,11 +746,11 @@ final class Node : Notifiee
 		// If this was the relay holding our reservation, our /p2p-circuit address just died.
 		// Drop it now so we stop handing the phone a circuit nobody can dial; the reserve
 		// loop wakes on the cleared id and finds another relay within seconds.
-		if (pid == relayPeerId)
+		if (auto e = pid in relays)
 		{
-			relayHold.release();
-			relayPeerId = null;
-			circuitAddrsList = null;
+			e.hold.release();
+			relays.remove(pid);
+			rebuildCircuitList();
 		}
 		logInfo("p2p: disconnected %s", pid);
 		events.emit("p2p.peer", JSONValue(["peerId": JSONValue(pid), "connected": JSONValue(false)]));
@@ -619,7 +762,14 @@ final class Node : Notifiee
 		// what this peer saw as our address tells us our public IP. Pair that IP with our
 		// stable listen port (not the observed source port, which NAT rewrote for outbound)
 		// so the result is an address a phone can actually dial in to.
-		if (!info.observedAddr.isNull)
+		// ...unless we reached that peer through a relay: then what it "observed" is the
+		// relay's address, not ours (2026-09-21: a relay's IP got advertised as our public
+		// one, and every phone off the LAN burned a dial timeout on it).
+		bool viaRelay;
+		foreach (c; host.swarm.connectionsTo(info.peer))
+			if (c.remoteAddr.toString.canFind("/p2p-circuit"))
+				viaRelay = true;
+		if (!info.observedAddr.isNull && !viaRelay)
 		{
 			immutable seen = info.observedAddr.get.toString;
 			if (isPublicV4(seen))

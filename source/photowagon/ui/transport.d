@@ -49,6 +49,48 @@ abstract class Bridge
     /// video need not be base64'd into a JSON line. `uploadFile` is only called when true.
     bool canPush() const { return false; }
 
+    /// True when this transport can stream a file FROM the computer on a side channel
+    /// (`downloadFile`), resumably. The default cannot.
+    bool canPull() const { return false; }
+
+    /// Downloads the original of the computer's photo `id` into the local file `dest`,
+    /// continuing from whatever `dest.part` already holds; `cb` gets {path, size} or an
+    /// error. Only meaningful when `canPull()`; the default refuses.
+    /// Thumbnails for `ids` as raw JPEG bytes: `onThumb` once per id that has one, then
+    /// `done`. This default is the legacy JSON `library.thumbs` (base64 on the wire), kept
+    /// only for transports with no raw byte pipe (the TCP fallback); P2pBridge overrides it
+    /// with the binary THUMB op on the piece stream.
+    void fetchThumbs(long[] ids, void delegate(long id, const(ubyte)[] jpeg) onThumb, void delegate() done)
+    {
+        import std.base64 : Base64;
+        import std.conv : to;
+
+        JSONValue params = JSONValue.emptyObject;
+        JSONValue[] arr;
+        foreach (i; ids)
+            arr ~= JSONValue(i);
+        params["ids"] = JSONValue(arr);
+        request("library.thumbs", params, (r, e) {
+            if (e.type == JSONType.null_ && "thumbs" in r)
+                foreach (key, b64; r["thumbs"].object)
+                    try
+                        if (onThumb !is null)
+                            onThumb(key.to!long, Base64.decode(b64.str));
+                    catch (Exception)
+                    {
+                    }
+            if (done !is null)
+                done();
+        });
+    }
+
+    void downloadFile(long id, string dest, ResultCb cb)
+    {
+        cb(JSONValue(null), JSONValue([
+            "code": JSONValue("unsupported"), "message": JSONValue("no pull on this transport")
+        ]));
+    }
+
     /// Streams `path`'s raw bytes to the computer under `ticket`, then sends a
     /// `library.import` with `meta` ({name, takenAt, sha256, ticket}); `cb` gets the import
     /// result. Only meaningful when `canPush()`; the default refuses.

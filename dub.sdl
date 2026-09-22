@@ -11,8 +11,15 @@ stringImportPaths "data/places" "data/scenes" "data/clip"   // GeoNames cities (
 dependency "vibe-core" version="~>2.14"
 dependency "vibe-stream:tls" version="~>1.4"   // TLS (vibe.stream.tls), for the Chromecast (CASTV2) control channel
 dependency "libp2p" path="../libp2p-dlang"
+dependency "hyperswarm" path="../d-hyperswarm"   // the UDX/hyperswarm sync transport (core/p2p/hswarm.d); its preBuild makes the host libhsudx.a
 
 libs "sqlite3" "gexiv2" "vips" "gobject-2.0" "glib-2.0" "qrencode" "curl"   // curl: std.net.curl for DLNA SOAP
+
+// QUIC (/quic-v1) as a libp2p transport: TLS 1.3 + native streams, and the DCUtR hole punch
+// runs over it. ngtcp2 with its OpenSSL (>= 3.5) crypto backend; the version flag turns the
+// transport on in libp2p-dlang.
+versions "Libp2pQuic"
+libs "ngtcp2" "ngtcp2_crypto_ossl" "ssl" "crypto"
 
 // The C/C++ shims (csrc/build.sh): the OpenCV face + CLIP shims and sqlite-vec go into
 // libface_opencv.a, linked by every config that does vision. The "node" config (a headless
@@ -64,6 +71,33 @@ configuration "node" {
 	preBuildCommands "PW_NO_OPENCV=1 sh $PACKAGE_DIR/csrc/build.sh"
 	sourceFiles "csrc/libface_novision.a"
 	excludedSourceFiles "source/photowagon/ui/*" \
+		"source/photowagon/core/vision/worker.d" \
+		"source/photowagon/core/library/clip.d" \
+		"source/photowagon/core/library/scenes.d" \
+		"source/photowagon/core/library/cliptext.d" \
+		"source/photowagon/core/library/clipsearch.d" \
+		"source/photowagon/core/library/ocr.d" \
+		"source/photowagon/core/library/placemodel.d" \
+		"source/photowagon/core/faces/service.d" \
+		"source/photowagon/core/faces/detect.d" \
+		"source/photowagon/core/faces/cluster.d" \
+		"source/photowagon/core/api/face_api.d" \
+		"source/photowagon/core/api/tags_api.d" \
+		"source/photowagon/core/api/search_api.d"
+}
+
+// A desk-side stand-in for the phone (tools/hsprobe.d): joins the sync topic for a pairing
+// token as a hyperswarm client and sends daemon.auth, so DHT lookup → connect → HsServe →
+// auth is provable without a device. Same no-OpenCV footprint as "node".
+configuration "hsprobe" {
+	targetType "executable"
+	targetName "hsprobe"
+	versions "PW_NoVision"
+	preBuildCommands "PW_NO_OPENCV=1 sh $PACKAGE_DIR/csrc/build.sh"
+	sourceFiles "csrc/libface_novision.a"
+	mainSourceFile "tools/hsprobe.d"
+	excludedSourceFiles "source/photowagon/main.d" \
+		"source/photowagon/ui/*" \
 		"source/photowagon/core/vision/worker.d" \
 		"source/photowagon/core/library/clip.d" \
 		"source/photowagon/core/library/scenes.d" \

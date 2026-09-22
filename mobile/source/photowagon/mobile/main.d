@@ -129,6 +129,10 @@ int main()
     installQuitHandler();
     logTls("qt thread");
     {
+        import photowagon.mobile.plog : pinThreadTls;
+        pinThreadTls("qt thread");
+    }
+    {
         import core.thread : Thread;
         auto probe = new Thread({ logTls("a new thread"); });
         probe.start();

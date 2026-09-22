@@ -105,6 +105,8 @@ final class LocalBridge : Bridge
     private long dupes;
     private string[long] thumbCache;   // remote id → thumb URL (a file:// on disk, or a data: URL fallback)
     private string remoteThumbDir;     // desktop thumbs cached as JPEG files (EGL file→texture, low RAM, survive drops)
+    private string remoteFileDir;      // originals downloaded from the computer (photo.download)
+    private bool testDownloadDone;     // PW_TEST_DOWNLOAD fired once
 
     this(PhoneIndex index, Bridge computer, string settingsDir = null)
     {
@@ -119,6 +121,7 @@ final class LocalBridge : Bridge
             // grid loads them as file:// textures (EGL) instead of base64 in memory, and
             // they survive the p2p link dropping.
             remoteThumbDir = buildPath(dirName(settingsDir), "remote-thumbs");
+            remoteFileDir = buildPath(dirName(settingsDir), "remote-files");   // downloaded originals
             try
                 mkdirRecurse(remoteThumbDir);
             catch (Exception)
@@ -158,6 +161,20 @@ final class LocalBridge : Bridge
             {
                 emit("people.changed", JSONValue.emptyObject);   // the open photo's faces, now reachable
                 startSync();
+                // PW_TEST_DOWNLOAD=<computer photo id>: the desktop test build downloads that
+                // original once the link is up and logs the result (the resume-test hook,
+                // like PW_SHOT_SEND for uploads); no UI needed.
+                import std.process : environment;
+                import std.conv : to;
+
+                immutable td = environment.get("PW_TEST_DOWNLOAD", "");
+                if (td.length && !testDownloadDone)
+                {
+                    testDownloadDone = true;
+                    request("photo.download", JSONValue(["id": JSONValue(remoteBase + td.to!long)]), (r, e) {
+                        plog("test download: ", e.type == JSONType.null_ ? "ok " ~ r.toString() : "failed " ~ e.toString());
+                    });
+                }
             }
             else
             {
@@ -274,6 +291,7 @@ final class LocalBridge : Bridge
             case "library.dates":   timed("library.dates", 30, { dates(cb); }); return;
             case "photo.get":       get(num(params, "id"), cb); return;
             case "photo.upload":    upload(num(params, "id"), cb); return;
+            case "photo.download":  download(num(params, "id"), cb); return;
             case "album.list":      albums(cb); return;
             case "photo.faces":     faces(num(params, "id"), cb); return;
             case "people.list":     people(cb); return;
@@ -508,34 +526,43 @@ final class LocalBridge : Bridge
         done();
         if (want.length == 0 || !computer.connected)
             return;
-        JSONValue params = JSONValue.emptyObject;
-        params["ids"] = JSONValue(want);
-        computer.request("library.thumbs", params, (r, e) {
-            bool got;
-            if (e.type == JSONType.null_ && "thumbs" in r)
-                foreach (key, b64; r["thumbs"].object)
-                {
-                    immutable rid = key.to!long;
-                    string url;
-                    // Decode the base64 once and keep the JPEG on disk: the grid then loads
-                    // it as a file:// texture (EGL, off the GUI thread) instead of holding a
-                    // big base64 string in memory, and it persists across p2p drops.
-                    if (remoteThumbDir.length)
-                    {
-                        try
-                        {
-                            immutable fp = buildPath(remoteThumbDir, rid.to!string ~ ".jpg");
-                            write(fp, Base64.decode(b64.str));
-                            url = fileUrl(fp);
-                        }
-                        catch (Exception)
-                            url = "data:image/jpeg;base64," ~ b64.str;
-                    }
-                    else
-                        url = "data:image/jpeg;base64," ~ b64.str;
-                    thumbCache[rid] = url;
-                    got = true;
-                }
+        // In batches: a whole page's worth in one reply was 10 MB of base64 on the wire
+        // (2026-09-21, Waydroid rig), a single frame the phone has to hold and parse at
+        // once. A few dozen thumbnails per request keeps every frame small and lets the
+        // first ones show while the rest are still coming.
+        enum batch = 24;
+        for (size_t at = 0; at < want.length; at += batch)
+            fetchThumbs(want[at .. (at + batch < want.length ? at + batch : want.length)], served, remoteBase);
+    }
+
+    private void fetchThumbs(JSONValue[] want, JSONValue[] served, long remoteBase)
+    {
+        long[] ids;
+        foreach (w; want)
+            ids ~= w.integer;
+        bool got;
+        size_t received, rawBytes;
+        // Raw JPEG bytes over the piece stream (THUMB op) — no base64 anywhere: each
+        // thumbnail is written straight to disk and the grid loads it as a file:// texture
+        // (EGL, off the GUI thread); it persists across p2p drops. Transports without a
+        // byte pipe fall back to the legacy JSON path inside Bridge.fetchThumbs.
+        computer.fetchThumbs(ids, (long rid, const(ubyte)[] jpeg) {
+            if (jpeg.length == 0 || remoteThumbDir.length == 0)
+                return;
+            try
+            {
+                immutable fp = buildPath(remoteThumbDir, rid.to!string ~ ".jpg");
+                write(fp, jpeg);
+                thumbCache[rid] = fileUrl(fp);
+                got = true;
+                received++;
+                rawBytes += jpeg.length;
+            }
+            catch (Exception)
+            {
+            }
+        }, () {
+            plog("thumbs: ", received, "/", ids.length, " via pieces, ", rawBytes, " bytes raw (no base64)");
             // patch what was already served, so a reload / the viewer see the thumbs
             foreach (ref it; served)
                 if (it["id"].integer >= remoteBase && it["thumbUrl"].type == JSONType.null_)
@@ -657,6 +684,62 @@ final class LocalBridge : Bridge
                     item["fileUrl"] = item["thumbUrl"];
                 cb(item, JSONValue(null));
             });
+        });
+    }
+
+    /// Downloads the ORIGINAL of a computer photo to this phone (`remote-files/<id>.<ext>`
+    /// next to the settings), resumably over the pull pipe; the reply carries a file:// URL
+    /// the viewer can open, and the file stays for offline use. A local photo is already
+    /// here and just answers with its own path.
+    private void download(long id, ResultCb cb)
+    {
+        import std.path : extension;
+
+        if (id < remoteBase)
+        {
+            auto ph = index.get(id);
+            if (ph is null)
+            {
+                cb(JSONValue(null), error("not_found", "no such photo"));
+                return;
+            }
+            cb(JSONValue(["path": JSONValue(ph.path), "fileUrl": JSONValue(fileUrl(ph.path)), "size": JSONValue(0L)]), JSONValue(null));
+            return;
+        }
+        if (!computer.connected || !computer.canPull())
+        {
+            cb(JSONValue(null), error("no_computer", "the computer is not reachable for a download"));
+            return;
+        }
+        immutable rid = id - remoteBase;
+        JSONValue params = ["id": JSONValue(rid)];
+        // the extension comes from the computer's record, so the file opens as what it is
+        computer.request("photo.get", params, (r, e) {
+            if (e.type != JSONType.null_)
+            {
+                cb(JSONValue(null), e);
+                return;
+            }
+            string ext = ".jpg";
+            if (r.type == JSONType.object && "path" in r && r["path"].type == JSONType.string && r["path"].str.extension.length)
+                ext = r["path"].str.extension;
+            immutable dest = buildPath(remoteFileDir, rid.to!string ~ ext);
+            immutable sha = r.type == JSONType.object && "hash" in r && r["hash"].type == JSONType.string ? r["hash"].str : "";
+            import photowagon.mobile.p2pbridge : P2pBridge;
+            auto p2p = cast(P2pBridge) computer;
+            void done(JSONValue d, JSONValue de)
+            {
+                if (de.type != JSONType.null_)
+                {
+                    cb(JSONValue(null), de);
+                    return;
+                }
+                cb(JSONValue(["path": JSONValue(dest), "fileUrl": JSONValue(fileUrl(dest)), "size": d["size"]]), JSONValue(null));
+            }
+            if (p2p !is null && sha.length == 64)
+                p2p.downloadFile(rid, dest, sha, &done);   // pieces: verified, any order, any source
+            else
+                computer.downloadFile(rid, dest, &done);
         });
     }
 
@@ -931,7 +1014,15 @@ final class LocalBridge : Bridge
         auto hashes = cast(string[]) hb.hashes;
         foreach (i, id; pendingHashIds)
             if (i < hashes.length && hashes[i].length)
+            {
                 index.setHash(id, hashes[i]);
+                // a hashed photo of ours is a file we can SERVE by sha256 (the piece protocol)
+                import photowagon.mobile.p2pbridge : P2pBridge;
+
+                if (auto p2p = cast(P2pBridge) computer)
+                    if (auto ph = index.get(id))
+                        p2p.registerLocal(hashes[i], ph.path);
+            }
         pendingHashIds = null;
         offerBatch();
     }

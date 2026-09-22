@@ -110,6 +110,17 @@ private final class Client
 
 		authed = token.length == 0 || peer.startsWith("127.") || peer.startsWith("[::1]") || peer.startsWith("::1")
 			|| peer.startsWith("[::ffff:127.");
+		// TCP carries no device identity: a remote client can only prove the shared token,
+		// so it gets none of the per-device gate (revoked/paused) the p2p transport
+		// enforces. Phones never come in this way any more (ServerControl.startServing);
+		// a remote TCP client only exists when the listener was deliberately bound off
+		// loopback (a test rig) — say so loudly every time it happens.
+		if (!authed)
+		{
+			import vibe.core.log : logWarn;
+
+			logWarn("ipc: REMOTE TCP client %s — token-only auth, no per-device authorization; phones must use p2p", peer);
+		}
 	}
 
 	/// `daemon.auth {token}` is answered here; everything else waits for it.

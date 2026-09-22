@@ -212,3 +212,82 @@ void logTls(string who)
     import core.thread : Thread;
     plog("tls: ", who, " thread=", cast(void*) Thread.getThis(), " &tlsProbe=", cast(void*) &tlsProbe);
 }
+
+// ---- TLS pin: make the GC see this thread's thread-local variables ----------------------
+// On Android (LDC 1.42, bionic) druntime does not scan a thread's ELF TLS block, so a GC
+// object referenced only from a thread-local (vibe's per-thread TaskFiber/scheduler, any
+// module-level variable in D) gets collected while in use — the "OutOfMemoryError of
+// size_t.max" / yieldLock asserts right after the first collection (2026-09-21, Waydroid
+// rig). Until druntime is fixed, every D thread we run registers its TLS block as a GC
+// range: dl_iterate_phdr gives our .so's PT_TLS size and, on bionic >= API 29, the calling
+// thread's block address (dlpi_tls_data). A 4 KB conservative range per thread.
+version (Android)
+{
+    private extern (C)
+    {
+        struct ElfW_Phdr { uint p_type; uint p_flags; ulong p_offset; ulong p_vaddr; ulong p_paddr; ulong p_filesz; ulong p_memsz; ulong p_align; }
+        struct dl_phdr_info
+        {
+            ulong dlpi_addr;
+            const(char)* dlpi_name;
+            const(ElfW_Phdr)* dlpi_phdr;
+            ushort dlpi_phnum;
+            ulong dlpi_adds;
+            ulong dlpi_subs;
+            size_t dlpi_tls_modid;
+            void* dlpi_tls_data;
+        }
+        int dl_iterate_phdr(int function(dl_phdr_info*, size_t, void*) cb, void* data);
+    }
+    private enum PT_TLS = 7;
+
+    private struct TlsFound { void* base; size_t size; size_t modid; bool hit; }
+
+    private extern (C) int findOurTls(dl_phdr_info* info, size_t sz, void* data)
+    {
+        auto f = cast(TlsFound*) data;
+        immutable probe = cast(size_t) &tlsProbe;
+        foreach (i; 0 .. info.dlpi_phnum)
+        {
+            auto ph = info.dlpi_phdr[i];
+            if (ph.p_type != PT_TLS)
+                continue;
+            // ours is the module whose thread block contains our own TLS variable
+            if (info.dlpi_tls_data !is null)
+            {
+                immutable b = cast(size_t) info.dlpi_tls_data;
+                if (probe >= b && probe < b + ph.p_memsz)
+                {
+                    f.base = info.dlpi_tls_data;
+                    f.size = cast(size_t) ph.p_memsz;
+                    f.modid = info.dlpi_tls_modid;
+                    f.hit = true;
+                    return 1;
+                }
+            }
+        }
+        return 0;
+    }
+}
+
+/// Register the calling thread's TLS block with the GC (Android only; a no-op elsewhere).
+/// Call it first thing in every D thread that touches the GC. Returns what it found.
+string pinThreadTls(string who)
+{
+    version (Android)
+    {
+        import core.memory : GC;
+        TlsFound f;
+        dl_iterate_phdr(&findOurTls, &f);
+        if (!f.hit)
+        {
+            plog("tls: ", who, " — no PT_TLS block found for &tlsProbe=", cast(void*) &tlsProbe, " (dlpi_tls_data null?) — NOT pinned");
+            return "not pinned";
+        }
+        GC.addRange(f.base, f.size);
+        plog("tls: ", who, " pinned TLS block ", f.base, " +", f.size, " (modid ", f.modid, ") &tlsProbe=", cast(void*) &tlsProbe);
+        return "pinned";
+    }
+    else
+        return "n/a";
+}

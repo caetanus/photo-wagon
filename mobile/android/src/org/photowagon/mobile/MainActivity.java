@@ -55,6 +55,11 @@ public class MainActivity extends QtActivity
         instance = this;
         exportQtEnvironment();
         watchSyncStatus();
+        // Auto-sync on → the foreground service from the very first moment, before Qt is
+        // even up: it is what keeps this process off Android's cached-app freezer once the
+        // screen goes off or the user leaves, so the p2p link and the pushes keep going.
+        if (new File(new File(getFilesDir(), "settings"), "autosync").exists())
+            SyncService.standby(getApplicationContext());
         handle(getIntent());
     }
 
@@ -171,6 +176,8 @@ public class MainActivity extends QtActivity
             startScan();
         else if ("pwperm".equals(uri.getScheme()))
             requestPhotos();
+        else if ("pw".equals(uri.getScheme()))
+            save(uri.toString());   // a pairing code opened as a link (or sent by adb): same path as the QR
     }
 
     private void startScan()

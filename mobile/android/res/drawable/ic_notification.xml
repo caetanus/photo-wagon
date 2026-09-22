@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status-bar / notification icon: a flat WHITE silhouette on transparent — Android
+     tints the alpha, so a full-colour launcher would show as a white square. Same
+     Photo Wagon camera-wagon glyph as the launcher's monochrome layer, but reframed
+     from the 108dp adaptive-icon canvas into a tight 24dp box so it fills the bar. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <group android:scaleX="0.379" android:scaleY="0.379"
+        android:translateX="-8.47" android:translateY="-7.99">
+        <path android:fillColor="#FFFFFFFF" android:pathData="M36 35 35.4 32.8Q34.8 29.8 37.8 29.2L65.8 24.1Q68.8 23.5 69.4 26.5L71.2 35H66.6L65.3 29 40.4 33.6 40.8 35Z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M33 39H75Q82 39 82 46V63Q82 70 75 70H33Q26 70 26 63V46Q26 39 33 39ZM34 44Q31 44 31 47V59L42 48 54 60 62 52 77 65V47Q77 44 74 44Z" android:fillType="evenOdd" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M69 49a3.5 3.5 0 1 1-7 0 3.5 3.5 0 1 1 7 0Z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M43.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0ZM73.5 77a4.5 4.5 0 1 1-9 0 4.5 4.5 0 1 1 9 0Z" />
+    </group>
+</vector>

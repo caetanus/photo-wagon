@@ -52,11 +52,15 @@ ApplicationWindow {
         root._ui.win = { x: root.x, y: root.y, w: root.width, h: root.height }
         root._ui.folded = sidebar.foldSnapshot()
         root._ui.theme = root.themeMode
+        root._ui.zoom = root.zoom
+        root._ui.startupView = root.startupView
         library.saveUiState(JSON.stringify(root._ui))
     }
     Component.onCompleted: {
         try { root._ui = JSON.parse(library.uiState) || {} } catch (e) { root._ui = {} }
         if (root._ui.theme === "mac" || root._ui.theme === "system") root.themeMode = root._ui.theme
+        if (typeof root._ui.zoom === "number" && root._ui.zoom >= 72 && root._ui.zoom <= 320) root.zoom = root._ui.zoom
+        if (["years", "months", "days", "all"].indexOf(root._ui.startupView) >= 0) { root.startupView = root._ui.startupView; root.mode = root.startupView }
         library.refreshSystemAccent()
         const w = root._ui.win
         if (w) {
@@ -73,6 +77,7 @@ ApplicationWindow {
     onHeightChanged: root._scheduleSaveUi()
     onXChanged: root._scheduleSaveUi()
     onYChanged: root._scheduleSaveUi()
+    onZoomChanged: root._scheduleSaveUi()
     Connections { target: sidebar; function onFoldsChanged() { root._scheduleSaveUi() } }
 
     palette {
@@ -164,6 +169,7 @@ ApplicationWindow {
     property string mode: "all"            // "years" | "months" | "days" | "all"
     readonly property bool viewing: current !== null
     property int zoom: 176
+    property string startupView: "all"     // Preferences → View: which view the library opens in
     // the viewer alone, over the whole screen (F / F11 / the toolbar button; Escape leaves)
     property bool fullscreen: false
     // Set the window state directly: a binding on `visibility` is overwritten the
@@ -177,6 +183,7 @@ ApplicationWindow {
     // Escape / F / F11 leave full screen whatever has the focus.
     Shortcut { sequences: ["Escape", "F11"]; context: Qt.ApplicationShortcut; enabled: root.fullscreen && viewer.zoom === 1 && !viewer.infoOpen; onActivated: root.fullscreen = false }
     Shortcut { sequence: "F"; context: Qt.ApplicationShortcut; enabled: root.viewing; onActivated: root.fullscreen = !root.fullscreen }
+    Shortcut { sequence: "Ctrl+,"; context: Qt.ApplicationShortcut; onActivated: settingsDialog.open() }
 
     function pathsOf(ids) {
         const out = []
@@ -545,20 +552,8 @@ ApplicationWindow {
                 }
                 ToolIcon {
                     icon_: icons.appearance
-                    ToolTip.text: "Appearance"; ToolTip.visible: hovered
-                    onClicked: appearanceMenu.popup()
-                    Menu {
-                        id: appearanceMenu
-                        MenuItem { enabled: false; text: "Theme" }
-                        MenuItem {
-                            text: (root.themeMode === "mac" ? "✓  " : "      ") + "Mac"
-                            onTriggered: { root.themeMode = "mac"; root._scheduleSaveUi() }
-                        }
-                        MenuItem {
-                            text: (root.themeMode === "system" ? "✓  " : "      ") + "System (desktop)"
-                            onTriggered: { root.themeMode = "system"; root._scheduleSaveUi() }
-                        }
-                    }
+                    ToolTip.text: "Settings (Ctrl+,)"; ToolTip.visible: hovered
+                    onClicked: settingsDialog.open()
                 }
             }
         }
@@ -771,6 +766,19 @@ ApplicationWindow {
         width: 380
         onAddTo: (albumId, ids) => library.addToAlbum(albumId, JSON.stringify(ids))
         onCreateNew: (name, ids) => library.createAlbum(name, JSON.stringify(ids))
+    }
+
+    SettingsDialog {
+        id: settingsDialog
+        theme: root.theme
+        icons: root.icons
+        themeMode: root.themeMode
+        thumbSize: root.zoom
+        startupView: root.startupView
+        onPickTheme: (m) => { root.themeMode = m; root._scheduleSaveUi() }
+        onPickThumbSize: (z) => { root.zoom = z; root._scheduleSaveUi() }
+        onPickView: (v) => { root.startupView = v; root.mode = v; library.filterDate(0, 0, 0); root._scheduleSaveUi() }
+        onManageComputers: peersPanel.open()
     }
 
     KeywordDialog {

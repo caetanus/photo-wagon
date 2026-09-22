@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
 import QtQuick.Effects
+import QtQuick.Shapes
 
 // A small Telegram-style editor on the phone: live filters and adjustments over the
 // photo (GPU, via MultiEffect — the phone has no libvips), rotate and flip, a freehand
@@ -69,7 +70,6 @@ Rectangle {
         strokes = []; strokesChanged()
         undoStack = []; undoCount = 0
         drawing = false; curPts = []
-        if (canvas.available) canvas.requestPaint()
     }
     onPhotoChanged: reset()
 
@@ -114,7 +114,7 @@ Rectangle {
     property bool drawing: false
     property var curPts: []
     function beginStroke() { drawing = true; curPts = [] }
-    function addPoint(nx, ny) { curPts.push({ x: nx, y: ny }); canvas.requestPaint() }
+    function addPoint(nx, ny) { curPts.push({ x: nx, y: ny }); curPtsChanged() }
     function endStroke() {
         if (drawing && curPts.length) {
             strokes.push({ color: String(penColor), width: penWidth, points: curPts.slice() })
@@ -214,31 +214,51 @@ Rectangle {
                         GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, editor.vignette * 0.55) }
                     }
                 }
-                // pen strokes, on top of everything (and captured by grabToImage)
-                Canvas {
+                // pen strokes, on top of everything (and captured by grabToImage).
+                // GPU-rendered: each stroke is a Shape (curve renderer), never a CPU Canvas
+                // that re-rasterises every point. `polyOf` maps 0..1 points to pixels.
+                Item {
                     id: canvas
                     anchors.fill: parent
-                    onPaint: {
-                        var ctx = getContext("2d")
-                        ctx.clearRect(0, 0, width, height)
-                        ctx.lineJoin = "round"; ctx.lineCap = "round"
-                        function drawStroke(color, w, pts) {
-                            if (!pts || !pts.length) return
-                            ctx.strokeStyle = color
-                            ctx.lineWidth = Math.max(1, w * width)
-                            ctx.beginPath()
-                            ctx.moveTo(pts[0].x * width, pts[0].y * height)
-                            if (pts.length === 1)
-                                ctx.lineTo(pts[0].x * width + 0.1, pts[0].y * height + 0.1)
-                            else
-                                for (var j = 1; j < pts.length; j++)
-                                    ctx.lineTo(pts[j].x * width, pts[j].y * height)
-                            ctx.stroke()
+                    function requestPaint() {}   // no-op shim: the Shapes repaint from bindings
+                    function polyOf(pts) {
+                        var out = []
+                        if (!pts || !pts.length)
+                            return out
+                        for (var j = 0; j < pts.length; j++)
+                            out.push(Qt.point(pts[j].x * width, pts[j].y * height))
+                        if (out.length === 1)   // a single tap: a hair-length segment so it shows
+                            out.push(Qt.point(pts[0].x * width + 0.1, pts[0].y * height + 0.1))
+                        return out
+                    }
+                    Repeater {
+                        model: editor.strokes
+                        Shape {
+                            required property var modelData
+                            anchors.fill: parent
+                            preferredRendererType: Shape.CurveRenderer
+                            ShapePath {
+                                strokeColor: modelData.color
+                                strokeWidth: Math.max(1, modelData.width * canvas.width)
+                                fillColor: "transparent"
+                                capStyle: ShapePath.RoundCap
+                                joinStyle: ShapePath.RoundJoin
+                                PathPolyline { path: canvas.polyOf(modelData.points) }
+                            }
                         }
-                        for (var i = 0; i < editor.strokes.length; i++)
-                            drawStroke(editor.strokes[i].color, editor.strokes[i].width, editor.strokes[i].points)
-                        if (editor.drawing)
-                            drawStroke(String(editor.penColor), editor.penWidth, editor.curPts)
+                    }
+                    Shape {   // the stroke currently under the pen
+                        anchors.fill: parent
+                        visible: editor.drawing
+                        preferredRendererType: Shape.CurveRenderer
+                        ShapePath {
+                            strokeColor: editor.penColor
+                            strokeWidth: Math.max(1, editor.penWidth * canvas.width)
+                            fillColor: "transparent"
+                            capStyle: ShapePath.RoundCap
+                            joinStyle: ShapePath.RoundJoin
+                            PathPolyline { path: editor.drawing ? canvas.polyOf(editor.curPts) : [] }
+                        }
                     }
                 }
                 // pen input — only while the Draw tool is active, so it never blocks the rest

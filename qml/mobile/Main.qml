@@ -188,6 +188,10 @@ ApplicationWindow {
                 id: linkChip
                 readonly property int remaining: root.syncData.pending || 0
                 readonly property bool up: library.computerConnected
+                // Google-Photos style: when everything is home and quiet, the banner steps
+                // out of the way so the grid runs full height; it returns the moment there is
+                // something to say (offline, or photos still on their way).
+                visible: !(linkChip.up && linkChip.remaining === 0)
                 Layout.fillWidth: true
                 Layout.leftMargin: 10; Layout.rightMargin: 10
                 Layout.topMargin: 8; Layout.bottomMargin: 4

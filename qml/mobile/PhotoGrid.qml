@@ -1,185 +1,318 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Material
 
-// Thumbnail grid over one accumulated page. `page` is the parsed library.page
-// object: {total, offset, items}. Asks for more when the viewport nears the end.
+// A date-grouped photo timeline, the way Google Photos / Apple Photos read: photos
+// under a per-day header ("Today", "Sat, Sep 20"), square tiles edge to edge, one
+// seamless scroll. `page` is the parsed library.page {total, offset, items}; every
+// item already carries `takenTs` (the merge that builds the page sorts on it), so the
+// grouping is done here with no backend change.
 //
-// The grid is driven by a ListModel that is RECONCILED against each new page,
-// never replaced. Binding GridView.model straight to `page.items` rebuilt every
-// delegate — and re-decoded every thumbnail — each time the library published a
-// page, which during a scan is every few seconds ("atualizar a biblioteca
-// re-renderiza os models, deixa o app instável"). Here an unchanged prefix keeps
-// its delegates: only new rows are appended, a flipped `sent` is patched in
-// place, and the tail is rebuilt only from the first row that actually differs.
+// PERFORMANCE (kept from the flat GridView it replaces): the ListView holds ROWS —
+// a header row, or a row of up to `cols` tiles — so it virtualises and RECYCLES row
+// delegates (reuseItems), and only the rows within a screenful are ever built. The
+// `rows` model is RECONCILED against each new page, never rebuilt: appended photos
+// keep every earlier row's delegates (no thumbnail re-decode during a scan, which was
+// the "atualizar a biblioteca deixa o app instável" bug), and a thumbnail that streams
+// in late patches only its own row's tiles in place.
 Item {
     id: grid
     required property QtObject theme
     property var page: ({ total: 0, offset: 0, items: [] })
     readonly property bool hasMore: page.offset < page.total
     property bool requesting: false
-    // the "already on the computer" check mark, built once and shared by every cell
+    // fast-scroll date scrubber state
+    property bool scrubbing: false
+    property bool _scrubActive: false
+    property string scrubText: ""
+
+    // three across on a phone, more on a tablet; square cells, flush to the edges
+    readonly property int gap: 2
+    readonly property int cols: Math.max(3, Math.floor(width / 150))
+    readonly property real cellSize: (width - (cols - 1) * gap) / cols
+
+    // built-once glyphs shared by every tile
     readonly property string checkIcon: "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>')
-    // A crisp filled play triangle — the same glyph the viewer uses, not the "▶" char.
     readonly property string playGlyph: "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#ffffff"><path d="M8 5v14l11-7z"/></svg>')
 
     signal loadMore()
     signal open(int id)
 
-    onPageChanged: { requesting = false; syncModel() }
+    onPageChanged: { requesting = false; syncRows() }
+    onColsChanged: rebuildRows()   // a rotation / width change re-chunks the rows
 
-    // Reconcile `model` with page.items, touching as few rows as possible.
-    function syncModel() {
-        const items = (page && page.items) ? page.items : []
-        const m = items.length
-        let i = 0
-        // shared prefix: same id in the same slot — keep the delegate, patch what changed
-        // (its `sent` flag, and a thumbUrl that arrived late — remote thumbnails stream in
-        // from the computer after the page is first shown, so patch them in place instead
-        // of leaving the cell blank until it is rebuilt).
-        while (i < model.count && i < m && model.get(i).pid === items[i].id) {
-            if (model.get(i).sent !== (items[i].sent === true))
-                model.setProperty(i, "sent", items[i].sent === true)
-            const nt = items[i].thumbUrl || ""
-            if (model.get(i).thumbUrl !== nt)
-                model.setProperty(i, "thumbUrl", nt)
-            i++
-        }
-        // drop whatever no longer matches from the first divergence on
-        while (model.count > i)
-            model.remove(model.count - 1)
-        // append the rest (new photos, or the rebuilt tail)
-        for (; i < m; i++)
-            model.append({ pid: items[i].id,
-                           thumbUrl: items[i].thumbUrl || "",
-                           sent: items[i].sent === true,
-                           video: items[i].video === true,
-                           duration: items[i].duration || 0 })
+    // ---- day grouping -----------------------------------------------------------
+    function dayKey(ts) { const d = new Date(ts); return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate() }
+    function dayLabel(ts) {
+        const d = new Date(ts), now = new Date()
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+        const that = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+        const diff = Math.round((today.getTime() - that.getTime()) / 86400000)
+        if (diff === 0) return "Today"
+        if (diff === 1) return "Yesterday"
+        const wd = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()]
+        const mo = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()]
+        const base = wd + ", " + mo + " " + d.getDate()
+        return d.getFullYear() === now.getFullYear() ? base : base + " " + d.getFullYear()
     }
 
-    ListModel { id: model }
+    // items -> [ {kind:"h",key,label}, {kind:"r",key,tiles:[…]} … ], chunked by `cols`
+    function buildRows() {
+        const items = (page && page.items) ? page.items : []
+        const out = []
+        let i = 0
+        while (i < items.length) {
+            const ts = items[i].takenTs || 0
+            const key = dayKey(ts)
+            out.push({ kind: "h", key: key, label: dayLabel(ts), tiles: [] })
+            const day = []
+            while (i < items.length && dayKey(items[i].takenTs || 0) === key) { day.push(items[i]); i++ }
+            for (let j = 0; j < day.length; j += cols) {
+                const tiles = []
+                for (let k = j; k < Math.min(j + cols, day.length); k++) {
+                    const it = day[k]
+                    tiles.push({ pid: it.id, thumbUrl: it.thumbUrl || "", sent: it.sent === true,
+                                 video: it.video === true, duration: it.duration || 0 })
+                }
+                out.push({ kind: "r", key: key + "#" + j, label: "", tiles: tiles })
+            }
+        }
+        return out
+    }
+
+    function sameTiles(a, b) {
+        if (!a || !b || a.length !== b.length) return false
+        for (let n = 0; n < a.length; n++) if (a[n].pid !== b[n].pid) return false
+        return true
+    }
+    function tilesContentDiffer(a, b) {
+        for (let n = 0; n < a.length; n++)
+            if (a[n].thumbUrl !== b[n].thumbUrl || a[n].sent !== b[n].sent) return true
+        return false
+    }
+
+    // Reconcile `rows` with the freshly computed rows, touching as few as possible.
+    function syncRows() {
+        const nr = buildRows()
+        let i = 0
+        // shared prefix: same header/row structure stays; a row whose tiles only changed
+        // thumbUrl/sent is patched in place (one row's ≤cols tiles re-decode, not the grid).
+        while (i < rows.count && i < nr.length) {
+            const cur = rows.get(i)
+            if (cur.kind !== nr[i].kind || cur.key !== nr[i].key) break
+            if (cur.kind === "r") {
+                if (!sameTiles(cur.tiles, nr[i].tiles)) break
+                if (tilesContentDiffer(cur.tiles, nr[i].tiles)) rows.setProperty(i, "tiles", nr[i].tiles)
+            }
+            i++
+        }
+        while (rows.count > i) rows.remove(rows.count - 1)
+        for (; i < nr.length; i++) rows.append(nr[i])
+    }
+    function rebuildRows() { rows.clear(); syncRows() }
+
+    ListModel { id: rows; dynamicRoles: true }
 
     Rectangle { anchors.fill: parent; color: theme.bg }
 
-    GridView {
+    ListView {
         id: view
         anchors.fill: parent
-        anchors.margins: 2
         clip: true
-        // three across on a phone, more on a tablet; square cells
-        cellWidth: Math.floor(width / Math.max(3, Math.floor(width / 150)))
-        cellHeight: cellWidth
-        model: model
-        // Scroll feel: Qt's defaults (maxVel 2500, decel 1500) feel heavy next to native
-        // Android. A higher top speed lets a hard flick fly, and less friction lets it glide,
-        // so the grid keeps momentum instead of braking under your finger.
+        model: rows
+        reuseItems: true
         maximumFlickVelocity: 9000
         flickDeceleration: 1100
-        // Flyweight: keep in memory only what is on screen plus one screenful of buffer
-        // above and below ("as visíveis mais 100% de view em offscreen"). GridView only
-        // instantiates delegates within cacheBuffer of the viewport, so bounding it to the
-        // view's own height caps how many thumbnails are decoded at once — on a 4000-photo
-        // library the rest cost nothing until they scroll near.
+        // keep one screenful of rows above and below live; the rest cost nothing
         cacheBuffer: Math.max(0, Math.round(height))
-
+        boundsBehavior: Flickable.StopAtBounds
         ScrollBar.vertical: ScrollBar { }
 
-        delegate: Item {
+        // one tile — square crop, video badge, duration, "on the computer" check
+        component Tile: Item {
             id: cell
-            required property int pid
-            required property string thumbUrl
-            required property bool sent
-            required property bool video
-            required property int duration
-            width: view.cellWidth
-            height: view.cellHeight
-            // A plain (un-clipped, un-rounded) background so a loading cell is not jarring.
-            // No rounded corners and NO clip here on purpose: clip:true forces each cell into
-            // its own draw call, which breaks Qt Quick's batching of the thumbnails and is the
-            // main thing that made the grid scroll like glue. Square thumbnails, like most
-            // photo apps, let the whole grid draw in a few batches.
-            Rectangle {
-                anchors.fill: parent
-                anchors.margins: 1.5
-                color: theme.panelAlt
-            }
+            required property var modelData
+            width: grid.cellSize
+            height: grid.cellSize
+            Rectangle { anchors.fill: parent; color: theme.panelAlt }
             Image {
                 anchors.fill: parent
-                anchors.margins: 1.5
-                source: cell.thumbUrl
-                asynchronous: true
-                cache: true
-                // PreserveAspectCrop already crops within the item's own bounds — no clip needed.
-                // Decode near the on-screen size (~360 px on a 1080-wide 3-across grid), not 512.
+                source: cell.modelData.thumbUrl
+                asynchronous: true; cache: true
                 fillMode: Image.PreserveAspectCrop
-                sourceSize.width: 384
-                sourceSize.height: 384
+                sourceSize.width: 384; sourceSize.height: 384
                 smooth: true
             }
-            // video: a play glyph (the frame thumbnail arrives once the computer has it)
             Rectangle {
-                visible: cell.video
+                visible: cell.modelData.video
                 anchors.centerIn: parent
                 width: 38; height: 38; radius: 19
                 color: Qt.rgba(0, 0, 0, 0.42)
-                border.width: 1.5
-                border.color: Qt.rgba(1, 1, 1, 0.85)
+                border.width: 1.5; border.color: Qt.rgba(1, 1, 1, 0.85)
                 Image {
-                    anchors.centerIn: parent
-                    anchors.horizontalCenterOffset: 1   // optical centre of a triangle
-                    source: grid.playGlyph
-                    sourceSize.width: 17; sourceSize.height: 17
+                    anchors.centerIn: parent; anchors.horizontalCenterOffset: 1
+                    source: grid.playGlyph; sourceSize.width: 17; sourceSize.height: 17
                 }
             }
             Rectangle {
-                visible: cell.video && cell.duration > 0
+                visible: cell.modelData.video && cell.modelData.duration > 0
                 anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 6
                 width: vdur.implicitWidth + 8; height: 15; radius: 3
                 color: Qt.rgba(0, 0, 0, 0.6)
                 Text {
-                    id: vdur
-                    anchors.centerIn: parent
-                    text: Math.floor(cell.duration / 60000) + ":" + ("0" + Math.floor(cell.duration / 1000) % 60).slice(-2)
+                    id: vdur; anchors.centerIn: parent
+                    text: Math.floor(cell.modelData.duration / 60000) + ":" + ("0" + Math.floor(cell.modelData.duration / 1000) % 60).slice(-2)
                     color: "white"; font.pixelSize: 9
                 }
             }
-            // already on the computer: a small check in the corner
             Rectangle {
-                visible: cell.sent
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.margins: 6.5
+                visible: cell.modelData.sent
+                anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 6.5
                 width: 18; height: 18; radius: 9
                 color: Qt.rgba(0, 0, 0, 0.45)
                 Image {
                     anchors.centerIn: parent
-                    source: grid.checkIcon   // one shared, pre-built data URL, not rebuilt per cell
-                    sourceSize.width: 11; sourceSize.height: 11
+                    source: grid.checkIcon; sourceSize.width: 11; sourceSize.height: 11
                 }
             }
-            TapHandler { onTapped: grid.open(cell.pid) }
+            TapHandler { onTapped: grid.open(cell.modelData.pid) }
+        }
+
+        // a row: a day header, or up to `cols` tiles
+        delegate: Item {
+            id: rowItem
+            required property string kind
+            required property string key
+            required property var tiles
+            required property string label
+            width: view.width
+            height: kind === "h" ? 46 : grid.cellSize + grid.gap
+
+            // ---- day header
+            Label {
+                visible: rowItem.kind === "h"
+                anchors.left: parent.left; anchors.bottom: parent.bottom
+                anchors.leftMargin: 4; anchors.bottomMargin: 8
+                text: rowItem.kind === "h" ? rowItem.label : ""
+                color: theme.text
+                font.pixelSize: 15; font.weight: Font.DemiBold; font.letterSpacing: -0.2
+            }
+            // ---- tile row
+            Row {
+                visible: rowItem.kind === "r"
+                spacing: grid.gap
+                Repeater {
+                    model: rowItem.kind === "r" ? rowItem.tiles : 0
+                    delegate: Tile { }
+                }
+            }
         }
 
         footer: Item {
             width: view.width
-            height: grid.hasMore ? 56 : 24
-            Button {
+            height: grid.hasMore ? 44 : 16
+            BusyIndicator {
                 anchors.centerIn: parent
-                visible: grid.hasMore
-                text: grid.requesting ? "Loading…" : "Load more (" + (grid.page.total - grid.page.offset) + " left)"
-                enabled: !grid.requesting
-                onClicked: grid.requestMore()
+                running: grid.requesting && grid.hasMore
+                visible: running
+                implicitWidth: 26; implicitHeight: 26
+                Material.accent: grid.theme.accent
             }
         }
 
+        onContentYChanged: if (atYEnd && grid.hasMore && count > 0) grid.requestMore()
         onAtYEndChanged: if (atYEnd && grid.hasMore && count > 0) grid.requestMore()
     }
 
     Label {
         anchors.centerIn: parent
-        visible: view.count === 0
+        visible: rows.count === 0
         text: grid.page.total === 0 ? "No photos yet — allow access to your photos, or wait for the scan." : "Loading…"
-        color: theme.muted
-        font.pixelSize: 15
+        color: theme.muted; font.pixelSize: 15
+        width: parent.width - 48; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap
+    }
+
+    // ---- fast-scroll date scrubber (right edge, Google-Photos style) --------------
+    Timer { id: scrubHide; interval: 1100; onTriggered: grid._scrubActive = false }
+    Connections {
+        target: view
+        function onMovingChanged() {
+            if (view.moving) { grid._scrubActive = true; scrubHide.stop() }
+            else if (!grid.scrubbing) scrubHide.restart()
+        }
+        function onContentYChanged() {
+            if (view.moving || grid.scrubbing) grid._scrubActive = true
+            grid.scrubText = grid.computeScrubDate()
+        }
+    }
+    // the month + year of the row at the top of the viewport
+    function computeScrubDate() {
+        const idx = view.indexAt(4, view.contentY + 6)
+        if (idx < 0 || idx >= rows.count) return grid.scrubText
+        const r = rows.get(idx)
+        if (!r || !r.key) return grid.scrubText
+        const p = ("" + r.key).split("#")[0].split("-")
+        const d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]))
+        const mo = ["January", "February", "March", "April", "May", "June",
+                    "July", "August", "September", "October", "November", "December"][d.getMonth()]
+        return mo + " " + d.getFullYear()
+    }
+
+    Item {
+        id: scrubber
+        anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom
+        width: 44
+        visible: opacity > 0.01
+        enabled: view.contentHeight > view.height * 1.6
+        opacity: (scrubber.enabled && (grid._scrubActive || grid.scrubbing)) ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: 180 } }
+
+        readonly property real trackTop: 10
+        readonly property real trackH: height - 20
+        readonly property real frac: view.visibleArea.heightRatio < 1
+                                     ? view.visibleArea.yPosition / (1 - view.visibleArea.heightRatio) : 0
+
+        // date bubble, left of the handle, while actually dragging
+        Rectangle {
+            visible: grid.scrubbing
+            anchors.verticalCenter: handle.verticalCenter
+            anchors.right: handle.left; anchors.rightMargin: 8
+            height: 34; width: bubbleText.implicitWidth + 24; radius: 17
+            color: grid.theme.accent
+            Label {
+                id: bubbleText; anchors.centerIn: parent
+                text: grid.scrubText; color: grid.theme.accentText
+                font.pixelSize: 14; font.weight: Font.DemiBold
+            }
+        }
+
+        Rectangle {
+            id: handle
+            width: 34; height: 46; radius: 8
+            x: scrubber.width - width - 5
+            y: scrubber.trackTop + scrubber.frac * (scrubber.trackH - height)
+            color: grid.scrubbing ? grid.theme.accent : grid.theme.panel
+            border.color: grid.theme.accent; border.width: 1.5
+            Column {
+                anchors.centerIn: parent; spacing: 3
+                Repeater {
+                    model: 3
+                    delegate: Rectangle { width: 12; height: 1.5; radius: 1; color: grid.scrubbing ? grid.theme.accentText : grid.theme.accent }
+                }
+            }
+            // target:null → never moves the handle (it tracks the scroll via `frac`); it only
+            // reads the finger and drives contentY, so there is no binding fight.
+            DragHandler {
+                target: null
+                xAxis.enabled: false; yAxis.enabled: true
+                onActiveChanged: { grid.scrubbing = active; if (!active) scrubHide.restart() }
+                onCentroidChanged: if (active) {
+                    const topScene = scrubber.mapToItem(null, 0, scrubber.trackTop).y
+                    const f = Math.max(0, Math.min(1, (centroid.scenePosition.y - topScene) / (scrubber.trackH - handle.height)))
+                    view.contentY = f * Math.max(1, view.contentHeight - view.height)
+                }
+            }
+        }
     }
 
     function requestMore() {

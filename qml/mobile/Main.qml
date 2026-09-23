@@ -322,6 +322,7 @@ ApplicationWindow {
         anchors.fill: parent
         theme: root.theme
         photo: root.current
+        strip: root.pageData.items
         visible: root.current !== null
         canSend: true
         facesOnHover: false

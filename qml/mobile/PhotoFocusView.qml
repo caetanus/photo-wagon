@@ -19,6 +19,9 @@ Rectangle {
     /// Phone: show "Send to computer" (enabled when a computer is reachable).
     property bool canSend: false
     property bool sendEnabled: false
+    /// The photos around this one, for the bottom filmstrip: [{id, thumbUrl}, …]
+    /// (the grid's loaded page — no extra backend round-trip).
+    property var strip: []
 
     signal closed()
     signal edit()
@@ -68,7 +71,7 @@ Rectangle {
         Label { id: chl; anchors.centerIn: parent; text: parent.text_; color: viewer.theme.accent; font.pixelSize: 12; font.weight: Font.Medium }
     }
     onVisibleChanged: if (visible) forceActiveFocus()
-    onPhotoChanged: resetZoom()   // a new photo always opens un-zoomed
+    onPhotoChanged: { resetZoom(); Qt.callLater(centerStrip) }   // a new photo always opens un-zoomed
 
     Keys.onPressed: (event) => {
         if (event.key === Qt.Key_Escape) { viewer.closed(); event.accepted = true }
@@ -402,12 +405,63 @@ Rectangle {
         }
     }
 
+    // Bottom filmstrip: scrub the surrounding photos, the current one ringed; tap to jump.
+    // Uses the grid's already-loaded page, so it costs no extra backend round-trip.
+    Rectangle {
+        id: filmstripBar
+        visible: viewer.strip && viewer.strip.length > 1 && !viewer.zoomed
+        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+        height: 60
+        color: Qt.rgba(0, 0, 0, 0.62)
+        ListView {
+            id: filmstrip
+            anchors.fill: parent
+            orientation: ListView.Horizontal
+            model: viewer.strip
+            spacing: 3
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            leftMargin: viewer.width / 2 - 22
+            rightMargin: viewer.width / 2 - 22
+            delegate: Item {
+                id: fsCell
+                required property var modelData
+                readonly property bool isCurrent: viewer.photo && modelData.id === viewer.photo.id
+                width: fsCell.isCurrent ? 50 : 42
+                height: filmstrip.height
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: fsCell.isCurrent ? 48 : 38
+                    height: width
+                    radius: 5
+                    color: viewer.theme.panelAlt
+                    border.color: fsCell.isCurrent ? viewer.theme.accent : "transparent"
+                    border.width: 2
+                    clip: true
+                    Image {
+                        anchors.fill: parent
+                        source: fsCell.modelData.thumbUrl || ""
+                        visible: status === Image.Ready
+                        fillMode: Image.PreserveAspectCrop
+                        sourceSize.width: 108; sourceSize.height: 108
+                    }
+                }
+                TapHandler { onTapped: library.openPhoto(fsCell.modelData.id) }
+            }
+        }
+    }
+    function centerStrip() {
+        if (!photo || !strip || !strip.length) return
+        for (let i = 0; i < strip.length; i++)
+            if (strip[i].id === photo.id) { filmstrip.positionViewAtIndex(i, ListView.Center); return }
+    }
+
     // Metadata scrim: date on top, the rest small; the send button at the right.
     // A gradient from transparent up into the photo, not a hard opaque bar.
     Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.bottom: parent.bottom
+        anchors.bottom: filmstripBar.visible ? filmstripBar.top : parent.bottom
         height: 116
         gradient: Gradient {
             GradientStop { position: 0; color: "transparent" }

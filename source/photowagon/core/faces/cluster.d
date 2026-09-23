@@ -20,8 +20,10 @@ import std.math : sqrt;
 
 import photowagon.core.db.sqlite : Database;
 
-/// Centroid cosine needed to join an existing person.
-enum joinThreshold = 0.45f;
+/// Centroid cosine needed to join an existing person. Raised from 0.45: with the r100
+/// gap between different people being large, a stricter join trims false positives (the
+/// red flag) at the cost of a little more fragmentation the user can merge by hand.
+enum joinThreshold = 0.5f;
 /// Centroid cosine at which two persons are the same one. With ArcFace r100
 /// different people sit far lower than SFace (co-occurring mean 0.075, p95 0.30),
 /// and the merge step skips any pair that co-occurs in a photo (`apart`), so we
@@ -39,8 +41,9 @@ enum keepScore = 0.75f;
 enum minMargin = 0.05f;
 
 // --- face-level recognition (matchNamedByFaces) ---
-/// A neighbour face must be at least this similar to count as a vote.
-enum faceVoteMin = 0.40f;
+/// A neighbour face must be at least this similar to count as a vote (raised from 0.40 so
+/// a face is recognised onto a named person only on stronger evidence).
+enum faceVoteMin = 0.45f;
 /// A single very-similar neighbour is enough on its own; below this a person
 /// needs two or more neighbours agreeing.
 enum faceVoteStrong = 0.55f;
@@ -51,7 +54,7 @@ enum faceVoteMargin = 1.25f;
 enum faceVoteK = 40;
 
 /// Bump when the rule changes: libraries clustered by an older rule are redone.
-enum clusterVersion = 8;
+enum clusterVersion = 9;
 
 bool eligible(float widthPx, float score) pure nothrow @nogc
 {

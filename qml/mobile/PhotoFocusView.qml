@@ -238,7 +238,7 @@ Rectangle {
                 Rectangle {
                     anchors.fill: parent
                     color: "transparent"
-                    border.color: modelData.name ? theme.accent : "#ffd54f"
+                    border.color: modelData.name ? theme.accent : "#22d3ee"
                     border.width: 2
                     radius: 3
                 }
@@ -249,7 +249,7 @@ Rectangle {
                     width: tag.implicitWidth + 12
                     height: tag.implicitHeight + 6
                     radius: 3
-                    color: modelData.name ? theme.accent : "#ffd54f"
+                    color: modelData.name ? theme.accent : "#22d3ee"
                     Label {
                         id: tag
                         anchors.centerIn: parent

@@ -30,22 +30,24 @@ ApplicationWindow {
     Material.background: theme.bg
     Material.foreground: theme.text
 
-    // Wagon — bold local-first brand: terracotta + ink on cream, with a deep-green
-    // "your photos live at home" link chip as the signature element.
+    // Neutral, photo-first palette: near-black / white grounds and neutral greys so the
+    // pictures carry the colour, with a cool indigo accent (distinct from the generic
+    // system blue) and a teal "your photos live at home" link chip. Amber stays only for
+    // interruptions.
     readonly property QtObject theme: QtObject {
-        readonly property color bg: root.dark ? "#17120f" : "#faf5ee"
-        readonly property color panel: root.dark ? "#201813" : "#fffefb"
-        readonly property color panelAlt: root.dark ? "#2a201a" : "#f1e8dc"
-        readonly property color border: root.dark ? "#33271f" : "#ece2d5"
-        readonly property color text: root.dark ? "#f4ece2" : "#1b1613"
-        readonly property color muted: root.dark ? "#a2917f" : "#8a7d70"
-        readonly property color accent: root.dark ? "#e2623a" : "#d24e2a"
+        readonly property color bg: root.dark ? "#0c0c0e" : "#ffffff"
+        readonly property color panel: root.dark ? "#161619" : "#ffffff"
+        readonly property color panelAlt: root.dark ? "#1f1f24" : "#eeeef1"
+        readonly property color border: root.dark ? "#2a2a30" : "#e3e3e8"
+        readonly property color text: root.dark ? "#f3f3f6" : "#17171b"
+        readonly property color muted: root.dark ? "#8b8b95" : "#8a8a91"
+        readonly property color accent: root.dark ? "#6f6cf7" : "#5451d6"
         readonly property color accentText: "#ffffff"
-        readonly property color ok: root.dark ? "#4bbd82" : "#2f7d53"
-        readonly property color warn: "#e08a2c"
-        // the link-state chip: a signature green pill ("mora em casa")
-        readonly property color home: root.dark ? "#0f5a4d" : "#124b40"
-        readonly property color homeText: "#eafff6"
+        readonly property color ok: root.dark ? "#37d29b" : "#12a06a"
+        readonly property color warn: "#e0a12c"
+        // the link-state chip: a cool teal pill when the desktop is reachable
+        readonly property color home: root.dark ? "#0e7c8c" : "#0e7490"
+        readonly property color homeText: "#eafcff"
     }
     Icons { id: icons }
 

@@ -41,6 +41,32 @@ Rectangle {
             verticalAlignment: Image.AlignVCenter
         }
     }
+    // one line of the swipe-up detail sheet: a muted label over its value, hidden when empty
+    component DetailRow: RowLayout {
+        id: drow
+        property string icon_: ""
+        property string label: ""
+        property string value: ""
+        visible: value.length > 0
+        Layout.fillWidth: true
+        spacing: 12
+        Image {
+            source: icons.tint(drow.icon_, viewer.theme.muted)
+            sourceSize.width: 17; sourceSize.height: 17
+            Layout.alignment: Qt.AlignTop; Layout.topMargin: 3
+        }
+        ColumnLayout {
+            spacing: 1; Layout.fillWidth: true
+            Label { text: drow.label; color: viewer.theme.muted; font.pixelSize: 11; font.letterSpacing: 0.4 }
+            Label { text: drow.value; color: viewer.theme.text; font.pixelSize: 15; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+        }
+    }
+    component DetailChip: Rectangle {
+        property string text_: ""
+        implicitWidth: chl.implicitWidth + 22; implicitHeight: 28; radius: 14
+        color: Qt.rgba(viewer.theme.accent.r, viewer.theme.accent.g, viewer.theme.accent.b, 0.16)
+        Label { id: chl; anchors.centerIn: parent; text: parent.text_; color: viewer.theme.accent; font.pixelSize: 12; font.weight: Font.Medium }
+    }
     onVisibleChanged: if (visible) forceActiveFocus()
     onPhotoChanged: resetZoom()   // a new photo always opens un-zoomed
 
@@ -354,6 +380,16 @@ Rectangle {
         anchors.margins: 10
         onClicked: viewer.edit()
     }
+    // Details: swipe up on the photo, or tap ⓘ.
+    GlassButton {
+        icon_: icons.info
+        visible: viewer.photo && !viewer.zoomed
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.topMargin: 10
+        anchors.rightMargin: 62
+        onClicked: detailSheet.open()
+    }
     // swipe left / right for the neighbours — off while zoomed, where a drag pans instead
     DragHandler {
         target: null
@@ -423,6 +459,75 @@ Rectangle {
                 Layout.maximumWidth: 480
             }
         }
+    }
+
+    // Swipe up from the bottom (or the ⓘ button) for the full Apple-style detail sheet.
+    Drawer {
+        id: detailSheet
+        edge: Qt.BottomEdge
+        width: viewer.width
+        height: Math.min(viewer.height * 0.66, sheetCol.implicitHeight + 34)
+        dragMargin: viewer.zoomed ? 0 : 24
+        Material.background: viewer.theme.panel
+        background: Rectangle { color: viewer.theme.panel; topLeftRadius: 20; topRightRadius: 20 }
+
+        Flickable {
+            anchors.fill: parent
+            contentHeight: sheetCol.implicitHeight + 20
+            clip: true
+            ColumnLayout {
+                id: sheetCol
+                x: 20; width: parent.width - 40
+                spacing: 15
+                Rectangle {
+                    Layout.alignment: Qt.AlignHCenter; Layout.topMargin: 9
+                    width: 36; height: 4; radius: 2; color: viewer.theme.border
+                }
+                Label {
+                    text: viewer.photo ? viewer.formatDate(viewer.photo.takenAt) : ""
+                    color: viewer.theme.text; font.pixelSize: 19; font.weight: Font.DemiBold
+                    Layout.fillWidth: true; wrapMode: Text.WordWrap
+                }
+                DetailRow { icon_: icons.pin;        label: "PLACE";      value: viewer.placeText() }
+                DetailRow { icon_: icons.people;     label: "PEOPLE";     value: viewer.peopleNames() }
+                DetailRow { icon_: icons.info;       label: "CAMERA";     value: viewer.photo ? (viewer.photo.camera || "") : "" }
+                DetailRow { icon_: icons.photos;     label: "DIMENSIONS"; value: viewer.dimsText() }
+                DetailRow { icon_: icons.info;       label: "FILE SIZE";  value: viewer.photo ? viewer.formatSize(viewer.photo.size) : "" }
+                Flow {
+                    Layout.fillWidth: true; spacing: 8
+                    visible: chipRep.count > 0
+                    Repeater { id: chipRep; model: viewer.photo ? viewer.tagChips() : []; DetailChip { text_: modelData } }
+                }
+                DetailRow { icon_: icons.screenshot; label: "TEXT";       value: viewer.photo ? (viewer.photo.ocrText || "") : "" }
+                DetailRow { icon_: icons.folderPlus; label: "PATH";       value: viewer.photo ? (viewer.photo.path || "") : "" }
+                Item { Layout.preferredHeight: 6 }
+            }
+        }
+    }
+
+    function peopleNames() {
+        if (!faces || !faces.length) return ""
+        const seen = ({}), out = []
+        for (const f of faces) if (f.name && !seen[f.name]) { seen[f.name] = 1; out.push(f.name) }
+        return out.join(", ")
+    }
+    function placeText() {
+        if (!photo) return ""
+        if (photo.place) return photo.country ? photo.place + ", " + photo.country : photo.place
+        if (photo.lat !== null && photo.lat !== undefined) return photo.lat.toFixed(4) + ", " + photo.lon.toFixed(4)
+        return ""
+    }
+    function dimsText() {
+        if (!photo || !photo.width) return ""
+        const mp = photo.width * photo.height / 1e6
+        return photo.width + " × " + photo.height + (mp >= 0.1 ? "  ·  " + mp.toFixed(1) + " MP" : "")
+    }
+    function tagChips() {
+        if (!photo) return []
+        const out = []
+        for (const k of ["scene", "mood", "weather", "holiday"]) if (photo[k]) out.push(photo[k])
+        if (photo.keywords && photo.keywords.length) for (const kw of photo.keywords) out.push(kw)
+        return out
     }
 
     function formatDate(iso) {

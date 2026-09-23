@@ -26,10 +26,31 @@ Item {
     property bool _scrubActive: false
     property string scrubText: ""
 
-    // three across on a phone, more on a tablet; square cells, flush to the edges
+    // three across on a phone, more on a tablet; square cells, flush to the edges.
+    // Pinch sets `density` (columns); 0 = the width-based default.
     readonly property int gap: 2
-    readonly property int cols: Math.max(3, Math.floor(width / 150))
+    property int density: 0
+    readonly property int cols: density > 0 ? Math.max(2, Math.min(6, density)) : Math.max(3, Math.floor(width / 150))
     readonly property real cellSize: (width - (cols - 1) * gap) / cols
+
+    // Pinch to change grid density, keeping the asset under the fingers in view (the
+    // Apple/Google "pinch the wall of photos" gesture). Rebuilds only when the column
+    // count actually crosses a threshold, so a pinch is a couple of re-chunks, not churn.
+    function setDensity(d) {
+        d = Math.max(2, Math.min(6, d))
+        if (d === grid.cols) return
+        const idx = view.indexAt(4, view.contentY + 6)
+        let anchorPid = -1
+        if (idx >= 0) { const r = rows.get(idx); if (r && r.tiles && r.tiles.length) anchorPid = r.tiles[0].pid }
+        grid.density = d
+        if (anchorPid >= 0) Qt.callLater(function () {
+            for (let n = 0; n < rows.count; n++) {
+                const rr = rows.get(n)
+                if (rr.tiles) for (let m = 0; m < rr.tiles.length; m++)
+                    if (rr.tiles[m].pid === anchorPid) { view.positionViewAtIndex(n, ListView.Beginning); return }
+            }
+        })
+    }
 
     // built-once glyphs shared by every tile
     readonly property string checkIcon: "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>')
@@ -128,6 +149,14 @@ Item {
         flickDeceleration: 1100
         // keep one screenful of rows above and below live; the rest cost nothing
         cacheBuffer: Math.max(0, Math.round(height))
+
+        // pinch the wall of photos to change density (2–6 columns)
+        PinchHandler {
+            target: null
+            property int baseCols: 3
+            onActiveChanged: if (active) baseCols = grid.cols
+            onScaleChanged: if (active) grid.setDensity(Math.round(baseCols / activeScale))
+        }
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.vertical: ScrollBar { }
 

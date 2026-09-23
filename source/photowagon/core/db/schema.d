@@ -3,13 +3,22 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 17;
+enum currentVersion = 18;
 
 void migrate(Database db)
 {
-	auto v = db.prepare("PRAGMA user_version");
-	v.step();
-	immutable have = v.getInt(0);
+	// Read the version and FINALISE the statement before the migration transaction.
+	// A stepped-but-unfinalised statement keeps a cursor live on the connection, and a
+	// vec0 DROP runs nested SQL (dropping its shadow tables) that fails with a generic
+	// "SQL logic error" while any statement is active — which is exactly what broke the
+	// float[128]→float[512] face_vec migration (V18). Plain CREATE/DROP of ordinary
+	// tables has no nested statement, so earlier migrations never hit this.
+	int have;
+	{
+		auto v = db.prepare("PRAGMA user_version");
+		v.step();
+		have = v.getInt(0);
+	}
 	if (have >= currentVersion)
 		return;
 	db.transaction!void({
@@ -47,6 +56,8 @@ void migrate(Database db)
 			db.exec(schemaV16);
 		if (have < 17)
 			db.exec(schemaV17);
+		if (have < 18)
+			migrateV18(db);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -192,7 +203,7 @@ ALTER TABLE photos ADD COLUMN edited_hash TEXT;    -- the rendered result in the
 // unit centroids of the face clusters (person_centroid the running sums behind them).
 private enum schemaV11 = `
 CREATE VIRTUAL TABLE photo_vec USING vec0(photo_id INTEGER PRIMARY KEY, embedding float[512] distance_metric=cosine);
-CREATE VIRTUAL TABLE person_vec USING vec0(person_id INTEGER PRIMARY KEY, centroid float[128] distance_metric=cosine);
+CREATE VIRTUAL TABLE person_vec USING vec0(person_id INTEGER PRIMARY KEY, centroid float[512] distance_metric=cosine);
 CREATE TABLE person_centroid (
     person_id  INTEGER PRIMARY KEY REFERENCES persons(id) ON DELETE CASCADE,
     sum        BLOB NOT NULL,                      -- 128 float32: the sum of the unit embeddings
@@ -232,7 +243,7 @@ CREATE TABLE devices (
 // to this one?" and vote — which is how a new face of a known person gets recognized, and it
 // gets better as more faces accumulate. A trigger keeps it in step when a face is deleted.
 private enum schemaV14 = `
-CREATE VIRTUAL TABLE face_vec USING vec0(face_id INTEGER PRIMARY KEY, embedding float[128] distance_metric=cosine);
+CREATE VIRTUAL TABLE face_vec USING vec0(face_id INTEGER PRIMARY KEY, embedding float[512] distance_metric=cosine);
 CREATE TRIGGER faces_del_vec AFTER DELETE ON faces BEGIN
     DELETE FROM face_vec WHERE face_id = old.id;
 END;
@@ -260,6 +271,22 @@ CREATE TABLE peer_names (
     name     TEXT NOT NULL
 );
 `;
+
+private void migrateV18(Database db)
+{
+	// ArcFace r100 (512-d) replaces SFace (128-d) for the face embedding: far better
+	// separation of different people (babies/siblings stop being merged). The vec0
+	// tables and every stored face must be rebuilt at the new size. Pre-launch — no
+	// data to keep — so wipe faces/persons and re-detect on the next face pass.
+	db.exec("DROP TABLE IF EXISTS face_vec");
+	db.exec("DROP TABLE IF EXISTS person_vec");
+	db.exec("CREATE VIRTUAL TABLE face_vec USING vec0(face_id INTEGER PRIMARY KEY, embedding float[512] distance_metric=cosine)");
+	db.exec("CREATE VIRTUAL TABLE person_vec USING vec0(person_id INTEGER PRIMARY KEY, centroid float[512] distance_metric=cosine)");
+	db.exec("DELETE FROM faces");
+	db.exec("DELETE FROM persons");
+	db.exec("UPDATE photos SET faces_scanned = 0");
+	db.exec("DELETE FROM settings WHERE key IN ('cluster_version', 'face_vec_build')");
+}
 
 private void migrateV14(Database db)
 {

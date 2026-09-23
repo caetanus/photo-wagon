@@ -13,8 +13,11 @@ struct FaceHit
 {
 	float x, y, w, h;
 	float score;
-	float[128] embedding;
+	float[faceDim] embedding;
 }
+
+/// The face embedding dimension. ArcFace r100 is 512-d.
+enum faceDim = 512;
 
 /// SFace's published cosine threshold for "same person".
 enum sameFaceCosine = 0.363f;
@@ -40,7 +43,7 @@ immutable(FaceHit)[] detectFaces(string path, int edgeHint = 0)
 	if (!parts.length)
 		throw new Exception("face detection: empty answer for " ~ path);
 	immutable n = parts[0].to!int;
-	enum per = 5 + 128;
+	enum per = 5 + faceDim;
 	if (parts.length != 1 + n * per)
 		throw new Exception("face detection: malformed answer for " ~ path);
 	FaceHit[] hits;
@@ -54,7 +57,7 @@ immutable(FaceHit)[] detectFaces(string path, int edgeHint = 0)
 		h.w = f[2].to!float;
 		h.h = f[3].to!float;
 		h.score = f[4].to!float;
-		foreach (k; 0 .. 128)
+		foreach (k; 0 .. faceDim)
 			h.embedding[k] = f[5 + k].to!float;
 		hits ~= h;
 	}
@@ -62,12 +65,12 @@ immutable(FaceHit)[] detectFaces(string path, int edgeHint = 0)
 }
 
 /// Cosine similarity of two embeddings.
-float cosine(const ref float[128] a, const ref float[128] b) pure nothrow @nogc
+float cosine(const ref float[faceDim] a, const ref float[faceDim] b) pure nothrow @nogc
 {
 	import std.math : sqrt;
 
 	double dot = 0, na = 0, nb = 0;
-	foreach (i; 0 .. 128)
+	foreach (i; 0 .. faceDim)
 	{
 		dot += cast(double) a[i] * b[i];
 		na += cast(double) a[i] * a[i];
@@ -79,7 +82,7 @@ float cosine(const ref float[128] a, const ref float[128] b) pure nothrow @nogc
 
 unittest
 {
-	float[128] a = 0, b = 0;
+	float[faceDim] a = 0, b = 0;
 	a[0] = 1;
 	b[0] = 1;
 	assert(cosine(a, b) > 0.999);

@@ -6,31 +6,38 @@
 #include <mutex>
 
 #include <opencv2/core/utility.hpp>
+#include <opencv2/dnn.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/objdetect.hpp>
 
-/* One detector and one recognizer for the process; neither is thread-safe,
-   so every call holds the mutex. Callers run on worker threads and simply
-   queue behind each other. */
+/* One detector/aligner/embedder for the process; none is thread-safe, so every
+   call holds the mutex. g_recognizer (SFace) is kept ONLY for alignCrop — the
+   112x112 warp is model-independent; the feature is ArcFace r100 (g_embedder). */
 static std::mutex g_mutex;
 static cv::Ptr<cv::FaceDetectorYN> g_detector;
 static cv::Ptr<cv::FaceRecognizerSF> g_recognizer;
+static cv::dnn::Net g_embedder;
+static bool g_embedder_ok = false;
 
-int pw_face_init(const char *yunet_onnx_path, const char *sface_onnx_path)
+int pw_face_init(const char *yunet_onnx_path, const char *sface_onnx_path, const char *embed_onnx_path)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
-    if (g_detector && g_recognizer)
+    if (g_detector && g_recognizer && g_embedder_ok)
         return 0;
     try {
         cv::setNumThreads(2); /* the UI shares these cores */
         /* score 0.7, NMS 0.3, top_k 5000; the input size is set per image */
         g_detector = cv::FaceDetectorYN::create(yunet_onnx_path, "", cv::Size(320, 320), 0.7f, 0.3f, 5000);
         g_recognizer = cv::FaceRecognizerSF::create(sface_onnx_path, "");
-        return (g_detector && g_recognizer) ? 0 : -1;
+        g_embedder = cv::dnn::readNetFromONNX(embed_onnx_path);
+        g_embedder_ok = !g_embedder.empty();
+        return (g_detector && g_recognizer && g_embedder_ok) ? 0 : -1;
     } catch (...) {
         g_detector.release();
         g_recognizer.release();
+        g_embedder = cv::dnn::Net();
+        g_embedder_ok = false;
         return -1;
     }
 }
@@ -40,7 +47,7 @@ int pw_face_detect(const char *image_path, int max_edge, int edge_hint, PwFace *
     if (!out || max_faces <= 0)
         return -1;
     std::lock_guard<std::mutex> lock(g_mutex);
-    if (!g_detector || !g_recognizer)
+    if (!g_detector || !g_recognizer || !g_embedder_ok)
         return -1;
     try {
         /* decode reduced when the picture is far bigger than the detector needs (EXIF
@@ -83,13 +90,22 @@ int pw_face_detect(const char *image_path, int max_edge, int edge_hint, PwFace *
             r.h = bh / H;
             r.score = faces.at<float>(i, 14);
 
-            cv::Mat aligned, feature;
+            /* align to the canonical 112x112 (SFace's warp), then embed with
+               ArcFace r100. Its ONNX normalises internally (Sub/Mul on "data"),
+               so feed RAW pixels, RGB; L2-normalise so "same" is a cosine. */
+            cv::Mat aligned;
             g_recognizer->alignCrop(img, faces.row(i), aligned);
-            g_recognizer->feature(aligned, feature);
-            if (feature.total() >= 128)
-                std::memcpy(r.embedding, feature.ptr<float>(), 128 * sizeof(float));
-            else
+            cv::Mat blob = cv::dnn::blobFromImage(aligned, 1.0, cv::Size(112, 112),
+                                                  cv::Scalar(0, 0, 0), /*swapRB*/ true, /*crop*/ false);
+            g_embedder.setInput(blob);
+            cv::Mat feature = g_embedder.forward();
+            feature = feature.reshape(1, 1);
+            if (feature.total() >= PW_FACE_EMB_DIM) {
+                cv::normalize(feature, feature, 1.0, 0.0, cv::NORM_L2);
+                std::memcpy(r.embedding, feature.ptr<float>(), PW_FACE_EMB_DIM * sizeof(float));
+            } else {
                 std::memset(r.embedding, 0, sizeof r.embedding);
+            }
         }
         return n;
     } catch (...) {

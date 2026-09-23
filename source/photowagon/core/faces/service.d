@@ -19,7 +19,7 @@ import photowagon.core.db.sqlite : Database;
 import photowagon.core.db.schema : getSetting, setSetting;
 import photowagon.core.faces.cluster : ClusterIndex, SplitFace, eligible, clusterVersion, splitTowards, keepScore,
 	minScore, minFaceWidth;
-import photowagon.core.faces.detect : FaceHit, detectFaces, initFaces;
+import photowagon.core.faces.detect : FaceHit, detectFaces, initFaces, faceDim;
 import photowagon.core.faces.repo : FaceRepo;
 import photowagon.core.ipc.events : Events;
 import photowagon.core.library.photos : PhotoRepo;
@@ -94,7 +94,7 @@ final class FaceService
 		faces.eachFace((ref FaceRepo.StoredFace f) {
 			if (f.personId == 0)
 				return;
-			float[128] e = f.embedding[0 .. 128];
+			float[faceDim] e = f.embedding[0 .. faceDim];
 			cluster.add(f.personId, e, f.personNamed);
 		});
 	}
@@ -103,9 +103,11 @@ final class FaceService
 	/// embedding. Idempotent; used once to repair the index after the addFace UPSERT bug.
 	private void rebuildFaceVec()
 	{
+		import std.conv : to;
+
 		db.exec("DELETE FROM face_vec");
 		auto q = db.prepare(`SELECT f.id, f.embedding FROM faces f JOIN photos p ON p.id = f.photo_id
-			WHERE length(f.embedding) = 512 AND f.score >= ? AND f.w * p.width >= ?`);
+			WHERE length(f.embedding) = ` ~ (faceDim * 4).to!string ~ ` AND f.score >= ? AND f.w * p.width >= ?`);
 		q.bind(1, cast(double) minScore).bind(2, cast(double) minFaceWidth);
 		auto ins = db.prepare("INSERT INTO face_vec (face_id, embedding) VALUES (?, ?)");
 		long n;
@@ -133,11 +135,11 @@ final class FaceService
 			logInfo("faces: dropped %s weak detections", weak);
 		faces.clearUnnamedPersons();
 		cluster = new ClusterIndex(db);
-		struct Pending { long id; float[128] e; long photo; }
+		struct Pending { long id; float[faceDim] e; long photo; }
 		Pending[] todo;
 		Pending[][long] named; // faces of each named person, to be purified
 		faces.eachFace((ref FaceRepo.StoredFace f) {
-			float[128] e = f.embedding[0 .. 128];
+			float[faceDim] e = f.embedding[0 .. faceDim];
 			if (!eligible(f.widthPx, f.score))
 			{
 				if (f.personId)
@@ -158,7 +160,7 @@ final class FaceService
 					keep[i] = m.id > 0;
 				foreach (round; 0 .. 4)
 				{
-					float[128] sum = 0;
+					float[faceDim] sum = 0;
 					uint n;
 					foreach (i, ref m; members)
 						if (keep[i])
@@ -543,14 +545,14 @@ final class FaceService
 	}
 
 	/// Moves the faces of `from` that look more like `into` (seeded by `seedId`).
-	private long splitPerson(long from, long into, long seedId, const ref float[128] seed)
+	private long splitPerson(long from, long into, long seedId, const ref float[faceDim] seed)
 	{
 		SplitFace[] ofFrom;
-		const(float[128])[] ofInto;
+		const(float[faceDim])[] ofInto;
 		faces.eachFace((ref FaceRepo.StoredFace f) {
 			if (f.id == seedId)
 				return;
-			float[128] e = f.embedding[0 .. 128];
+			float[faceDim] e = f.embedding[0 .. faceDim];
 			if (f.personId == from && eligible(f.widthPx, f.score))
 				ofFrom ~= SplitFace(f.id, e);
 			else if (f.personId == into)

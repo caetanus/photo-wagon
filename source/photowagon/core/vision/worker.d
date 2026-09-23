@@ -148,12 +148,12 @@ private extern (C) nothrow @nogc
 	int pw_clip_init(const char* onnx);
 	void pw_clip_release();
 	int pw_clip_encode(const char* path, float* out512);
-	int pw_face_init(const char* yunet, const char* sface);
+	int pw_face_init(const char* yunet, const char* sface, const char* embed);
 	struct PwFace
 	{
 		float x, y, w, h;
 		float score;
-		float[128] embedding;
+		float[512] embedding;
 	}
 
 	int pw_face_detect(const char* path, int maxEdge, int edgeHint, PwFace* out_, int maxFaces);
@@ -170,6 +170,7 @@ private extern (C) nothrow @nogc
 /// stdin lines are requests, stdout lines answers; ends with stdin.
 int runVisionWorker(VisionModels m)
 {
+	import std.path : buildPath, dirName;
 	import std.string : toStringz;
 
 	bool clipLoaded, facesLoaded, ocrLoaded, clipTextLoaded;
@@ -207,8 +208,10 @@ int runVisionWorker(VisionModels m)
 				immutable path = req[5 + parts[0].length + 1 + parts[1].length + 1 .. $];
 				if (!facesLoaded)
 				{
-					if (!m.yunet.length || pw_face_init(m.yunet.toStringz, m.sface.toStringz) != 0)
-						throw new Exception("cannot load the face models (" ~ m.yunet ~ ", " ~ m.sface ~ ")");
+					// the ArcFace r100 embedder sits beside the sface model in the models dir
+				immutable embed = buildPath(dirName(m.sface), "arcfaceresnet100-8.onnx");
+				if (!m.yunet.length || pw_face_init(m.yunet.toStringz, m.sface.toStringz, embed.toStringz) != 0)
+						throw new Exception("cannot load the face models (" ~ m.yunet ~ ", " ~ m.sface ~ ", " ~ embed ~ ")");
 					facesLoaded = true;
 				}
 				PwFace[64] raw = void;

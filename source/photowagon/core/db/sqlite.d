@@ -39,19 +39,6 @@ extern (C) nothrow @nogc
 	int sqlite3_vec_init(sqlite3* db, char** pzErrMsg, const(void)* pApi);
 }
 
-private shared bool vecRegistered;
-
-/// Registers sqlite-vec for every connection opened afterwards. Idempotent.
-private void registerVec() nothrow @nogc
-{
-	import core.atomic : atomicLoad, atomicStore;
-
-	if (atomicLoad(vecRegistered))
-		return;
-	sqlite3_auto_extension(cast(void*) &sqlite3_vec_init);
-	atomicStore(vecRegistered, true);
-}
-
 private enum SQLITE_OK = 0;
 private enum SQLITE_ROW = 100;
 private enum SQLITE_DONE = 101;
@@ -74,7 +61,6 @@ final class Database
 
 	this(string path)
 	{
-		registerVec();
 		immutable rc = sqlite3_open_v2(path.toStringz, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, null);
 		if (rc != SQLITE_OK)
 		{
@@ -82,6 +68,18 @@ final class Database
 			sqlite3_close_v2(db);
 			db = null;
 			throw new SqliteException("sqlite open " ~ path ~ ": " ~ msg);
+		}
+		// sqlite-vec is compiled in with -DSQLITE_CORE (csrc/build.sh) and registered on each
+		// connection right here — one explicit call per Database, rather than through the global
+		// sqlite3_auto_extension list, so there is no process-wide state to reason about.
+		char* verr;
+		if (sqlite3_vec_init(db, &verr, null) != SQLITE_OK)
+		{
+			immutable msg = verr ? verr.fromStringz.idup : "sqlite-vec init failed";
+			sqlite3_free(verr);
+			sqlite3_close_v2(db);
+			db = null;
+			throw new SqliteException("sqlite-vec init " ~ path ~ ": " ~ msg);
 		}
 		exec("PRAGMA journal_mode = WAL");
 		exec("PRAGMA synchronous = NORMAL");

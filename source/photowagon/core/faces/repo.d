@@ -1,6 +1,8 @@
 /// The `faces` and `persons` tables.
 module photowagon.core.faces.repo;
 
+import photowagon.core.faces.detect : faceDim;
+
 import std.json;
 
 import photowagon.core.db.sqlite : Database, Statement;
@@ -99,7 +101,7 @@ final class FaceRepo
 		while (s.step())
 		{
 			auto blob = s.getBlob(5);
-			if (blob.length != 128 * float.sizeof)
+			if (blob.length != faceDim * float.sizeof)
 				continue;
 			StoredFace f;
 			f.id = s.getLong(0);
@@ -114,16 +116,16 @@ final class FaceRepo
 	}
 
 	/// The embedding of one face.
-	float[128] embeddingOf(long faceId)
+	float[faceDim] embeddingOf(long faceId)
 	{
 		auto s = db.prepare("SELECT embedding FROM faces WHERE id = ?");
 		s.bind(1, faceId);
-		float[128] e = 0;
+		float[faceDim] e = 0;
 		if (s.step())
 		{
 			auto blob = s.getBlob(0);
-			if (blob.length == 128 * float.sizeof)
-				e = (cast(const(float)[]) blob)[0 .. 128];
+			if (blob.length == faceDim * float.sizeof)
+				e = (cast(const(float)[]) blob)[0 .. faceDim];
 		}
 		return e;
 	}
@@ -414,7 +416,7 @@ unittest
 	db.exec("INSERT INTO photos (id, hash, path, taken_ts, taken_at) VALUES (1, 'a', '/a.jpg', 0, ''), (2, 'b', '/b.jpg', 0, '')");
 	auto repo = new FaceRepo(db);
 	assert(repo.unscannedPhotos() == [1, 2]);
-	float[128] e = 0;
+	float[faceDim] e = 0;
 	e[3] = 1;
 	immutable ana = repo.createPerson("Ana");
 	immutable f1 = repo.insertFace(1, 0.1, 0.1, 0.2, 0.2, 0.9, e[], "t1", ana);

@@ -12,7 +12,7 @@ if [ -n "${PW_NO_OPENCV:-}" ]; then
     if [ libface_novision.a -nt sqlite-vec.c ] && [ libface_novision.a -nt sqlite-vec.h ]; then
         exit 0
     fi
-    ${CC:-gcc} -std=gnu11 -O2 -fPIC -c sqlite-vec.c -o sqlite-vec.o
+    ${CC:-gcc} -std=gnu11 -O2 -DSQLITE_CORE -fPIC -c sqlite-vec.c -o sqlite-vec.o
     rm -f libface_novision.a
     ar rcs libface_novision.a sqlite-vec.o
     echo "csrc: built libface_novision.a (sqlite-vec only, no OpenCV)"
@@ -34,9 +34,9 @@ else
     echo "csrc: pkg-config cannot find tesseract — OCR will be off" >&2
     rm -f ocr_tesseract.o
 fi
-# sqlite-vec (vector search inside SQLite): a loadable extension compiled in and registered
-# by core/db/sqlite.d through sqlite3_auto_extension
-${CC:-gcc} -std=gnu11 -O2 -fPIC -c sqlite-vec.c -o sqlite-vec.o
+# sqlite-vec (vector search inside SQLite): a loadable extension compiled in and compiled in with -DSQLITE_CORE and
+# registered per-connection by core/db/sqlite.d (sqlite3_vec_init)
+${CC:-gcc} -std=gnu11 -O2 -DSQLITE_CORE -fPIC -c sqlite-vec.c -o sqlite-vec.o
 rm -f libface_opencv.a
 ar rcs libface_opencv.a face_opencv.o clip_opencv.o sqlite-vec.o $([ -f ocr_tesseract.o ] && echo ocr_tesseract.o)
 # the clipboard shim needs Qt: a separate archive, linked by the "app" configuration only

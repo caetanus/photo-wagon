@@ -14,15 +14,18 @@
 /// person" question is a KNN query. Nothing is held in memory between calls.
 module photowagon.core.faces.cluster;
 
+import photowagon.core.faces.detect : faceDim;
+
 import std.math : sqrt;
 
 import photowagon.core.db.sqlite : Database;
 
 /// Centroid cosine needed to join an existing person.
 enum joinThreshold = 0.45f;
-/// Centroid cosine at which two persons are the same one. Siblings measured
-/// at 0.72 on a real library, so this stays well above that.
-enum mergeThreshold = 0.75f;
+/// Centroid cosine at which two persons are the same one. With ArcFace r100
+/// different people sit far lower than SFace (co-occurring mean 0.075, p95 0.30),
+/// so this can be tighter and still never merge two people; kept conservative.
+enum mergeThreshold = 0.6f;
 /// A face narrower than this (pixels of the original) or less confident than
 /// `minScore` is stored but not clustered.
 enum minFaceWidth = 48;
@@ -46,16 +49,16 @@ enum faceVoteMargin = 1.25f;
 enum faceVoteK = 40;
 
 /// Bump when the rule changes: libraries clustered by an older rule are redone.
-enum clusterVersion = 6;
+enum clusterVersion = 7;
 
 bool eligible(float widthPx, float score) pure nothrow @nogc
 {
 	return widthPx >= minFaceWidth && score >= minScore;
 }
 
-float[128] unit(const ref float[128] e) pure nothrow @nogc
+float[faceDim] unit(const ref float[faceDim] e) pure nothrow @nogc
 {
-	float[128] u = e;
+	float[faceDim] u = e;
 	float n = 0;
 	foreach (v; u)
 		n += v * v;
@@ -65,10 +68,10 @@ float[128] unit(const ref float[128] e) pure nothrow @nogc
 	return u;
 }
 
-float dot(const ref float[128] a, const ref float[128] b) pure nothrow @nogc
+float dot(const ref float[faceDim] a, const ref float[faceDim] b) pure nothrow @nogc
 {
 	float s = 0;
-	foreach (i; 0 .. 128)
+	foreach (i; 0 .. faceDim)
 		s += a[i] * b[i];
 	return s;
 }
@@ -77,7 +80,7 @@ float dot(const ref float[128] a, const ref float[128] b) pure nothrow @nogc
 struct SplitFace
 {
 	long id;
-	float[128] embedding;
+	float[faceDim] embedding;
 	bool moves;
 }
 
@@ -86,9 +89,9 @@ struct SplitFace
 /// moves when it is closer to B's centroid than to A's and clears
 /// `joinThreshold` towards B. B starts as the seed (plus what B already
 /// held); a few rounds let both centroids settle. Returns the ids that move.
-long[] splitTowards(SplitFace[] facesOfA, const(float[128])[] alreadyInB, const ref float[128] seed)
+long[] splitTowards(SplitFace[] facesOfA, const(float[faceDim])[] alreadyInB, const ref float[faceDim] seed)
 {
-	float[128] sumA = 0, sumB = unit(seed);
+	float[faceDim] sumA = 0, sumB = unit(seed);
 	uint nB = 1;
 	foreach (ref e; alreadyInB)
 	{
@@ -106,7 +109,7 @@ long[] splitTowards(SplitFace[] facesOfA, const(float[128])[] alreadyInB, const 
 	{
 		auto mA = unit(sumA);
 		auto mB = unit(sumB);
-		float[128] newA = 0, newB = 0;
+		float[faceDim] newA = 0, newB = 0;
 		// B keeps its seed and prior members
 		newB[] += unit(seed)[];
 		foreach (ref e; alreadyInB)
@@ -147,7 +150,7 @@ final class ClusterIndex
 	private struct Row
 	{
 		bool found;
-		float[128] sum = 0;
+		float[faceDim] sum = 0;
 		uint count;
 		bool named;
 	}
@@ -160,7 +163,7 @@ final class ClusterIndex
 		if (!s.step())
 			return r;
 		auto blob = s.getBlob(0);
-		if (blob.length == 128 * float.sizeof)
+		if (blob.length == faceDim * float.sizeof)
 			r.sum[] = (cast(const(float)[]) blob)[];
 		r.count = cast(uint) s.getLong(1);
 		r.named = s.getLong(2) != 0;
@@ -207,7 +210,7 @@ final class ClusterIndex
 		float cosine;
 	}
 
-	private Hit[] nearest(const ref float[128] e, long k)
+	private Hit[] nearest(const ref float[faceDim] e, long k)
 	{
 		Hit[] out_;
 		if (k <= 0)
@@ -219,7 +222,7 @@ final class ClusterIndex
 		return out_;
 	}
 
-	void add(long personId, const ref float[128] embedding, bool named = false)
+	void add(long personId, const ref float[faceDim] embedding, bool named = false)
 	{
 		auto u = unit(embedding);
 		auto r = load(personId);
@@ -232,7 +235,7 @@ final class ClusterIndex
 	/// Index one face's own embedding, so future faces can be recognised by
 	/// their nearest faces (not just the person average). Raw embedding: the
 	/// cosine metric normalises. Idempotent per face id.
-	void addFace(long faceId, const ref float[128] embedding)
+	void addFace(long faceId, const ref float[faceDim] embedding)
 	{
 		// vec0 virtual tables do not support UPSERT (ON CONFLICT), so replace by hand: a
 		// delete then an insert. A new face has no row yet, so the delete is usually a no-op.
@@ -250,7 +253,7 @@ final class ClusterIndex
 		float cosine;
 	}
 
-	private FaceHit[] nearestFaces(const ref float[128] e, long k)
+	private FaceHit[] nearestFaces(const ref float[faceDim] e, long k)
 	{
 		FaceHit[] out_;
 		if (k <= 0)
@@ -264,7 +267,7 @@ final class ClusterIndex
 
 	/// Face ids whose own embedding is at least `minCos` similar to `e`, nearest first.
 	/// Used to spread a correction: the faces that most look like the one the user just fixed.
-	long[] facesNear(const ref float[128] e, float minCos, long k = 100)
+	long[] facesNear(const ref float[faceDim] e, float minCos, long k = 100)
 	{
 		long[] out_;
 		foreach (h; nearestFaces(e, k))
@@ -300,7 +303,7 @@ final class ClusterIndex
 	/// (`ambiguous`). Returns 0 (and ambiguous=false) when no named person is
 	/// near — the caller then falls back to centroid grouping. Only ever routes
 	/// to a person the user has named, so it cannot chain automatic groups.
-	long matchNamedByFaces(const ref float[128] embedding, const(long)[] taken, out bool ambiguous)
+	long matchNamedByFaces(const ref float[faceDim] embedding, const(long)[] taken, out bool ambiguous)
 	{
 		import std.algorithm : canFind;
 
@@ -360,7 +363,7 @@ final class ClusterIndex
 	/// The closest person, and how close; 0 when nobody clears the threshold.
 	/// `taken` lists persons that cannot be the answer: the ones already found
 	/// in the same photo, since nobody appears twice in one picture.
-	long match(const ref float[128] embedding, out float best, const(long)[] taken = null)
+	long match(const ref float[faceDim] embedding, out float best, const(long)[] taken = null)
 	{
 		bool ambiguous;
 		return match(embedding, best, ambiguous, taken);
@@ -368,7 +371,7 @@ final class ClusterIndex
 
 	/// Same, reporting when the runner-up was too close to call (then 0 is
 	/// returned and `ambiguous` is true: leave the face unassigned).
-	long match(const ref float[128] embedding, out float best, out bool ambiguous, const(long)[] taken = null)
+	long match(const ref float[faceDim] embedding, out float best, out bool ambiguous, const(long)[] taken = null)
 	{
 		import std.algorithm : canFind;
 
@@ -460,7 +463,7 @@ final class ClusterIndex
 
 	/// Every person ranked by how close its centroid is to `embedding`, closest first
 	/// (at most `limit`): who a face most likely is, for the naming popup.
-	long[] rankFor(const ref float[128] embedding, out float[] scores, size_t limit = 8)
+	long[] rankFor(const ref float[faceDim] embedding, out float[] scores, size_t limit = 8)
 	{
 		auto e = unit(embedding);
 		long[] ids;
@@ -511,7 +514,7 @@ final class ClusterIndex
 	}
 
 	/// Drops a face's contribution when the user moves it elsewhere.
-	void remove(long personId, const ref float[128] embedding)
+	void remove(long personId, const ref float[faceDim] embedding)
 	{
 		auto r = load(personId);
 		if (!r.found)
@@ -553,7 +556,7 @@ unittest
 	scope (exit)
 		db.close();
 	auto idx = new ClusterIndex(db);
-	float[128] a = 0, b = 0, c = 0;
+	float[faceDim] a = 0, b = 0, c = 0;
 	a[0] = 1;
 	b[0] = 0.9;
 	b[1] = 0.1;
@@ -566,13 +569,13 @@ unittest
 	idx.add(11, c);
 	{
 		// halfway between two persons: too close to call
-		float[128] mid = 0;
+		float[faceDim] mid = 0;
 		mid[0] = 1;
 		mid[5] = 1;
 		bool amb;
 		assert(idx.match(mid, best, amb) == 0 && amb);
 	}
-	float[128] d = 0;
+	float[faceDim] d = 0;
 	d[5] = 0.95;
 	d[0] = 0.3; // close to c, far from a
 	idx.add(12, d);
@@ -596,7 +599,7 @@ unittest
 
 	auto rng = Random(7);
 	SplitFace[] a;
-	float[128] seed = 0;
+	float[faceDim] seed = 0;
 	foreach (i; 0 .. 40)
 	{
 		SplitFace f;

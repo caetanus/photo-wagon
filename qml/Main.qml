@@ -216,15 +216,7 @@ ApplicationWindow {
 
     // A themed Menu (the Basic style is otherwise plain): window-coloured surface,
     // hairline border, palette wired so items pick up the app's text/highlight colours.
-    component ThemedMenu: Menu {
-        implicitWidth: 250
-        palette.text: theme.text
-        palette.windowText: theme.text
-        palette.buttonText: theme.text
-        palette.highlightedText: theme.text
-        palette.highlight: theme.hover
-        background: Rectangle { color: theme.window; border.color: theme.separator; border.width: 1; radius: 8 }
-    }
+    component ThemedMenu: AppMenu { theme: root.theme }
 
     menuBar: MenuBar {
         id: appMenuBar
@@ -242,48 +234,48 @@ ApplicationWindow {
         }
         ThemedMenu {
             title: "File"
-            MenuItem { action: actAddFolder }
-            MenuItem { action: actImportPhone }
+            AppMenuItem { action: actAddFolder }
+            AppMenuItem { action: actImportPhone }
             MenuSeparator {}
-            MenuItem { action: actPeers }
+            AppMenuItem { action: actPeers }
             MenuSeparator {}
-            MenuItem { action: actSettings }
+            AppMenuItem { action: actSettings }
             MenuSeparator {}
-            MenuItem { action: actQuit }
+            AppMenuItem { action: actQuit }
         }
         ThemedMenu {
             title: "Edit"
-            MenuItem { action: actSelectAll }
-            MenuItem { action: actDeselect }
+            AppMenuItem { action: actSelectAll }
+            AppMenuItem { action: actDeselect }
             MenuSeparator {}
-            MenuItem { action: actFavorite }
-            MenuItem { action: actAddAlbum }
-            MenuItem { action: actAddTags }
-            MenuItem { action: actSetPlace }
+            AppMenuItem { action: actFavorite }
+            AppMenuItem { action: actAddAlbum }
+            AppMenuItem { action: actAddTags }
+            AppMenuItem { action: actSetPlace }
         }
         ThemedMenu {
             title: "View"
-            MenuItem { text: "Years";      checkable: true; checked: root.mode === "years";  enabled: !root.viewing; onTriggered: { root.mode = "years";  library.filterDate(0, 0, 0) } }
-            MenuItem { text: "Months";     checkable: true; checked: root.mode === "months"; enabled: !root.viewing; onTriggered: { root.mode = "months"; library.filterDate(0, 0, 0) } }
-            MenuItem { text: "Days";       checkable: true; checked: root.mode === "days";   enabled: !root.viewing; onTriggered: { root.mode = "days";   library.filterDate(0, 0, 0) } }
-            MenuItem { text: "All Photos"; checkable: true; checked: root.mode === "all";    enabled: !root.viewing; onTriggered: { root.mode = "all";    library.filterDate(0, 0, 0) } }
+            AppMenuItem { text: "Years";      checkable: true; checked: root.mode === "years";  enabled: !root.viewing; onTriggered: { root.mode = "years";  library.filterDate(0, 0, 0) } }
+            AppMenuItem { text: "Months";     checkable: true; checked: root.mode === "months"; enabled: !root.viewing; onTriggered: { root.mode = "months"; library.filterDate(0, 0, 0) } }
+            AppMenuItem { text: "Days";       checkable: true; checked: root.mode === "days";   enabled: !root.viewing; onTriggered: { root.mode = "days";   library.filterDate(0, 0, 0) } }
+            AppMenuItem { text: "All Photos"; checkable: true; checked: root.mode === "all";    enabled: !root.viewing; onTriggered: { root.mode = "all";    library.filterDate(0, 0, 0) } }
             MenuSeparator {}
-            MenuItem { action: actZoomIn }
-            MenuItem { action: actZoomOut }
+            AppMenuItem { action: actZoomIn }
+            AppMenuItem { action: actZoomOut }
             MenuSeparator {}
-            MenuItem { action: actInfo }
-            MenuItem { action: actFullScreen }
+            AppMenuItem { action: actInfo }
+            AppMenuItem { action: actFullScreen }
         }
         ThemedMenu {
             title: "Window"
-            MenuItem { action: actMinimize }
-            MenuItem { action: actZoomWindow }
+            AppMenuItem { action: actMinimize }
+            AppMenuItem { action: actZoomWindow }
             MenuSeparator {}
-            MenuItem { action: actClose }
+            AppMenuItem { action: actClose }
         }
         ThemedMenu {
             title: "Help"
-            MenuItem { action: actAbout }
+            AppMenuItem { action: actAbout }
         }
     }
 
@@ -600,12 +592,12 @@ ApplicationWindow {
                     icon_: icons.cast
                     ToolTip.text: "Cast selection to TV"; ToolTip.visible: hovered
                     onClicked: { library.loadCastDevices(); castSelMenu.popup() }
-                    Menu {
+                    ThemedMenu {
                         id: castSelMenu
-                        MenuItem { enabled: false; text: root.castDevicesData.length ? "Slideshow of the selection on:" : "Looking for TVs…" }
+                        AppMenuItem { enabled: false; text: root.castDevicesData.length ? "Slideshow of the selection on:" : "Looking for TVs…" }
                         Repeater {
                             model: root.castDevicesData
-                            MenuItem {
+                            AppMenuItem {
                                 required property var modelData
                                 text: modelData.name
                                 onTriggered: { library.castSlideshow(modelData.host, parseInt(modelData.port), modelData.kind || "chromecast", modelData.control || "", JSON.stringify(grid.selectedIds())); root.castingActive = true; root.castPaused = false }
@@ -624,29 +616,29 @@ ApplicationWindow {
                     icon_: icons.cast
                     ToolTip.text: "Cast to TV"; ToolTip.visible: hovered
                     onClicked: { library.loadCastDevices(); castMenu.popup() }
-                    Menu {
+                    ThemedMenu {
                         id: castMenu
-                        MenuItem { enabled: false; text: root.castDevicesData.length ? "Cast this photo to:" : "Looking for TVs…" }
+                        AppMenuItem { enabled: false; text: root.castDevicesData.length ? "Cast this photo to:" : "Looking for TVs…" }
                         Repeater {
                             model: root.castDevicesData
-                            MenuItem {
+                            AppMenuItem {
                                 required property var modelData
                                 text: modelData.name
                                 onTriggered: { library.castTo(modelData.host, parseInt(modelData.port), modelData.kind || "chromecast", modelData.control || "", root.currentPhotoId); root.castingActive = false }
                             }
                         }
                         MenuSeparator { visible: root.castDevicesData.length > 0 }
-                        MenuItem { visible: root.castDevicesData.length > 0; enabled: false; text: "Slideshow (every 5s) on:" }
+                        AppMenuItem { visible: root.castDevicesData.length > 0; enabled: false; text: "Slideshow (every 5s) on:" }
                         Repeater {
                             model: root.castDevicesData
-                            MenuItem {
+                            AppMenuItem {
                                 required property var modelData
                                 text: modelData.name
                                 onTriggered: { library.castSlideshow(modelData.host, parseInt(modelData.port), modelData.kind || "chromecast", modelData.control || "", ""); root.castingActive = true; root.castPaused = false }
                             }
                         }
                         MenuSeparator { }
-                        MenuItem { text: "Stop casting"; onTriggered: { library.castStop(); root.castingActive = false } }
+                        AppMenuItem { text: "Stop casting"; onTriggered: { library.castStop(); root.castingActive = false } }
                     }
                 }
 
@@ -822,14 +814,15 @@ ApplicationWindow {
         onRemove: (id) => { library.removePerson(id); if (root.source === "person") root.pickSource("all") }
     }
 
+
     // right-click an album in the sidebar
     ThemedMenu {
         id: albumCtx
         property var album: ({})
-        MenuItem { text: "Rename…"; onTriggered: { albumRenameField.text = albumCtx.album.name || ""; albumRenameDialog.albumId = albumCtx.album.id; albumRenameDialog.open() } }
-        MenuItem { text: "Share…"; onTriggered: library.publishAlbum(albumCtx.album.id) }
+        AppMenuItem { text: "Rename…"; onTriggered: { albumRenameField.text = albumCtx.album.name || ""; albumRenameDialog.albumId = albumCtx.album.id; albumRenameDialog.open() } }
+        AppMenuItem { text: "Share…"; onTriggered: library.publishAlbum(albumCtx.album.id) }
         MenuSeparator {}
-        MenuItem { text: "Delete…"; onTriggered: { albumDeleteDialog.album = albumCtx.album; albumDeleteDialog.open() } }
+        AppMenuItem { text: "Delete…"; onTriggered: { albumDeleteDialog.album = albumCtx.album; albumDeleteDialog.open() } }
     }
     Dialog {
         id: albumRenameDialog

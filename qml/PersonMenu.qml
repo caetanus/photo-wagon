@@ -3,19 +3,18 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 // Right-click on a person (sidebar, People page): rename, or remove from People.
-Menu {
+AppMenu {
     id: menu
-    required property QtObject theme
     property var person: null   // {id, name, faces}
 
     signal rename(int personId, string name)
     signal remove(int personId)
     signal open(int personId)
 
-    MenuItem { text: "Show Photos"; onTriggered: if (menu.person) menu.open(menu.person.id) }
-    MenuItem { text: "Rename…"; onTriggered: { renamer.open() } }
+    AppMenuItem { text: "Show Photos"; onTriggered: if (menu.person) menu.open(menu.person.id) }
+    AppMenuItem { text: "Rename…"; onTriggered: { renamer.open() } }
     MenuSeparator { }
-    MenuItem { text: "Remove from People"; onTriggered: { removeAsk.open() } }
+    AppMenuItem { text: "Remove from People"; onTriggered: { removeAsk.open() } }
 
     Popup {
         id: renamer

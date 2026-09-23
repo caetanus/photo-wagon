@@ -134,17 +134,18 @@ Item {
     function resetCrop() { const e = Object.assign({}, viewer.edits); e.crop = null; viewer.cropAspect = 0; viewer.setEdits(e) }
 
     // Right-click on a face: what to do with the tag.
-    Menu {
+    AppMenu {
         id: faceMenu
+        theme: viewer.theme
         property int faceId: 0
         property int personId: 0
         property string name: ""
-        MenuItem { text: faceMenu.personId ? "Change who this is…" : "Name…"; onTriggered: { namer.faceId = faceMenu.faceId; namer.currentName = faceMenu.name; namer.personId = faceMenu.personId; namer.open() } }
-        MenuItem { visible: faceMenu.personId > 0; height: visible ? implicitHeight : 0; text: "Rename " + faceMenu.name + "…"; onTriggered: { renamer.personId = faceMenu.personId; renamer.name = faceMenu.name; renamer.open() } }
-        MenuItem { visible: faceMenu.personId > 0; height: visible ? implicitHeight : 0; text: "Use as portrait"; onTriggered: viewer.setCover(faceMenu.personId, faceMenu.faceId) }
+        AppMenuItem { text: faceMenu.personId ? "Change who this is…" : "Name…"; onTriggered: { namer.faceId = faceMenu.faceId; namer.currentName = faceMenu.name; namer.personId = faceMenu.personId; namer.open() } }
+        AppMenuItem { visible: faceMenu.personId > 0; height: visible ? implicitHeight : 0; text: "Rename " + faceMenu.name + "…"; onTriggered: { renamer.personId = faceMenu.personId; renamer.name = faceMenu.name; renamer.open() } }
+        AppMenuItem { visible: faceMenu.personId > 0; height: visible ? implicitHeight : 0; text: "Use as portrait"; onTriggered: viewer.setCover(faceMenu.personId, faceMenu.faceId) }
         MenuSeparator { }
-        MenuItem { visible: faceMenu.personId > 0; height: visible ? implicitHeight : 0; text: "Remove tag"; onTriggered: viewer.nameFace(faceMenu.faceId, 0, "") }
-        MenuItem { text: "Not a face"; onTriggered: viewer.notAFace(faceMenu.faceId) }
+        AppMenuItem { visible: faceMenu.personId > 0; height: visible ? implicitHeight : 0; text: "Remove tag"; onTriggered: viewer.nameFace(faceMenu.faceId, 0, "") }
+        AppMenuItem { text: "Not a face"; onTriggered: viewer.notAFace(faceMenu.faceId) }
     }
     /// capture hook: the face menu for the first face
     property alias faceMenuBody: faceMenu.contentItem

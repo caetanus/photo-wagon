@@ -111,7 +111,7 @@ ApplicationWindow {
     }
     function photosTitle() {
         if (filterData.albumId) return albumName(filterData.albumId)
-        if (filterYear === 0) return "Photos"
+        if (filterYear === 0) return "Wagon"
         if (filterDay) return new Date(filterYear, filterMonth - 1, filterDay).toLocaleDateString(Qt.locale(), "d MMMM yyyy")
         if (filterMonth) return new Date(filterYear, filterMonth - 1, 1).toLocaleDateString(Qt.locale(), "MMMM yyyy")
         return String(filterYear)
@@ -307,7 +307,7 @@ ApplicationWindow {
             }
             background: Rectangle { color: "transparent" }
         }
-        NavTab { icon_: icons.photos; label: "Photos" }
+        NavTab { icon_: icons.photos; label: "Wagon" }
         NavTab { icon_: icons.search; label: "Search" }
         NavTab {
             icon_: icons.album; label: "Library"

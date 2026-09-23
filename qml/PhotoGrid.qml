@@ -81,6 +81,15 @@ Item {
         selectionChanged()
     }
     function selectedIds() { return Object.keys(selected).map(Number) }
+    /// how many photos are selected — reactive (menus/toolbar bind to it)
+    readonly property int selectionCount: Object.keys(selected).length
+    /// select every photo currently loaded in the page (Edit ▸ Select All)
+    function selectAll() {
+        const s = {}
+        for (const it of page.items) s[it.id] = true
+        selected = s
+        selectionChanged()
+    }
 
     function indexOf(id) {
         const it = page.items

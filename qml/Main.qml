@@ -183,7 +183,125 @@ ApplicationWindow {
     // Escape / F / F11 leave full screen whatever has the focus.
     Shortcut { sequences: ["Escape", "F11"]; context: Qt.ApplicationShortcut; enabled: root.fullscreen && viewer.zoom === 1 && !viewer.infoOpen; onActivated: root.fullscreen = false }
     Shortcut { sequence: "F"; context: Qt.ApplicationShortcut; enabled: root.viewing; onActivated: root.fullscreen = !root.fullscreen }
-    Shortcut { sequence: "Ctrl+,"; context: Qt.ApplicationShortcut; onActivated: settingsDialog.open() }
+
+    // ---- Application actions: the single source of truth for the menu bar AND the
+    // keyboard, each wired to an affordance the toolbar/sidebar already exposes.
+    Action { id: actAddFolder;  text: "Add Folder to Library…"; onTriggered: folderDialog.open() }
+    Action { id: actImportPhone; text: "Import from Phone…";    onTriggered: phonePanel.open() }
+    Action { id: actPeers;      text: "Computers…";             onTriggered: peersPanel.open() }
+    Action { id: actSettings;   text: "Settings…"; shortcut: "Ctrl+,"; onTriggered: settingsDialog.open() }
+    Action { id: actQuit;       text: "Quit"; shortcut: StandardKey.Quit; onTriggered: Qt.quit() }
+
+    Action { id: actSelectAll;  text: "Select All"; shortcut: StandardKey.SelectAll
+        enabled: !root.viewing && root.pageData.total > 0; onTriggered: grid.selectAll() }
+    Action { id: actDeselect;   text: "Deselect All"; enabled: grid.selectionCount > 0; onTriggered: grid.clearSelection() }
+    Action { id: actFavorite;   text: "Favorite Selection"; enabled: grid.selectionCount > 0
+        onTriggered: { for (const id of grid.selectedIds()) library.toggleFavorite(id) } }
+    Action { id: actAddAlbum;   text: "Add to Album…"; enabled: grid.selectionCount > 0
+        onTriggered: { const sel = grid.selectedIds(); albumDialog.photoIds = sel; library.loadDayMates(JSON.stringify(sel)); albumDialog.open() } }
+    Action { id: actAddTags;    text: "Add Tags…"; enabled: grid.selectionCount > 0
+        onTriggered: { keywordDialog.photoIds = grid.selectedIds(); keywordDialog.open() } }
+    Action { id: actSetPlace;   text: "Set Place…"; enabled: grid.selectionCount > 0
+        onTriggered: { placeDialog.photoIds = grid.selectedIds(); placeDialog.open() } }
+
+    Action { id: actZoomIn;  text: "Zoom In";  shortcut: StandardKey.ZoomIn;  enabled: !root.viewing; onTriggered: root.zoom = Math.min(320, root.zoom + 24) }
+    Action { id: actZoomOut; text: "Zoom Out"; shortcut: StandardKey.ZoomOut; enabled: !root.viewing; onTriggered: root.zoom = Math.max(72, root.zoom - 24) }
+    Action { id: actInfo;    text: "Info"; checkable: true; checked: root.viewing && viewer.infoOpen; enabled: root.viewing; onTriggered: viewer.infoOpen = !viewer.infoOpen }
+    Action { id: actFullScreen; text: "Enter Full Screen"; enabled: root.viewing; onTriggered: root.fullscreen = !root.fullscreen }
+
+    Action { id: actMinimize;   text: "Minimize"; shortcut: "Ctrl+M"; onTriggered: root.showMinimized() }
+    Action { id: actZoomWindow; text: "Zoom"; onTriggered: root.visibility = (root.visibility === Window.Maximized ? Window.Windowed : Window.Maximized) }
+    Action { id: actClose;      text: "Close Window"; shortcut: StandardKey.Close; onTriggered: root.close() }
+    Action { id: actAbout;      text: "About Photo Wagon"; onTriggered: aboutDialog.open() }
+
+    // A themed Menu (the Basic style is otherwise plain): window-coloured surface,
+    // hairline border, palette wired so items pick up the app's text/highlight colours.
+    component ThemedMenu: Menu {
+        implicitWidth: 250
+        palette.text: theme.text
+        palette.windowText: theme.text
+        palette.buttonText: theme.text
+        palette.highlightedText: theme.text
+        palette.highlight: theme.hover
+        background: Rectangle { color: theme.window; border.color: theme.separator; border.width: 1; radius: 8 }
+    }
+
+    menuBar: MenuBar {
+        id: appMenuBar
+        background: Rectangle {
+            color: theme.toolbar
+            Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: theme.separator }
+        }
+        delegate: MenuBarItem {
+            id: mbi
+            padding: 6
+            leftPadding: 11
+            rightPadding: 11
+            contentItem: Label { text: mbi.text; color: theme.text; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
+            background: Rectangle { color: (mbi.highlighted || mbi.down) ? theme.hover : "transparent"; radius: 5 }
+        }
+        ThemedMenu {
+            title: "File"
+            MenuItem { action: actAddFolder }
+            MenuItem { action: actImportPhone }
+            MenuSeparator {}
+            MenuItem { action: actPeers }
+            MenuSeparator {}
+            MenuItem { action: actSettings }
+            MenuSeparator {}
+            MenuItem { action: actQuit }
+        }
+        ThemedMenu {
+            title: "Edit"
+            MenuItem { action: actSelectAll }
+            MenuItem { action: actDeselect }
+            MenuSeparator {}
+            MenuItem { action: actFavorite }
+            MenuItem { action: actAddAlbum }
+            MenuItem { action: actAddTags }
+            MenuItem { action: actSetPlace }
+        }
+        ThemedMenu {
+            title: "View"
+            MenuItem { text: "Years";      checkable: true; checked: root.mode === "years";  enabled: !root.viewing; onTriggered: { root.mode = "years";  library.filterDate(0, 0, 0) } }
+            MenuItem { text: "Months";     checkable: true; checked: root.mode === "months"; enabled: !root.viewing; onTriggered: { root.mode = "months"; library.filterDate(0, 0, 0) } }
+            MenuItem { text: "Days";       checkable: true; checked: root.mode === "days";   enabled: !root.viewing; onTriggered: { root.mode = "days";   library.filterDate(0, 0, 0) } }
+            MenuItem { text: "All Photos"; checkable: true; checked: root.mode === "all";    enabled: !root.viewing; onTriggered: { root.mode = "all";    library.filterDate(0, 0, 0) } }
+            MenuSeparator {}
+            MenuItem { action: actZoomIn }
+            MenuItem { action: actZoomOut }
+            MenuSeparator {}
+            MenuItem { action: actInfo }
+            MenuItem { action: actFullScreen }
+        }
+        ThemedMenu {
+            title: "Window"
+            MenuItem { action: actMinimize }
+            MenuItem { action: actZoomWindow }
+            MenuSeparator {}
+            MenuItem { action: actClose }
+        }
+        ThemedMenu {
+            title: "Help"
+            MenuItem { action: actAbout }
+        }
+    }
+
+    Dialog {
+        id: aboutDialog
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: 360
+        title: "About Photo Wagon"
+        standardButtons: Dialog.Ok
+        background: Rectangle { color: theme.window; border.color: theme.separator; border.width: 1; radius: 10 }
+        contentItem: ColumnLayout {
+            spacing: 6
+            Label { text: "Photo Wagon"; color: theme.text; font.pixelSize: 20; font.bold: true }
+            Label { text: "A local-first photo manager."; color: theme.muted; font.pixelSize: 13 }
+            Label { text: root.pageData.total > 0 ? (root.pageData.total + " photos in the library") : ""; color: theme.muted; font.pixelSize: 12; visible: text.length > 0 }
+        }
+    }
 
     function pathsOf(ids) {
         const out = []

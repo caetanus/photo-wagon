@@ -194,9 +194,9 @@ ApplicationWindow {
                 visible: !(linkChip.up && linkChip.remaining === 0)
                 Layout.fillWidth: true
                 Layout.leftMargin: 10; Layout.rightMargin: 10
-                Layout.topMargin: 8; Layout.bottomMargin: 4
+                Layout.topMargin: 6; Layout.bottomMargin: 4
                 radius: height / 2
-                implicitHeight: 42
+                implicitHeight: 34
                 color: up ? theme.home : theme.panelAlt
                 border.color: up ? "transparent" : theme.border
                 border.width: up ? 0 : 1
@@ -211,7 +211,7 @@ ApplicationWindow {
                     Label {
                         Layout.fillWidth: true
                         color: linkChip.up ? theme.homeText : theme.text
-                        font.pixelSize: 13; font.weight: Font.DemiBold
+                        font.pixelSize: 12; font.weight: Font.DemiBold
                         elide: Text.ElideRight
                         text: linkChip.up
                               ? (linkChip.remaining > 0 ? "Desktop reachable · " + linkChip.remaining + " left" : "Desktop reachable · all sent")
@@ -219,7 +219,7 @@ ApplicationWindow {
                     }
                     Label {
                         text: "›"
-                        font.pixelSize: 18
+                        font.pixelSize: 16
                         color: linkChip.up ? theme.homeText : theme.muted
                         opacity: 0.7
                     }

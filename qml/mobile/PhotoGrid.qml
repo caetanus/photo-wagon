@@ -42,9 +42,12 @@ Item {
     onColsChanged: rebuildRows()   // a rotation / width change re-chunks the rows
 
     // ---- day grouping -----------------------------------------------------------
-    function dayKey(ts) { const d = new Date(ts); return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate() }
+    // taken_ts is Unix SECONDS (the backend stores it with 'unixepoch'); JS Date wants
+    // milliseconds, so ×1000 — without it every photo collapsed onto Jan 1970. 0 = undated.
+    function dayKey(ts) { if (!ts) return "undated"; const d = new Date(ts * 1000); return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate() }
     function dayLabel(ts) {
-        const d = new Date(ts), now = new Date()
+        if (!ts) return "Sem data"
+        const d = new Date(ts * 1000), now = new Date()
         const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
         const that = new Date(d.getFullYear(), d.getMonth(), d.getDate())
         const diff = Math.round((today.getTime() - that.getTime()) / 86400000)
@@ -138,6 +141,10 @@ Item {
             Image {
                 anchors.fill: parent
                 source: cell.modelData.thumbUrl
+                // paint only once decoded — a still-loading, missing or corrupt thumbnail
+                // (common while offline) otherwise flashed as GPU noise; the panelAlt
+                // rectangle behind stays as a clean placeholder until then.
+                visible: status === Image.Ready
                 asynchronous: true; cache: true
                 fillMode: Image.PreserveAspectCrop
                 sourceSize.width: 384; sourceSize.height: 384
@@ -165,15 +172,14 @@ Item {
                     color: "white"; font.pixelSize: 9
                 }
             }
+            // "on the computer" is the quiet default for nearly every tile, so show it as a
+            // small ambient dot, not a selection-style checkmark stamped on every photo.
             Rectangle {
                 visible: cell.modelData.sent
-                anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 6.5
-                width: 18; height: 18; radius: 9
-                color: Qt.rgba(0, 0, 0, 0.45)
-                Image {
-                    anchors.centerIn: parent
-                    source: grid.checkIcon; sourceSize.width: 11; sourceSize.height: 11
-                }
+                anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 6
+                width: 7; height: 7; radius: 3.5
+                color: Qt.rgba(1, 1, 1, 0.9)
+                border.color: Qt.rgba(0, 0, 0, 0.3); border.width: 1
             }
             TapHandler { onTapped: grid.open(cell.modelData.pid) }
         }
@@ -251,7 +257,9 @@ Item {
         if (idx < 0 || idx >= rows.count) return grid.scrubText
         const r = rows.get(idx)
         if (!r || !r.key) return grid.scrubText
-        const p = ("" + r.key).split("#")[0].split("-")
+        const keyPart = ("" + r.key).split("#")[0]
+        if (keyPart === "undated") return "Sem data"
+        const p = keyPart.split("-")
         const d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]))
         const mo = ["January", "February", "March", "April", "May", "June",
                     "July", "August", "September", "October", "November", "December"][d.getMonth()]

@@ -18,6 +18,9 @@ Item {
     property string endpoint: ""
 
     signal openAlbum(int id)
+    signal createAlbum(string name)
+    signal renameAlbum(int id, string name)
+    signal deleteAlbum(int id)
     signal changeEndpoint()
     signal sendAll()
     signal autoSync(bool on)
@@ -77,6 +80,9 @@ Item {
                 albums: view.albums
                 connected: view.connected
                 onOpenAlbum: (id) => view.openAlbum(id)
+                onCreateAlbum: (name) => view.createAlbum(name)
+                onRenameAlbum: (id, name) => view.renameAlbum(id, name)
+                onDeleteAlbum: (id) => view.deleteAlbum(id)
             }
             ComputerPage {
                 theme: view.theme

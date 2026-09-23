@@ -258,6 +258,9 @@ ApplicationWindow {
             sync: root.syncData
             endpoint: library.endpoint
             onOpenAlbum: (id) => root.openAlbum(id)
+            onCreateAlbum: (name) => library.createAlbum(name, "[]")
+            onRenameAlbum: (id, name) => library.renameAlbum(id, name)
+            onDeleteAlbum: (id) => library.deleteAlbum(id)
             onChangeEndpoint: endpointDialog.open()
             onSendAll: library.sendAll()
             onAutoSync: (on) => library.setAutoSync(on)

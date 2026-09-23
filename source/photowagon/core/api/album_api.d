@@ -14,7 +14,20 @@ void registerAlbumApi(Registry r, AlbumRepo albums, PhotoRepo photos, Sharing sh
 	r.add("album.list", (JSONValue p) {
 		JSONValue[] out_;
 		foreach (a; albums.list())
-			out_ ~= AlbumRepo.toJson(a);
+		{
+			auto j = AlbumRepo.toJson(a);
+			// cover = the album's first photo (by position); real thumbnail beats a letter tile
+			Filter f;
+			f.albumId = a.id;
+			auto first = photos.page(f, 0, 1);
+			if (first.length)
+			{
+				auto pj = photos.toJsonArray(first);
+				if (pj.array.length && "thumbUrl" in pj.array[0])
+					j["coverUrl"] = pj.array[0]["thumbUrl"];
+			}
+			out_ ~= j;
+		}
 		return JSONValue(["albums": JSONValue(out_)]);
 	});
 
@@ -25,6 +38,21 @@ void registerAlbumApi(Registry r, AlbumRepo albums, PhotoRepo photos, Sharing sh
 
 	r.add("album.addPhotos", (JSONValue p) {
 		albums.addPhotos(requireLong(p, "id"), getLongArray(p, "photoIds"));
+		return obj();
+	});
+
+	r.add("album.rename", (JSONValue p) {
+		albums.rename(requireLong(p, "id"), requireString(p, "name"));
+		return obj();
+	});
+
+	r.add("album.delete", (JSONValue p) {
+		albums.remove(requireLong(p, "id"));
+		return obj();
+	});
+
+	r.add("album.removePhotos", (JSONValue p) {
+		albums.removePhotos(requireLong(p, "id"), getLongArray(p, "photoIds"));
 		return obj();
 	});
 

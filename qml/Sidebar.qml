@@ -37,6 +37,7 @@ Rectangle {
     signal pick(string key)
     /// Right-click on a person row.
     signal personMenu(var person)
+    signal albumMenu(var album)
     /// A node of the date tree (0 = any); the same node again clears the date filter.
     signal pickDate(int year, int month, int day)
 
@@ -156,6 +157,7 @@ Rectangle {
         property bool expanded: false
         signal tapped()
         signal toggled()
+        signal menu()
         width: list.width
         height: 28
         Rectangle {
@@ -222,6 +224,7 @@ Rectangle {
         }
         HoverHandler { id: hover }
         TapHandler { onTapped: line.tapped() }
+        TapHandler { acceptedButtons: Qt.RightButton; onTapped: line.menu() }
     }
 
     component Row: Line {
@@ -458,6 +461,7 @@ Rectangle {
                     title: modelData.name
                     icon: icons.album
                     detail: String(modelData.photos)
+                    onMenu: sidebar.albumMenu(modelData)
                 }
             }
             }

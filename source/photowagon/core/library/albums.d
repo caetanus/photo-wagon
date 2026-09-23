@@ -91,6 +91,41 @@ final class AlbumRepo
 		s.run();
 	}
 
+	void rename(long id, string name)
+	{
+		if (name.length == 0)
+			throw new ApiError("bad_params", "album needs a name");
+		get(id); // 404 if it does not exist
+		auto s = db.prepare("UPDATE albums SET name = ? WHERE id = ?");
+		s.bind(1, name).bind(2, id);
+		s.run();
+	}
+
+	/// Delete the album; album_photos rows cascade (foreign_keys is ON).
+	void remove(long id)
+	{
+		get(id);
+		auto s = db.prepare("DELETE FROM albums WHERE id = ?");
+		s.bind(1, id);
+		s.run();
+	}
+
+	void removePhotos(long albumId, long[] photoIds)
+	{
+		if (photoIds.length == 0)
+			return;
+		get(albumId);
+		db.transaction!void({
+			auto s = db.prepare("DELETE FROM album_photos WHERE album_id = ? AND photo_id = ?");
+			foreach (pid; photoIds)
+			{
+				s.reset();
+				s.bind(1, albumId).bind(2, pid);
+				s.run();
+			}
+		});
+	}
+
 	private enum select = `SELECT a.id, a.name, (SELECT count(*) FROM album_photos WHERE album_id = a.id),
 		a.manifest, a.origin_peer FROM albums a`;
 

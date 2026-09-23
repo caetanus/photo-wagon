@@ -461,6 +461,7 @@ ApplicationWindow {
             onPick: (key) => root.pickSource(key)
             onPickDate: (y, m, d) => root.pickDate(y, m, d)
             onPersonMenu: (p) => { personMenu.person = p; personMenu.popup() }
+            onAlbumMenu: (a) => { albumCtx.album = a; albumCtx.popup() }
         }
 
         // toolbar
@@ -819,6 +820,43 @@ ApplicationWindow {
         onOpen: (id) => root.openPerson(id)
         onRename: (id, name) => library.renamePerson(id, name)
         onRemove: (id) => { library.removePerson(id); if (root.source === "person") root.pickSource("all") }
+    }
+
+    // right-click an album in the sidebar
+    ThemedMenu {
+        id: albumCtx
+        property var album: ({})
+        MenuItem { text: "Rename…"; onTriggered: { albumRenameField.text = albumCtx.album.name || ""; albumRenameDialog.albumId = albumCtx.album.id; albumRenameDialog.open() } }
+        MenuItem { text: "Share…"; onTriggered: library.publishAlbum(albumCtx.album.id) }
+        MenuSeparator {}
+        MenuItem { text: "Delete…"; onTriggered: { albumDeleteDialog.album = albumCtx.album; albumDeleteDialog.open() } }
+    }
+    Dialog {
+        id: albumRenameDialog
+        property int albumId: 0
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true; width: 340
+        title: "Rename album"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        background: Rectangle { color: theme.window; border.color: theme.separator; border.width: 1; radius: 10 }
+        onAccepted: if (albumRenameField.text.trim().length) library.renameAlbum(albumId, albumRenameField.text.trim())
+        contentItem: TextField { id: albumRenameField; color: theme.text; onAccepted: albumRenameDialog.accept() }
+    }
+    Dialog {
+        id: albumDeleteDialog
+        property var album: ({})
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true; width: 360
+        title: "Delete album?"
+        standardButtons: Dialog.Yes | Dialog.No
+        background: Rectangle { color: theme.window; border.color: theme.separator; border.width: 1; radius: 10 }
+        onAccepted: library.deleteAlbum(album.id)
+        contentItem: Label {
+            text: "“" + (albumDeleteDialog.album.name || "") + "” will be removed. The photos stay in your library."
+            color: theme.muted; wrapMode: Text.WordWrap
+        }
     }
 
     PhotoMenu {

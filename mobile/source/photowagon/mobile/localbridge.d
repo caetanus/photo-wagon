@@ -307,6 +307,10 @@ final class LocalBridge : Bridge
             case "face.setPerson": case "face.delete": case "people.rename": case "people.merge":
             case "people.delete": case "people.similar": case "people.setCover": case "people.remove":
                 forward(method, params, cb); return;
+            // album writes run on the computer (it owns the library); the phone forwards them
+            case "album.create": case "album.rename": case "album.delete":
+            case "album.addPhotos": case "album.removePhotos":
+                forward(method, params, cb); return;
             default:
                 timed(method, 30, { cb(handleSync(method, params), JSONValue(null)); });
             }

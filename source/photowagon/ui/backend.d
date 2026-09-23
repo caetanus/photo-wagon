@@ -1349,6 +1349,41 @@ version (WithUi)
         });
     }
 
+    @Slot void renameAlbum(int id, string name)
+    {
+        JSONValue params = JSONValue.emptyObject;
+        params["id"] = id;
+        params["name"] = name;
+        client.request("album.rename", params, (r, e) {
+            if (e.type != JSONType.null_) { report("album.rename", e); return; }
+            loadAlbums();
+        });
+    }
+
+    @Slot void deleteAlbum(int id)
+    {
+        client.request("album.delete", JSONValue(["id": JSONValue(id)]), (r, e) {
+            if (e.type != JSONType.null_) { report("album.delete", e); return; }
+            loadAlbums();
+        });
+    }
+
+    @Slot void removeFromAlbum(int albumId, string photoIdsJson)
+    {
+        JSONValue ids;
+        try
+            ids = parseJSON(photoIdsJson);
+        catch (JSONException)
+            ids = JSONValue.emptyArray;
+        JSONValue params = JSONValue.emptyObject;
+        params["id"] = albumId;
+        params["photoIds"] = ids;
+        client.request("album.removePhotos", params, (r, e) {
+            if (e.type != JSONType.null_) { report("album.removePhotos", e); return; }
+            loadAlbums();
+        });
+    }
+
     @Slot void quit()
     {
         QCoreApplication.quit();

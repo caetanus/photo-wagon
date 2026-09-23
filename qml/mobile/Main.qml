@@ -73,6 +73,7 @@ ApplicationWindow {
     readonly property var datesData: JSON.parse(library.dates)
     readonly property var current: library.current.length ? JSON.parse(library.current) : null
     readonly property var albumsData: JSON.parse(library.albums).albums
+    readonly property var castDevicesData: { try { return JSON.parse(library.castDevices).devices } catch (e) { return [] } }
     readonly property var filterData: JSON.parse(library.filter)
     readonly property var peopleData: JSON.parse(library.people).people
     readonly property var facesData: JSON.parse(library.faces).faces
@@ -326,6 +327,7 @@ ApplicationWindow {
         theme: root.theme
         photo: root.current
         strip: root.pageData.items
+        castDevices: root.castDevicesData
         visible: root.current !== null
         canSend: true
         facesOnHover: false

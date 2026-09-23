@@ -22,6 +22,8 @@ Rectangle {
     /// The photos around this one, for the bottom filmstrip: [{id, thumbUrl}, …]
     /// (the grid's loaded page — no extra backend round-trip).
     property var strip: []
+    /// Cast screens the computer can see (it does the casting); for the viewer's cast menu.
+    property var castDevices: []
 
     signal closed()
     signal edit()
@@ -402,6 +404,31 @@ Rectangle {
         anchors.topMargin: 10
         anchors.rightMargin: 114
         onClicked: library.sharePhoto(viewer.photo.id)
+    }
+    // Cast to a TV — the phone drives the computer's CastService (it is on the TV's LAN).
+    GlassButton {
+        icon_: icons.cast
+        visible: viewer.photo && !viewer.zoomed
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.leftMargin: 62
+        anchors.topMargin: 10
+        onClicked: { library.loadCastDevices(); castMenu.open() }
+    }
+    Menu {
+        id: castMenu
+        Material.background: viewer.theme.panel
+        MenuItem { enabled: false; text: viewer.castDevices.length ? "Cast this photo to:" : "Looking for TVs…" }
+        Repeater {
+            model: viewer.castDevices
+            MenuItem {
+                required property var modelData
+                text: modelData.name
+                onTriggered: library.castTo(modelData.host, modelData.port, modelData.kind || "chromecast", modelData.control || "", viewer.photo.id)
+            }
+        }
+        MenuSeparator { visible: viewer.castDevices.length > 0 }
+        MenuItem { text: "Stop casting"; onTriggered: library.castStop() }
     }
     // swipe left / right for the neighbours — off while zoomed, where a drag pans instead
     DragHandler {

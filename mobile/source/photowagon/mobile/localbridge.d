@@ -311,6 +311,24 @@ final class LocalBridge : Bridge
             case "album.create": case "album.rename": case "album.delete":
             case "album.addPhotos": case "album.removePhotos":
                 forward(method, params, cb); return;
+            // Cast runs on the computer (it has the CastService + is on the TV's LAN); the
+            // phone is a remote control. Photo ids are rewritten to the computer's own ids.
+            case "cast.devices": case "cast.next": case "cast.prev":
+            case "cast.pause": case "cast.resume": case "cast.stop":
+                forward(method, params, cb); return;
+            case "cast.photo":
+                {
+                    auto q = params;
+                    immutable pid = ("id" in q) ? q["id"].integer : 0;
+                    if (pid < remoteBase)
+                    {
+                        cb(JSONValue(null), error("local_only", "cast only photos that are on the computer"));
+                        return;
+                    }
+                    q["id"] = pid - remoteBase;
+                    forward(method, q, cb);
+                    return;
+                }
             default:
                 timed(method, 30, { cb(handleSync(method, params), JSONValue(null)); });
             }

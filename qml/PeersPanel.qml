@@ -172,6 +172,12 @@ Popup {
                     font.pixelSize: 12
                 }
                 Button {
+                    visible: !!modelData.manifest
+                    text: "Copy code"
+                    // the share code the other wagon pastes: our peerId + the manifest hash
+                    onClicked: library.copyText(panel.peersData.peerId + "|" + modelData.manifest)
+                }
+                Button {
                     text: modelData.manifest ? "Republish" : "Publish"
                     onClicked: library.publishAlbum(modelData.id)
                 }
@@ -181,6 +187,29 @@ Popup {
                 visible: parent.count === 0
                 text: "No albums yet"
                 color: theme.muted
+            }
+        }
+
+        // Receive an album someone else's wagon shared: paste the code they sent you.
+        Label { text: "Add a shared album"; color: theme.text; font.weight: Font.DemiBold }
+        RowLayout {
+            Layout.fillWidth: true
+            TextField {
+                id: shareCodeField
+                Layout.fillWidth: true
+                placeholderText: "paste a share code (peerId|manifest)"
+                color: theme.text
+            }
+            Button {
+                text: "Add"
+                enabled: shareCodeField.text.indexOf("|") > 0
+                onClicked: {
+                    const parts = shareCodeField.text.trim().split("|")
+                    if (parts.length === 2 && parts[0].length && parts[1].length) {
+                        library.fetchSharedAlbum(parts[0], parts[1])
+                        shareCodeField.clear()
+                    }
+                }
             }
         }
 

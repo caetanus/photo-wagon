@@ -1384,6 +1384,20 @@ version (WithUi)
         });
     }
 
+    /// Fetch an album another wagon published (a "share code" the peer sent us splits into
+    /// their peerId + the manifest hash): pulls the manifest + thumbnails, creating a local
+    /// album whose photos live on the peer.
+    @Slot void fetchSharedAlbum(string peerId, string manifest)
+    {
+        JSONValue params = JSONValue.emptyObject;
+        params["peerId"] = peerId;
+        params["manifest"] = manifest;
+        client.request("p2p.fetchAlbum", params, (r, e) {
+            if (e.type != JSONType.null_) { report("p2p.fetchAlbum", e); return; }
+            loadAlbums();
+        });
+    }
+
     @Slot void quit()
     {
         QCoreApplication.quit();

@@ -24,8 +24,10 @@ import photowagon.core.db.sqlite : Database;
 enum joinThreshold = 0.45f;
 /// Centroid cosine at which two persons are the same one. With ArcFace r100
 /// different people sit far lower than SFace (co-occurring mean 0.075, p95 0.30),
-/// so this can be tighter and still never merge two people; kept conservative.
-enum mergeThreshold = 0.6f;
+/// and the merge step skips any pair that co-occurs in a photo (`apart`), so we
+/// loosen this to pull a person's fragmented clusters back together without
+/// merging two different people. 0.5 is still well above where different people sit.
+enum mergeThreshold = 0.5f;
 /// A face narrower than this (pixels of the original) or less confident than
 /// `minScore` is stored but not clustered.
 enum minFaceWidth = 48;
@@ -49,7 +51,7 @@ enum faceVoteMargin = 1.25f;
 enum faceVoteK = 40;
 
 /// Bump when the rule changes: libraries clustered by an older rule are redone.
-enum clusterVersion = 7;
+enum clusterVersion = 8;
 
 bool eligible(float widthPx, float score) pure nothrow @nogc
 {

@@ -41,20 +41,25 @@ enum keepScore = 0.75f;
 enum minMargin = 0.05f;
 
 // --- face-level recognition (matchNamedByFaces) ---
-/// A neighbour face must be at least this similar to count as a vote (raised from 0.40 so
-/// a face is recognised onto a named person only on stronger evidence).
-enum faceVoteMin = 0.45f;
+/// A neighbour face must be at least this similar to count as a vote. Kept generous on
+/// purpose: recognising a face onto a person the USER already named is a high-recall job
+/// (their photos should all land on them). Precision is guarded by `faceVoteMargin` below
+/// — a face only joins if it clearly beats the runner-up named person — and by r100 keeping
+/// strangers far away, not by a high floor here.
+enum faceVoteMin = 0.38f;
 /// A single very-similar neighbour is enough on its own; below this a person
 /// needs two or more neighbours agreeing.
-enum faceVoteStrong = 0.55f;
+enum faceVoteStrong = 0.5f;
 /// The winning named person must beat the runner-up named person by this ratio,
-/// else the two are too close (siblings) and the face is left for the user.
+/// else the two are too close (siblings) and the face is left for the user. This is the
+/// real precision guard, so the vote floor above can stay generous for recall.
 enum faceVoteMargin = 1.25f;
-/// How many nearest faces to look at.
-enum faceVoteK = 40;
+/// How many nearest faces to look at — wide, so a named person's scattered look-alikes
+/// still get a vote.
+enum faceVoteK = 60;
 
 /// Bump when the rule changes: libraries clustered by an older rule are redone.
-enum clusterVersion = 9;
+enum clusterVersion = 10;
 
 bool eligible(float widthPx, float score) pure nothrow @nogc
 {

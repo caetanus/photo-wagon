@@ -30,6 +30,10 @@ Dialog {
     title: "Settings"
     modal: true
     anchors.centerIn: Overlay.overlay
+    // A Layout ignores implicitWidth/Height, so size the dialog itself instead of relying
+    // on the content RowLayout — otherwise it collapses to the section list's width.
+    width: 720
+    height: 520
     padding: 0
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
     // Opening straight onto Sharing (or switching to it) turns the network door on.

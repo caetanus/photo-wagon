@@ -393,6 +393,16 @@ Rectangle {
         anchors.rightMargin: 62
         onClicked: detailSheet.open()
     }
+    // Share to WhatsApp / e-mail / … through the Android share sheet.
+    GlassButton {
+        icon_: icons.share
+        visible: viewer.photo && !viewer.zoomed
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.topMargin: 10
+        anchors.rightMargin: 114
+        onClicked: library.sharePhoto(viewer.photo.id)
+    }
     // swipe left / right for the neighbours — off while zoomed, where a drag pans instead
     DragHandler {
         target: null

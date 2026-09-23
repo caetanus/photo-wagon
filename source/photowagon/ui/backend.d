@@ -1453,6 +1453,16 @@ version (WithUi)
         });
     }
 
+    /// Phone: hand a photo to the OS share sheet (WhatsApp, e-mail, …). The bridge fetches
+    /// a real local file (the phone's own original, or the computer's fetched first) and
+    /// calls Android's ACTION_SEND. A no-op on the desktop bridge (no such request).
+    @Slot void sharePhoto(int id)
+    {
+        client.request("photo.share", JSONValue(["id": JSONValue(id)]), (r, e) {
+            if (e.type != JSONType.null_) report("share", e);
+        });
+    }
+
     /// The visible part of a zoomed photo at the original's resolution.
     @Slot void loadRegion(int id, double x, double y, double w, double h, int px)
     {

@@ -119,3 +119,23 @@ done:
     DEL(scaled); DEL(cBitmap); DEL(frame); DEL(jPath); DEL(mmr); DEL(cMMR);
     return result;
 }
+
+/* pw_share_image — hand a file path to Android's share sheet (ACTION_SEND) by calling the
+   static MainActivity.shareImage(String, String). `env` is a JNIEnv* from
+   QJniEnvironment.getJniEnv(), exactly like pw_video_thumb above. Returns 0 once
+   dispatched (MainActivity posts the intent to the UI thread), -1 if the class/method is
+   missing. */
+int pw_share_image(void* env_, const char* path, const char* mime) {
+    JNIEnv* env = (JNIEnv*) env_;
+    jclass cls = (*env)->FindClass(env, "org/photowagon/mobile/MainActivity");
+    if (!cls) { failed(env); return -1; }
+    jmethodID mid = (*env)->GetStaticMethodID(env, cls, "shareImage",
+        "(Ljava/lang/String;Ljava/lang/String;)V");
+    if (!mid) { failed(env); DEL(cls); return -1; }
+    jstring jpath = (*env)->NewStringUTF(env, path ? path : "");
+    jstring jmime = (*env)->NewStringUTF(env, mime ? mime : "image/*");
+    (*env)->CallStaticVoidMethod(env, cls, mid, jpath, jmime);
+    if (failed(env)) {}   /* swallow any pending exception before returning to D */
+    DEL(jmime); DEL(jpath); DEL(cls);
+    return 0;
+}

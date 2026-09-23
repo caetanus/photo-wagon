@@ -8,6 +8,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 
+import androidx.core.content.FileProvider;
+
 import java.io.File;
 import java.io.FileWriter;
 import java.nio.file.Files;
@@ -95,6 +97,36 @@ public class MainActivity extends QtActivity
     {
         if (instance == this) instance = null;
         super.onDestroy();
+    }
+
+    /**
+     * Hand a photo file to the Android share sheet (WhatsApp, email, …) via ACTION_SEND.
+     * Called from D (localbridge) through the videothumb JNI shim. The file is exposed
+     * with the Qt FileProvider (authority ${applicationId}.qtprovider, whose paths cover
+     * both app storage and external storage), and we post to the UI thread because the
+     * D caller may be on a worker fiber.
+     */
+    public static void shareImage(final String path, final String mime)
+    {
+        final MainActivity a = instance;
+        if (a == null || path == null || path.isEmpty()) return;
+        a.runOnUiThread(new Runnable() {
+            public void run() {
+                try {
+                    File f = new File(path);
+                    Uri uri = FileProvider.getUriForFile(a, a.getPackageName() + ".qtprovider", f);
+                    Intent send = new Intent(Intent.ACTION_SEND);
+                    send.setType((mime == null || mime.isEmpty()) ? "image/*" : mime);
+                    send.putExtra(Intent.EXTRA_STREAM, uri);
+                    send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    Intent chooser = Intent.createChooser(send, "Share photo");
+                    chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    a.startActivity(chooser);
+                } catch (Exception e) {
+                    Log.e(TAG, "share failed: " + e);
+                }
+            }
+        });
     }
 
     /**

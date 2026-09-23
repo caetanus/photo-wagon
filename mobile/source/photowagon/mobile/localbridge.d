@@ -33,6 +33,12 @@ import photowagon.ui.transport : Bridge, ResultCb;
 /// Computer photo ids are shifted by this in what the UI sees.
 enum long remoteBase = 1_000_000_000L;
 
+version (Android)
+{
+    // mobile/jni/videothumb.c — hands a file path to Android's ACTION_SEND share sheet.
+    extern (C) int pw_share_image(void* env, const char* path, const char* mime);
+}
+
 final class LocalBridge : Bridge
 {
     private PhoneIndex index;
@@ -292,6 +298,7 @@ final class LocalBridge : Bridge
             case "photo.get":       get(num(params, "id"), cb); return;
             case "photo.upload":    upload(num(params, "id"), cb); return;
             case "photo.download":  download(num(params, "id"), cb); return;
+            case "photo.share":     share(num(params, "id"), cb); return;
             case "album.list":      albums(cb); return;
             case "photo.faces":     faces(num(params, "id"), cb); return;
             case "people.list":     people(cb); return;
@@ -691,6 +698,27 @@ final class LocalBridge : Bridge
     /// next to the settings), resumably over the pull pipe; the reply carries a file:// URL
     /// the viewer can open, and the file stays for offline use. A local photo is already
     /// here and just answers with its own path.
+    /// Hand a photo to the OS share sheet (WhatsApp, e-mail, …). Reuses `download` to get a
+    /// real local file — the phone's own original, or the computer's original fetched into
+    /// remote-files first — then calls the Android ACTION_SEND shim.
+    private void share(long id, ResultCb cb)
+    {
+        download(id, (r, e) {
+            if (e.type != JSONType.null_) { cb(JSONValue(null), e); return; }
+            immutable path = (r.type == JSONType.object && "path" in r && r["path"].type == JSONType.string)
+                ? r["path"].str : "";
+            if (!path.length) { cb(JSONValue(null), error("no_file", "no local file to share")); return; }
+            version (Android)
+            {
+                import std.string : toStringz;
+                import qt.quick.qjnienvironment : QJniEnvironment;
+                auto env = QJniEnvironment.getJniEnv();
+                pw_share_image(cast(void*) env, path.toStringz, "image/*".toStringz);
+            }
+            cb(JSONValue(["shared": JSONValue(true), "path": JSONValue(path)]), JSONValue(null));
+        });
+    }
+
     private void download(long id, ResultCb cb)
     {
         import std.path : extension;

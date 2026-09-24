@@ -946,6 +946,74 @@ final class P2pBridge : Bridge
             const(ubyte)[] ping = cast(const(ubyte)[]) JSONValue(["id": JSONValue(-1),
                 "method": JSONValue("daemon.hello"), "params": JSONValue.emptyObject]).toString();
             enum pingEvery = 3.seconds, deadAfter = 15.seconds;
+            // One call per job, so each spawned task gets its OWN closure frame. Spawned straight
+            // from the foreach body it would share the loop-body copies (ticket/path/sha/ids/done)
+            // with the next iteration: D closures capture loop-body variables by reference, and
+            // runTask runs the task only up to its first yield — after newStream()/the transfer it
+            // would read the LAST job's values (the last photo pushed N times, the wrong ticket
+            // reported, earlier thumbnail batches never completed).
+            void spawnPush(PushJob job)
+            {
+                immutable jt = job.ticket, jo = job.offset;
+                immutable jp = job.path, js = job.sha;
+                runTask(() nothrow {
+                    string err;
+                    try
+                    {
+                        auto ps = mux.open();
+                        ps.write([muxTagPiece]);
+                        scope (exit) ps.close();
+                        if (js.length)
+                            pushPieces(ps, jp, js);
+                        else
+                            throw new Exception("hyperswarm flavor needs a sha256 (pieces)");
+                    }
+                    catch (Exception e)
+                        err = e.msg.length ? e.msg : "push failed";
+                    try link.deliver(JSONValue(["pushDone": JSONValue(jt), "ok": JSONValue(err.length == 0),
+                        "error": err.length ? JSONValue(err) : JSONValue(null)]).toString());
+                    catch (Exception) {}
+                });
+            }
+            void spawnThumbs(ThumbJob job)
+            {
+                immutable long[] tids = job.ids.idup;
+                auto onT = job.onThumb; auto tdone = job.done;
+                runTask(() nothrow {
+                    try
+                    {
+                        auto ps = mux.open();
+                        ps.write([muxTagPiece]);
+                        scope (exit) ps.close();
+                        askThumbs(ps, tids, onT);
+                    }
+                    catch (Exception) {}
+                    try if (tdone !is null) tdone(); catch (Exception) {}
+                });
+            }
+            void spawnPull(PullJob job)
+            {
+                immutable pt = job.ticket, pd = job.dest, psha = job.sha;
+                auto pstore = pieces;
+                runTask(() nothrow {
+                    string err; bool retry; long sz;
+                    try
+                    {
+                        auto ps = mux.open();
+                        ps.write([muxTagPiece]);
+                        scope (exit) ps.close();
+                        if (psha.length)
+                            sz = pullPieces(ps, pstore, psha, pd, retry);
+                        else
+                            throw new Exception("hyperswarm flavor downloads by pieces (need sha256)");
+                    }
+                    catch (Exception e) { err = e.msg.length ? e.msg : "download failed"; retry = true; }
+                    try link.deliver(JSONValue(["pullDone": JSONValue(pt), "ok": JSONValue(err.length == 0),
+                        "path": JSONValue(pd), "size": JSONValue(sz), "retry": JSONValue(retry),
+                        "error": err.length ? JSONValue(err) : JSONValue(null)]).toString());
+                    catch (Exception) {}
+                });
+            }
             auto lastPing = MonoTime.currTime;
             while (!done && !dead)
             {
@@ -957,72 +1025,16 @@ final class P2pBridge : Bridge
                 PushJob[] pj;
                 synchronized (lock) { pj = pushJobs; pushJobs = null; }
                 foreach (job; pj)
-                {
-                    immutable jt = job.ticket, jo = job.offset;
-                    immutable jp = job.path, js = job.sha;
-                    runTask(() nothrow {
-                        string err;
-                        try
-                        {
-                            auto ps = mux.open();
-                            ps.write([muxTagPiece]);
-                            scope (exit) ps.close();
-                            if (js.length)
-                                pushPieces(ps, jp, js);
-                            else
-                                throw new Exception("hyperswarm flavor needs a sha256 (pieces)");
-                        }
-                        catch (Exception e)
-                            err = e.msg.length ? e.msg : "push failed";
-                        try link.deliver(JSONValue(["pushDone": JSONValue(jt), "ok": JSONValue(err.length == 0),
-                            "error": err.length ? JSONValue(err) : JSONValue(null)]).toString());
-                        catch (Exception) {}
-                    });
-                }
+                    spawnPush(job);
                 // thumbnails: one 'p' stream per batch, raw JPEG bytes (THUMB op)
                 ThumbJob[] tj;
                 synchronized (lock) { tj = thumbJobs; thumbJobs = null; }
                 foreach (job; tj)
-                {
-                    immutable long[] tids = job.ids.idup;
-                    auto onT = job.onThumb; auto tdone = job.done;
-                    runTask(() nothrow {
-                        try
-                        {
-                            auto ps = mux.open();
-                            ps.write([muxTagPiece]);
-                            scope (exit) ps.close();
-                            askThumbs(ps, tids, onT);
-                        }
-                        catch (Exception) {}
-                        try if (tdone !is null) tdone(); catch (Exception) {}
-                    });
-                }
+                    spawnThumbs(job);
                 PullJob[] pull;
                 synchronized (lock) { pull = pullJobs; pullJobs = null; }
                 foreach (job; pull)
-                {
-                    immutable pt = job.ticket, pd = job.dest, psha = job.sha;
-                    auto pstore = pieces;
-                    runTask(() nothrow {
-                        string err; bool retry; long sz;
-                        try
-                        {
-                            auto ps = mux.open();
-                            ps.write([muxTagPiece]);
-                            scope (exit) ps.close();
-                            if (psha.length)
-                                sz = pullPieces(ps, pstore, psha, pd, retry);
-                            else
-                                throw new Exception("hyperswarm flavor downloads by pieces (need sha256)");
-                        }
-                        catch (Exception e) { err = e.msg.length ? e.msg : "download failed"; retry = true; }
-                        try link.deliver(JSONValue(["pullDone": JSONValue(pt), "ok": JSONValue(err.length == 0),
-                            "path": JSONValue(pd), "size": JSONValue(sz), "retry": JSONValue(retry),
-                            "error": err.length ? JSONValue(err) : JSONValue(null)]).toString());
-                        catch (Exception) {}
-                    });
-                }
+                    spawnPull(job);
                 immutable now = MonoTime.currTime;
                 if (now - lastPing >= pingEvery)
                 {
@@ -1416,6 +1428,108 @@ final class P2pBridge : Bridge
         // zero — 2026-09-20). A truly dead link takes 15 s to notice; a lost push costs more.
         enum pingEvery = 3.seconds;
         enum deadAfter = 15.seconds;
+        // One call per job, so each spawned task gets its OWN closure frame. Spawned straight
+        // from the foreach body it would share the loop-body copies (ticket/path/sha/ids/done)
+        // with the next iteration: D closures capture loop-body variables by reference, and
+        // runTask runs the task only up to its first yield — after newStream()/the transfer it
+        // would read the LAST job's values (the last photo pushed N times, the wrong ticket
+        // reported, earlier thumbnail batches never completed).
+        void spawnPush(PushJob job)
+        {
+            immutable jt = job.ticket;
+            immutable jp = job.path;
+            immutable js = job.sha;
+            immutable jo = job.offset;
+            runTask(() nothrow {
+                string err;
+                try
+                {
+                    if (js.length && jo < 0)
+                    {
+                        auto ps = conn.newStream(pieceProtocol);
+                        scope (exit) ps.close();
+                        pushPieces(ps, jp, js);
+                    }
+                    else if (js.length)
+                        pushResumable(conn, jp, js, jo);
+                    else
+                        pushOne(conn, jt, jp);
+                }
+                catch (Exception e)
+                    err = e.msg.length ? e.msg : "push failed";
+                try
+                    link.deliver(JSONValue([
+                        "pushDone": JSONValue(jt),
+                        "ok": JSONValue(err.length == 0),
+                        "error": err.length ? JSONValue(err) : JSONValue(null),
+                    ]).toString());
+                catch (Exception)
+                {
+                }
+            });
+        }
+        void spawnThumbs(ThumbJob job)
+        {
+            immutable long[] tids = job.ids.idup;
+            auto onT = job.onThumb;
+            auto tdone = job.done;
+            runTask(() nothrow {
+                try
+                {
+                    auto ps = conn.newStream(pieceProtocol);
+                    scope (exit) ps.close();
+                    askThumbs(ps, tids, onT);
+                }
+                catch (Exception)
+                {
+                }
+                try
+                    if (tdone !is null)
+                        tdone();
+                catch (Exception)
+                {
+                }
+            });
+        }
+        void spawnPull(PullJob job)
+        {
+            immutable pt = job.ticket;
+            immutable pid = job.id;
+            immutable pd = job.dest;
+            immutable psha = job.sha;
+            auto pstore = pieces;
+            runTask(() nothrow {
+                string err;
+                bool retry;
+                long size;
+                try
+                    if (psha.length)
+                    {
+                        auto ps = conn.newStream(pieceProtocol);
+                        scope (exit) ps.close();
+                        size = pullPieces(ps, pstore, psha, pd, retry);
+                    }
+                    else
+                        size = pullOne(conn, pid, pd, retry);
+                catch (Exception e)
+                {
+                    err = e.msg.length ? e.msg : "download failed";
+                    retry = true;   // a dropped stream: the .part keeps what landed
+                }
+                try
+                    link.deliver(JSONValue([
+                        "pullDone": JSONValue(pt),
+                        "ok": JSONValue(err.length == 0),
+                        "path": JSONValue(pd),
+                        "size": JSONValue(size),
+                        "retry": JSONValue(retry),
+                        "error": err.length ? JSONValue(err) : JSONValue(null),
+                    ]).toString());
+                catch (Exception)
+                {
+                }
+            });
+        }
         auto lastPing = MonoTime.currTime;
         mark("C: loop start");
         // Polling rather than the link's shared ManualEvent: on Android vibe's
@@ -1443,39 +1557,7 @@ final class P2pBridge : Bridge
                 pushJobs = null;
             }
             foreach (job; jobs)
-            {
-                immutable jt = job.ticket;
-                immutable jp = job.path;
-                immutable js = job.sha;
-                immutable jo = job.offset;
-                runTask(() nothrow {
-                    string err;
-                    try
-                    {
-                        if (js.length && jo < 0)
-                        {
-                            auto ps = conn.newStream(pieceProtocol);
-                            scope (exit) ps.close();
-                            pushPieces(ps, jp, js);
-                        }
-                        else if (js.length)
-                            pushResumable(conn, jp, js, jo);
-                        else
-                            pushOne(conn, jt, jp);
-                    }
-                    catch (Exception e)
-                        err = e.msg.length ? e.msg : "push failed";
-                    try
-                        link.deliver(JSONValue([
-                            "pushDone": JSONValue(jt),
-                            "ok": JSONValue(err.length == 0),
-                            "error": err.length ? JSONValue(err) : JSONValue(null),
-                        ]).toString());
-                    catch (Exception)
-                    {
-                    }
-                });
-            }
+                spawnPush(job);
             // thumbnails: raw JPEG bytes on a piece stream (THUMB op), one stream per batch
             ThumbJob[] tjobs;
             synchronized (lock)
@@ -1484,28 +1566,7 @@ final class P2pBridge : Bridge
                 thumbJobs = null;
             }
             foreach (job; tjobs)
-            {
-                immutable long[] tids = job.ids.idup;
-                auto onT = job.onThumb;
-                auto tdone = job.done;
-                runTask(() nothrow {
-                    try
-                    {
-                        auto ps = conn.newStream(pieceProtocol);
-                        scope (exit) ps.close();
-                        askThumbs(ps, tids, onT);
-                    }
-                    catch (Exception)
-                    {
-                    }
-                    try
-                        if (tdone !is null)
-                            tdone();
-                    catch (Exception)
-                    {
-                    }
-                });
-            }
+                spawnThumbs(job);
             // pull pipe: originals the UI asked for, each on its own stream, resumable
             PullJob[] pulls;
             synchronized (lock)
@@ -1514,44 +1575,7 @@ final class P2pBridge : Bridge
                 pullJobs = null;
             }
             foreach (job; pulls)
-            {
-                immutable pt = job.ticket;
-                immutable pid = job.id;
-                immutable pd = job.dest;
-                immutable psha = job.sha;
-                auto pstore = pieces;
-                runTask(() nothrow {
-                    string err;
-                    bool retry;
-                    long size;
-                    try
-                        if (psha.length)
-                        {
-                            auto ps = conn.newStream(pieceProtocol);
-                            scope (exit) ps.close();
-                            size = pullPieces(ps, pstore, psha, pd, retry);
-                        }
-                        else
-                            size = pullOne(conn, pid, pd, retry);
-                    catch (Exception e)
-                    {
-                        err = e.msg.length ? e.msg : "download failed";
-                        retry = true;   // a dropped stream: the .part keeps what landed
-                    }
-                    try
-                        link.deliver(JSONValue([
-                            "pullDone": JSONValue(pt),
-                            "ok": JSONValue(err.length == 0),
-                            "path": JSONValue(pd),
-                            "size": JSONValue(size),
-                            "retry": JSONValue(retry),
-                            "error": err.length ? JSONValue(err) : JSONValue(null),
-                        ]).toString());
-                    catch (Exception)
-                    {
-                    }
-                });
-            }
+                spawnPull(job);
             immutable now = MonoTime.currTime;
             if (now - lastPing >= pingEvery)
             {

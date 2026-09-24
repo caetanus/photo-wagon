@@ -820,6 +820,8 @@ final class Node : Notifiee
 
 	void close() nothrow
 	{
+		if (hs !is null)
+			hs.close(); // the hyperswarm sync transport: its sockets, fibers and LAN hold
 		try
 			kad.close();
 		catch (Exception)

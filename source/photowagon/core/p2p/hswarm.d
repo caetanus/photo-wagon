@@ -16,11 +16,20 @@ import hyperswarm.connection : Connection;
 import hyperswarm.cenc : Address;
 import hyperswarm.noise.crypto : keyedBlake2b;
 import vibe.core.net : NetworkAddress;
+import libp2p.discovery.mdns : LanRendezvous;
 
 /// A hyperswarm node for one end of the phone↔desktop link.
 final class HsTransport
 {
     private Hyperswarm swarm;
+    private bool closed;
+    // The LAN rendezvous this transport holds, and the exact delegates it put on it
+    // (the rendezvous is shared with the libp2p flavor: we take one hold and take
+    // back only our own lines/listener — never close it outright).
+    private LanRendezvous lan;
+    private string[] delegate() lanSource;
+    private void delegate(NetworkAddress, string[]) nothrow lanListener;
+    private ubyte[] startedKey; // the key start() last joined, so a repeat is a no-op
 
     /// Invoked once per new peer connection, after its secret stream opens. The
     /// callee sets the Connection's onData/onClose and uses write() to send.
@@ -55,9 +64,49 @@ final class HsTransport
     /// label shared with the libp2p flavor, one TXT record with this flavor's line.
     void start(scope const(ubyte)[] key, bool asServer)
     {
+        if (closed || (startedKey !is null && startedKey == key))
+            return; // same key again: already joined and on its LAN rendezvous
+        startedKey = key.dup;
         auto topic = topicFor(key);
         swarm.join(topic, /*client*/ !asServer, /*serverMode*/ asServer);
+        leaveLan(); // a new key: the previous key's LAN lines/listener come off first
         startLan(key, asServer);
+    }
+
+    /// Leave for good: our LAN lines and listener come off the shared rendezvous (our
+    /// hold is released — the beacon dies with its last holder), then the swarm and
+    /// its sockets close. Idempotent.
+    void close() nothrow
+    {
+        if (closed)
+            return;
+        closed = true;
+        leaveLan();
+        try
+            swarm.close();
+        catch (Exception)
+        {
+        }
+    }
+
+    private void leaveLan() nothrow
+    {
+        if (lan is null)
+            return;
+        try
+        {
+            if (lanListener !is null)
+                lan.removeListener(lanListener);
+            if (lanSource !is null)
+                lan.removeTxtSource(lanSource);
+        }
+        catch (Exception)
+        {
+        }
+        lan.release();
+        lan = null;
+        lanListener = null;
+        lanSource = null;
     }
 
     /// The older entry: a pre-derived topic, no LAN rendezvous (needs the key).
@@ -74,16 +123,21 @@ final class HsTransport
     {
         import std.conv : to;
         import std.format : format;
-        import libp2p.discovery.mdns : LanRendezvous;
 
         try
         {
-            auto lan = LanRendezvous.forKey("pw", key);
+            auto r = LanRendezvous.forKey("pw", key);
+            r.acquire(); // our hold; leaveLan() releases it
+            lan = r;
             auto sw = swarm;
             if (asServer)
-                lan.addTxtSource(() => ["udx=" ~ sw.udxPort.to!string, "pk=" ~ format("%(%02x%)", sw.keyPair.publicKey[])]);
+            {
+                lanSource = () => ["udx=" ~ sw.udxPort.to!string, "pk=" ~ format("%(%02x%)", sw.keyPair.publicKey[])];
+                r.addTxtSource(lanSource);
+            }
             else
-                lan.addListener((NetworkAddress from, string[] txts) nothrow {
+            {
+                lanListener = (NetworkAddress from, string[] txts) nothrow {
                     try
                     {
                         immutable portText = LanRendezvous.line(txts, "udx");
@@ -98,7 +152,9 @@ final class HsTransport
                     catch (Exception)
                     {
                     }
-                });
+                };
+                r.addListener(lanListener);
+            }
         }
         catch (Exception)
         {

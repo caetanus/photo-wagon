@@ -12,7 +12,10 @@ module photowagon.core.p2p.hsmux;
 
 import std.json;
 
-import vibe.core.core : runTask;
+import core.time : MonoTime, Duration, minutes, seconds;
+
+import vibe.core.core : runTask, sleep;
+import vibe.core.task : Task;
 import vibe.core.log : logDiagnostic, logInfo;
 
 import hyperswarm.connection : Connection;
@@ -29,6 +32,18 @@ import photowagon.core.sync.pieces : PieceService, PieceStore;
 alias tagControl = muxTagControl;
 alias tagPiece = muxTagPiece;
 enum maxControlLine = 16 * 1024 * 1024;   // an IPC line (a base64 fallback can be big)
+/// Liveness: the phone writes on the control channel at least every 3 s (its daemon.hello
+/// ping) and drops the link itself after 15 s of silence; the desktop mirrors that. A phone
+/// that roams away or is killed sends no udx close, so without this deadline its session —
+/// the Connection, the mux buffers, and the Events sink that holds it — lived forever.
+enum deadAfter = 15.seconds;
+/// Before the pairing token is accepted the bar is lower: an unauthenticated peer must not
+/// pin a session.
+enum deadAfterPreAuth = 10.seconds;
+/// Token accepted, pairing code waiting for the operator: the phone sends nothing while it
+/// waits (its pings start after auth), so silence is expected — but a pairing nobody
+/// confirms must not hold the session forever either.
+enum deadAfterPairing = 5.minutes;
 
 /// One phone session over a hyperswarm Connection, on the mux.
 final class HsMuxServe
@@ -45,7 +60,10 @@ final class HsMuxServe
 	private MuxStream control;           // the 'i' stream we send replies/events on
 	private RequestHandler handler;
 	private EventSink sink;
-	private bool authed, tokenOk, gone;
+	private bool authed, tokenOk, gone, pairPending;
+	private uint pairGen; // which daemon.pair is current: a superseded resolver must not clear it
+	private MonoTime lastRecv;
+	private Task watchdog;
 
 	this(Connection c, Registry registry, Events events, string token, DeviceRepo devices,
 		PairingManager pairing, PieceService pieces)
@@ -62,10 +80,47 @@ final class HsMuxServe
 		sink = &send;
 		authed = token.length == 0;
 		mux = new MuxSession(&write, /*initiator*/ false, &onAccept);
-		c.onData((ubyte[] b) nothrow { if (!gone) mux.feed(b); });
+		lastRecv = MonoTime.currTime;
+		c.onData((ubyte[] b) nothrow {
+			if (gone)
+				return;
+			lastRecv = MonoTime.currTime;
+			mux.feed(b);
+		});
 		c.onClose = &onClose;
 		events.attach(sink);
+		try
+			watchdog = runTask(&watch);
+		catch (Exception)
+		{
+		}
 		logInfo("hs/mux: %s connected", short_);
+	}
+
+	/// Drop a peer that has gone silent past its deadline: a hard destroy (nothing to
+	/// flush to a peer that is gone), then the same teardown a udx close would run.
+	private void watch() nothrow
+	{
+		while (!gone)
+		{
+			try
+				sleep(1.seconds);
+			catch (Exception)
+				return; // interrupted: the session is closing
+			if (gone)
+				return;
+			immutable limit = authed ? deadAfter : pairPending ? deadAfterPairing : deadAfterPreAuth;
+			if (MonoTime.currTime - lastRecv <= limit)
+				continue;
+			try
+				logInfo("hs/mux: %s silent for %ss — dropping", short_, limit.total!"seconds");
+			catch (Exception)
+			{
+			}
+			c.destroy();
+			onClose(); // idempotent; guarantees the sink detaches even if no close arrives
+			return;
+		}
 	}
 
 	private void write(const(ubyte)[] f) nothrow
@@ -204,7 +259,17 @@ final class HsMuxServe
 			auto pid = id;
 			logInfo("hs/mux: pairing knock from %s, code %s", short_, code);
 			logInfo("hs/mux: pairing knock full peer %s", peer);
+			// begin() resolves a previous request for this peer with false, synchronously —
+			// so mark the new one current first, and let only the current one's resolver
+			// clear the pending state.
+			immutable gen = ++pairGen;
+			pairPending = true;
 			pairing.begin(peer, code, name, (bool ok) {
+				if (gen == pairGen)
+				{
+					pairPending = false;
+					lastRecv = MonoTime.currTime; // the wait was the operator's, not the phone's silence
+				}
 				try
 				{
 					if (ok)
@@ -261,6 +326,9 @@ final class HsMuxServe
 		if (gone)
 			return;
 		gone = true;
+		// stop the watchdog, unless this teardown is running on it (no self-interrupt)
+		if (watchdog != Task.init && watchdog.running && Task.getThis() != watchdog)
+			watchdog.interrupt();
 		try
 		{
 			mux.closeAll();

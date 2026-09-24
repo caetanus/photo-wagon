@@ -18,6 +18,25 @@ if [ -n "${PW_NO_OPENCV:-}" ]; then
     echo "csrc: built libface_novision.a (sqlite-vec only, no OpenCV)"
     exit 0
 fi
+# qml-css-engine shim (csrc/css_shim.cpp): a real CSS engine so the app can wear GTK/Adwaita
+# themes. Merge the shim with ~/lab/qml-css-engine's static lib into libcss.a. MUST be built
+# with -DNDEBUG/-DQT_NO_DEBUG so Qt's inline container assertions match a release app (the
+# engine's own lib is built with meson -Db_ndebug=true). Own freshness check, independent of
+# the OpenCV archive. Skipped (theming just off) when the engine isn't built.
+QMLCSS=${QMLCSS:-$HOME/lab/qml-css-engine}
+if [ -f "$QMLCSS/build/libqmlcssengine.a" ] && pkg-config --exists Qt6Qml \
+   && { [ ! -f libcss.a ] || [ css_shim.cpp -nt libcss.a ] || [ "$QMLCSS/build/libqmlcssengine.a" -nt libcss.a ]; }; then
+    ${CXX:-g++} -std=c++20 -O2 -DNDEBUG -DQT_NO_DEBUG -fPIC \
+        -I "$QMLCSS/src" $(pkg-config --cflags Qt6Qml Qt6Quick Qt6Gui Qt6Core) \
+        -c css_shim.cpp -o css_shim.o
+    rm -rf .cssmerge && mkdir -p .cssmerge && ( cd .cssmerge && ar x "$QMLCSS/build/libqmlcssengine.a" )
+    cp css_shim.o .cssmerge/
+    rm -f libcss.a && ar rcs libcss.a .cssmerge/*.o && rm -rf .cssmerge
+    echo "csrc: built libcss.a (qml-css-engine + shim)"
+elif [ ! -f "$QMLCSS/build/libqmlcssengine.a" ]; then
+    echo "csrc: $QMLCSS/build/libqmlcssengine.a missing — GTK theming off (meson setup+ -Db_ndebug=true)" >&2
+fi
+
 fresh=1
 for f in face_opencv.cpp face_opencv.h clip_opencv.cpp clip_opencv.h ocr_tesseract.cpp ocr_tesseract.h sqlite-vec.c sqlite-vec.h clipboard_qt.cpp clipboard_qt.h; do
     [ libface_opencv.a -nt "$f" ] || fresh=0

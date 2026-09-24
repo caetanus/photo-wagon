@@ -12,7 +12,15 @@ ApplicationWindow {
     height: 820
     visible: true
     title: "Photo Wagon"
-    color: theme.window
+    // GTK/GNOME apps draw their own title bar (CSD): go frameless so the compositor adds no
+    // decoration, and the headerbar below carries the window controls + the 🍔 primary menu.
+    flags: root.themeMode === "gtk" ? (Qt.Window | Qt.FramelessWindowHint) : Qt.Window
+    readonly property bool csd: root.themeMode === "gtk"
+    // Draw the GNOME-style rounded, shadowed surface only when the window is free-floating;
+    // maximized/tiled/fullscreen windows are square and edge-to-edge (like libadwaita).
+    readonly property bool decoFloating: root.csd && root.visibility !== 4 && root.visibility !== 5 && !root.fullscreen
+    // Transparent in CSD so the rounded corners + drop shadow (drawn below) show through.
+    color: root.csd ? "transparent" : theme.window
     font.family: "Noto Sans"
     font.pixelSize: 13
 
@@ -22,24 +30,35 @@ ApplicationWindow {
     property string themeMode: "mac"          // "mac" | "system"
     readonly property bool dark: Application.styleHints.colorScheme === Qt.ColorScheme.Dark
     SystemPalette { id: sysPalette; colorGroup: SystemPalette.Active }
+    // GTK mode reads its colours from the qml-css engine (cssTheme), which app.d loads with the
+    // live GTK/Adwaita palette. gtkC resolves one token selector's property, with an accurate
+    // Adwaita fallback if the engine or the stylesheet isn't present.
+    readonly property bool gtkAvail: (typeof cssTheme !== "undefined") && cssTheme
+    function gtkC(id, prop, fb) {
+        if (!gtkAvail) return fb
+        try { var v = cssTheme.resolve(id, [], "", "")[prop]; return (v && ("" + v).length) ? v : fb }
+        catch (e) { return fb }
+    }
     readonly property QtObject theme: QtObject {
         readonly property bool sys: root.themeMode === "system"
-        readonly property color window:    sys ? sysPalette.window        : (root.dark ? "#1e1e1e" : "#ffffff")
-        readonly property color content:   sys ? sysPalette.base          : (root.dark ? "#1e1e1e" : "#ffffff")
-        readonly property color sidebar:   sys ? sysPalette.alternateBase : (root.dark ? "#262628" : "#f2f2f7")
-        readonly property color panel:     sys ? sysPalette.alternateBase : (root.dark ? "#242426" : "#f7f7f9")
-        readonly property color toolbar:   sys ? sysPalette.window        : (root.dark ? "#1e1e1e" : "#ffffff")
-        readonly property color viewerBg:  sys ? sysPalette.base          : (root.dark ? "#161616" : "#f5f5f7")
-        readonly property color tile:      sys ? sysPalette.alternateBase : (root.dark ? "#2a2a2c" : "#ebebef")
-        readonly property color separator: sys ? sysPalette.mid           : (root.dark ? "#3a3a3c" : "#e5e5ea")
-        readonly property color selection: sys ? Qt.rgba(sysPalette.highlight.r, sysPalette.highlight.g, sysPalette.highlight.b, 0.35) : (root.dark ? "#3a3a3d" : "#dcdce1")
-        readonly property color hover:     sys ? Qt.rgba(sysPalette.highlight.r, sysPalette.highlight.g, sysPalette.highlight.b, 0.15) : (root.dark ? "#2e2e30" : "#e8e8ed")
-        readonly property color text:      sys ? sysPalette.text          : (root.dark ? "#f5f5f7" : "#1d1d1f")
-        readonly property color muted:     sys ? Qt.rgba(sysPalette.text.r, sysPalette.text.g, sysPalette.text.b, 0.55) : (root.dark ? "#98989d" : "#86868b")
+        readonly property bool gtk: root.themeMode === "gtk"
+        readonly property color window:    gtk ? root.gtkC("pw-window","background-color",   (root.dark?"#222226":"#fafafb")) : (sys ? sysPalette.window        : (root.dark ? "#1e1e1e" : "#ffffff"))
+        readonly property color content:   gtk ? root.gtkC("pw-content","background-color",  (root.dark?"#1d1d20":"#ffffff")) : (sys ? sysPalette.base          : (root.dark ? "#1e1e1e" : "#ffffff"))
+        readonly property color sidebar:   gtk ? root.gtkC("pw-sidebar","background-color",  (root.dark?"#2e2e32":"#ebebed")) : (sys ? sysPalette.alternateBase : (root.dark ? "#262628" : "#f2f2f7"))
+        readonly property color panel:     gtk ? root.gtkC("pw-panel","background-color",    (root.dark?"#28282c":"#f3f3f5")) : (sys ? sysPalette.alternateBase : (root.dark ? "#242426" : "#f7f7f9"))
+        readonly property color toolbar:   gtk ? root.gtkC("pw-toolbar","background-color",  (root.dark?"#2e2e32":"#ffffff")) : (sys ? sysPalette.window        : (root.dark ? "#1e1e1e" : "#ffffff"))
+        readonly property color viewerBg:  gtk ? root.gtkC("pw-viewer","background-color",   (root.dark?"#1d1d20":"#ffffff")) : (sys ? sysPalette.base          : (root.dark ? "#161616" : "#f5f5f7"))
+        readonly property color tile:      gtk ? root.gtkC("pw-tile","background-color",     (root.dark?"#2c2c2f":"#ffffff")) : (sys ? sysPalette.alternateBase : (root.dark ? "#2a2a2c" : "#ebebef"))
+        readonly property color separator: gtk ? root.gtkC("pw-separator","color",           (root.dark?"#434348":"#dcdcde")) : (sys ? sysPalette.mid           : (root.dark ? "#3a3a3c" : "#e5e5ea"))
+        readonly property color text:      gtk ? root.gtkC("pw-text","color",                (root.dark?"#ffffff":"#323236")) : (sys ? sysPalette.text          : (root.dark ? "#f5f5f7" : "#1d1d1f"))
         // System accent: the exact desktop accent (GNOME accent-color → Adwaita) when known,
         // else the platform palette's highlight. Mac keeps its signature blue.
-        readonly property color accent:    sys ? (library.systemAccent.length ? library.systemAccent : sysPalette.highlight) : "#0a7aff"
-        readonly property color field:     sys ? sysPalette.base           : (root.dark ? "#2c2c2e" : "#ececf0")
+        readonly property color accent:    gtk ? root.gtkC("pw-accent","color", (library.systemAccent.length ? library.systemAccent : "#3584e4")) : (sys ? (library.systemAccent.length ? library.systemAccent : sysPalette.highlight) : "#0a7aff")
+        readonly property color field:     gtk ? root.gtkC("pw-field","background-color",    (root.dark?"#2c2c30":"#ffffff")) : (sys ? sysPalette.base           : (root.dark ? "#2c2c2e" : "#ececf0"))
+        // Derived (selection/hover/muted) — from the resolved accent/text, GTK-style overlays.
+        readonly property color selection: gtk ? Qt.rgba(accent.r, accent.g, accent.b, 0.30) : (sys ? Qt.rgba(sysPalette.highlight.r, sysPalette.highlight.g, sysPalette.highlight.b, 0.35) : (root.dark ? "#3a3a3d" : "#dcdce1"))
+        readonly property color hover:     gtk ? Qt.rgba(text.r, text.g, text.b, 0.07)       : (sys ? Qt.rgba(sysPalette.highlight.r, sysPalette.highlight.g, sysPalette.highlight.b, 0.15) : (root.dark ? "#2e2e30" : "#e8e8ed"))
+        readonly property color muted:     gtk ? Qt.rgba(text.r, text.g, text.b, 0.55)       : (sys ? Qt.rgba(sysPalette.text.r, sysPalette.text.g, sysPalette.text.b, 0.55) : (root.dark ? "#98989d" : "#86868b"))
     }
     readonly property QtObject icons: Icons { }
 
@@ -58,7 +77,7 @@ ApplicationWindow {
     }
     Component.onCompleted: {
         try { root._ui = JSON.parse(library.uiState) || {} } catch (e) { root._ui = {} }
-        if (root._ui.theme === "mac" || root._ui.theme === "system") root.themeMode = root._ui.theme
+        if (["mac","system","gtk"].indexOf(root._ui.theme) >= 0) root.themeMode = root._ui.theme
         if (typeof root._ui.zoom === "number" && root._ui.zoom >= 72 && root._ui.zoom <= 320) root.zoom = root._ui.zoom
         if (["years", "months", "days", "all"].indexOf(root._ui.startupView) >= 0) { root.startupView = root._ui.startupView; root.mode = root.startupView }
         library.refreshSystemAccent()
@@ -220,6 +239,8 @@ ApplicationWindow {
 
     menuBar: MenuBar {
         id: appMenuBar
+        visible: !root.csd
+        height: root.csd ? 0 : implicitHeight
         background: Rectangle {
             color: theme.toolbar
             Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: theme.separator }
@@ -421,12 +442,34 @@ ApplicationWindow {
 
     // ---- layout -------------------------------------------------------------------------
     Item {
+        id: frame
+        anchors.fill: parent
+    // Manual soft drop shadow for the GNOME CSD frame: stacked translucent rounded rects.
+    // Unlike MultiEffect this renders in the software backend too (so it's verifiable), and
+    // it only shows when the window is free-floating.
+    Repeater {
+        model: root.decoFloating ? 14 : 0
+        Rectangle {
+            z: -1
+            readonly property int spread: 14 - index      // 14 (outer, faint) .. 1 (inner, near the edge)
+            x: shell.x - spread
+            y: shell.y - spread + 3                        // a touch of downward bias, like a real drop shadow
+            width: shell.width + spread * 2
+            height: shell.height + spread * 2
+            radius: 12 + spread
+            color: Qt.rgba(0, 0, 0, 0.028)
+        }
+    }
+    Item {
         id: shell
         anchors.fill: parent
+        anchors.margins: root.decoFloating ? 18 : 0        // room for the shadow around the rounded surface
 
         Sidebar {
             id: sidebar
             visible: !root.fullscreen
+            topLeftRad: root.decoFloating ? 12 : 0
+            bottomLeftRad: root.decoFloating ? 12 : 0
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             anchors.left: parent.left
@@ -460,6 +503,7 @@ ApplicationWindow {
         Rectangle {
             id: toolbar
             visible: !root.fullscreen
+            topRightRadius: root.decoFloating ? 12 : 0
             anchors.top: parent.top
             anchors.left: sidebar.right
             anchors.right: parent.right
@@ -666,6 +710,74 @@ ApplicationWindow {
                     ToolTip.text: "Settings (Ctrl+,)"; ToolTip.visible: hovered
                     onClicked: settingsDialog.open()
                 }
+
+                // ---- CSD window controls (GTK theme only): the 🍔 primary menu + close ----
+                ToolIcon {
+                    visible: root.csd
+                    icon_: icons.menu
+                    ToolTip.text: "Main menu"; ToolTip.visible: hovered
+                    onClicked: primaryMenu.popup(this, width - primaryMenu.width, height + 4)
+                }
+                Rectangle {
+                    visible: root.csd
+                    Layout.leftMargin: 2
+                    implicitWidth: 26; implicitHeight: 26; radius: 13
+                    color: closeTap.pressed ? Qt.darker(theme.separator, 1.15)
+                         : closeHover.hovered ? theme.separator
+                         : Qt.rgba(theme.text.r, theme.text.g, theme.text.b, 0.08)
+                    Image {
+                        anchors.centerIn: parent
+                        source: icons.tint(icons.close, theme.text)
+                        sourceSize.width: 14; sourceSize.height: 14
+                    }
+                    HoverHandler { id: closeHover }
+                    TapHandler { id: closeTap; onTapped: winCtl.closeWindow() }
+                }
+            }
+
+            // CSD: drag the headerbar to move the window; double-click to (un)maximize.
+            // target:null so the handler hands the gesture to the compositor instead of
+            // moving the item. Buttons and the segmented control grab their own presses,
+            // so only empty headerbar space starts a move.
+            TapHandler {
+                enabled: root.csd
+                acceptedButtons: Qt.LeftButton
+                gesturePolicy: TapHandler.DragThreshold
+                onDoubleTapped: winCtl.toggleMaximize()
+            }
+            DragHandler {
+                enabled: root.csd
+                target: null
+                onActiveChanged: if (active) winCtl.startMove()
+            }
+
+            // The GNOME "primary menu": everything the menu bar holds, folded into the 🍔.
+            ThemedMenu {
+                id: primaryMenu
+                AppMenuItem { action: actAddFolder }
+                AppMenuItem { action: actImportPhone }
+                MenuSeparator {}
+                AppMenuItem { action: actSelectAll }
+                AppMenuItem { action: actDeselect }
+                MenuSeparator {}
+                AppMenuItem { action: actFavorite }
+                AppMenuItem { action: actAddAlbum }
+                AppMenuItem { action: actAddTags }
+                AppMenuItem { action: actSetPlace }
+                MenuSeparator {}
+                AppMenuItem { action: actZoomIn }
+                AppMenuItem { action: actZoomOut }
+                AppMenuItem { action: actInfo }
+                AppMenuItem { action: actFullScreen }
+                MenuSeparator {}
+                AppMenuItem { action: actPeers }
+                AppMenuItem { action: actSettings }
+                MenuSeparator {}
+                AppMenuItem { action: actMinimize }
+                AppMenuItem { action: actZoomWindow }
+                AppMenuItem { action: actAbout }
+                MenuSeparator {}
+                AppMenuItem { action: actQuit }
             }
         }
 
@@ -805,6 +917,7 @@ ApplicationWindow {
             }
         }
     } // shell
+    } // frame
 
     PersonMenu {
         id: personMenu
@@ -813,6 +926,7 @@ ApplicationWindow {
         onRename: (id, name) => library.renamePerson(id, name)
         onRemove: (id) => { library.removePerson(id); if (root.source === "person") root.pickSource("all") }
     }
+
 
 
     // right-click an album in the sidebar
@@ -1259,4 +1373,23 @@ ApplicationWindow {
         }
     }
 
+    // ---- CSD resize grips: a thin interactive border on a frameless window (GTK theme). --
+    // Qt::Edges bitmask — Top=1, Left=2, Right=4, Bottom=8; corners are ORed (top-left = 3).
+    component ResizeGrip: MouseArea {
+        property int edge: 0
+        enabled: root.csd && !root.fullscreen && root.visibility !== 4   // 4 = Window.Maximized
+        visible: enabled
+        hoverEnabled: true
+        acceptedButtons: Qt.LeftButton
+        z: 999
+        onPressed: winCtl.startResize(edge)
+    }
+    ResizeGrip { edge: 1; cursorShape: Qt.SizeVerCursor; height: 6; anchors { top: parent.top; left: parent.left; right: parent.right } }
+    ResizeGrip { edge: 8; cursorShape: Qt.SizeVerCursor; height: 6; anchors { bottom: parent.bottom; left: parent.left; right: parent.right } }
+    ResizeGrip { edge: 2; cursorShape: Qt.SizeHorCursor; width: 6; anchors { left: parent.left; top: parent.top; bottom: parent.bottom } }
+    ResizeGrip { edge: 4; cursorShape: Qt.SizeHorCursor; width: 6; anchors { right: parent.right; top: parent.top; bottom: parent.bottom } }
+    ResizeGrip { edge: 3;  z: 1000; cursorShape: Qt.SizeFDiagCursor; width: 12; height: 12; anchors { top: parent.top; left: parent.left } }
+    ResizeGrip { edge: 5;  z: 1000; cursorShape: Qt.SizeBDiagCursor; width: 12; height: 12; anchors { top: parent.top; right: parent.right } }
+    ResizeGrip { edge: 10; z: 1000; cursorShape: Qt.SizeBDiagCursor; width: 12; height: 12; anchors { bottom: parent.bottom; left: parent.left } }
+    ResizeGrip { edge: 12; z: 1000; cursorShape: Qt.SizeFDiagCursor; width: 12; height: 12; anchors { bottom: parent.bottom; right: parent.right } }
 }

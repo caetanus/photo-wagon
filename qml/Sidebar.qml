@@ -8,6 +8,10 @@ import QtQuick.Layouts
 // in the footer, always visible.
 Rectangle {
     id: sidebar
+    property real topLeftRad: 0      // rounded corners in the GNOME CSD frame
+    property real bottomLeftRad: 0
+    topLeftRadius: topLeftRad
+    bottomLeftRadius: bottomLeftRad
     required property QtObject theme
     required property QtObject icons
     property var albums: []

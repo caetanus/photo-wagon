@@ -12,7 +12,7 @@ Dialog {
     required property QtObject icons
 
     // ---- state mirrored from the main window ------------------------------------
-    property string themeMode: "mac"      // "mac" | "system"
+    property string themeMode: "mac"      // "mac" | "system" | "gtk"
     property string startupView: "all"    // "years" | "months" | "days" | "all"
     property int thumbSize: 176           // 72..320
 
@@ -126,13 +126,13 @@ Dialog {
                     RowLayout {
                         spacing: 14
                         Repeater {
-                            model: [["mac", "Mac", "#0a7aff"], ["system", "System (desktop)", ""]]
+                            model: [["mac", "Mac", "#0a7aff"], ["system", "System (desktop)", ""], ["gtk", "GTK / Adwaita", ""]]
                             delegate: Rectangle {
                                 id: card
                                 required property var modelData
                                 readonly property bool on: dlg.themeMode === modelData[0]
                                 readonly property color swatch: modelData[2].length ? modelData[2] : (dlg.theme.accent)
-                                width: 150; height: 92; radius: 9
+                                width: 132; height: 92; radius: 9
                                 color: theme.field
                                 border.color: on ? theme.accent : theme.separator
                                 border.width: on ? 2 : 1
@@ -167,7 +167,7 @@ Dialog {
                         Label { text: "Accent"; color: theme.muted; font.pixelSize: 12 }
                         Rectangle { width: 18; height: 18; radius: 9; color: theme.accent; border.color: theme.separator }
                         Label {
-                            text: dlg.themeMode === "system" ? "from your desktop" : "Photo Wagon blue"
+                            text: (dlg.themeMode === "system" || dlg.themeMode === "gtk") ? "from your desktop" : "Photo Wagon blue"
                             color: theme.muted; font.pixelSize: 12
                         }
                     }

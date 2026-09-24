@@ -18,6 +18,20 @@ import std.stdio : writeln, stdout, stderr;
 import std.process : environment;
 
 import photowagon.ui.backend : Library;
+import photowagon.ui.windowctl : WindowCtl;
+import qt.quick.qwindow : QWindow;
+
+// qml-css-engine shim (csrc/css_shim.cpp): register the qmlcss QML types, create the
+// CssTheme + CssLayoutEngine, and load a GTK-mapped stylesheet, so the UI can wear the
+// system GTK/Adwaita theme. Absent from the headless/node builds (no Qt).
+extern (C)
+{
+    void pw_css_register();
+    void* pw_css_init(void* qmlEngine);
+    void pw_css_load(void* theme, const(char)* path);
+    void pw_css_load_string(void* theme, const(char)* css);
+    void pw_css_viewport(void* theme, double w, double h);
+}
 import photowagon.ui.bridge : CoreBridge;
 import photowagon.core.config : Config;
 import photowagon.core.ipc.link : InProcessLink;
@@ -63,17 +77,55 @@ int runUi(Config cfg, InProcessLink link)
     auto engine = new QQmlApplicationEngine(cast(cppq.QObject) null);
     engine.rootContext().setContextProperty("library", cppq.QObject.wrap(qobjOf(lib)));
 
+    // Client-side window decorations for the GTK theme: the QML headerbar drives moves,
+    // resizes and the window buttons through this. Exposed before the scene loads; its
+    // target window is bound just after (the root ApplicationWindow only exists then).
+    auto winCtl = newQObject!WindowCtl();
+    engine.rootContext().setContextProperty("winCtl", cppq.QObject.wrap(qobjOf(winCtl)));
+
     bool failed;
     engine.connectObjectCreationFailed((const(QUrl)* u) {
         failed = true;
         stderr.writeln("QML: object creation failed (run with QT_FORCE_STDERR_LOGGING=1 for the reason)");
     });
 
+    // Wear the system GTK/Adwaita theme through qml-css-engine: register its QML types and
+    // engines (cssTheme / cssLayout context properties) before the QML loads, then load the
+    // app's GTK-mapped stylesheet from beside the binary (a no-op if it isn't there).
+    pw_css_register();
+    // DSide wraps QObjects (class QObject : QtdObject); the real C++ pointer is engine.ptr(),
+    // not the D wrapper's address.
+    auto cssTheme = pw_css_init(engine.ptr());
+    if (cssTheme !is null)
+    {
+        import std.file : thisExePath, exists, readText;
+        import std.path : dirName, buildPath;
+        import std.string : toStringz;
+        import photowagon.ui.gtktheme : gtkThemeCss;
+
+        // A photowagon.css beside the binary overrides everything (for experimenting with a
+        // hand-written theme); otherwise we synthesise the live GTK/Adwaita palette so the
+        // app wears the system theme out of the box.
+        immutable cssFile = buildPath(thisExePath.dirName, "photowagon.css");
+        try
+        {
+            immutable css = cssFile.exists ? readText(cssFile) : gtkThemeCss();
+            pw_css_load_string(cssTheme, css.toStringz);
+        }
+        catch (Exception)
+        {
+        }
+    }
+
     // ref const(QUrl) refuses an rvalue: keep it in a variable.
     auto url = QUrl("qrc:/Main.qml", QUrl.ParsingMode.TolerantMode);
     engine.load(url);
 
     auto roots = engine.rootObjects();
+    // The QML root is the ApplicationWindow, itself a QWindow: wrap its C++ pointer so
+    // WindowCtl can start system moves/resizes on it.
+    if (roots.length > 0)
+        winCtl.bind(QWindow.wrap(roots[0].ptr()));
     writeln("qml rootObjects = ", roots.length, failed ? " (creation failed)" : "");
     stdout.flush();
     if (roots.length == 0 || failed)

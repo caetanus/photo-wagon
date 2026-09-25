@@ -15,6 +15,7 @@ import photowagon.mobile.plog : plog, useCrashStack;
 
 import core.sync.mutex : Mutex;
 import core.time : msecs, seconds;
+import vibe.core.task : Task;
 import std.file : exists, readText;
 import std.json;
 import std.path : buildPath, baseName, dirName;
@@ -100,7 +101,40 @@ final class P2pBridge : Bridge
     private ThumbJob[] thumbJobs;        // under lock
     private ResultCb[long] pullCbs;      // Qt thread only: ticket -> callback for a download
     private long nextPull = 1;
-    private uint joinedVersion;   // hyperswarm flavor: the target version this session serves
+    private long lastBumpBoot;           // under lock: CLOCK_BOOTTIME of the last target.version_ bump
+
+    /// Under `lock`: move to a new target version — the running session gives way. Stamps
+    /// when (CLOCK_BOOTTIME), so netWatch can tell a restart that already followed a wake
+    /// from one that happened before it.
+    // scope(exit) may not contain a catch: these swallow the teardown exceptions for it.
+    private static void closeQuietly(Connection c) nothrow
+    {
+        try
+            c.close();
+        catch (Exception)
+        {
+        }
+    }
+
+    /// Interrupt `t` and wait for it to finish (an ownership barrier, not just a signal) —
+    /// unless it is the calling task, which cannot join itself.
+    private static void stopTask(Task t) nothrow
+    {
+        if (t == Task.getThis())
+            return;   // vibe asserts on a self-interrupt, and a task cannot join itself
+        try
+            t.interrupt();
+        catch (Exception)
+        {
+        }
+        t.joinUninterruptible();
+    }
+
+    private void bumpLocked() nothrow @nogc
+    {
+        target.version_++;
+        lastBumpBoot = bootNanos();
+    }
 
     this(string settingsDir)
     {
@@ -230,7 +264,7 @@ final class P2pBridge : Bridge
                     target.addrs = info.p2p.dup;   // a legacy code with addresses seeds the dial
                 // else: a token-only code (the current QR) keeps the addresses learned before —
                 // the preferential list (the computer's /p2p-circuit) must survive a re-adopt.
-                target.version_++;
+                bumpLocked();
             }
             plog("p2p: will dial ", info.p2p);
         }
@@ -243,7 +277,7 @@ final class P2pBridge : Bridge
         synchronized (lock)
         {
             target.valid = false;
-            target.version_++;
+            bumpLocked();
         }
     }
 
@@ -468,7 +502,7 @@ final class P2pBridge : Bridge
         {
             plog("p2p: reconnecting after a timeout");
             synchronized (lock)
-                target.version_++;          // the session sees a new version and ends
+                bumpLocked();               // the session sees a new version and ends
             p2pUp = false;
             failAll("libp2p link reset after a timeout");
         }
@@ -593,9 +627,146 @@ final class P2pBridge : Bridge
             Thread.sleep(3600.seconds);
     }
 
+    // ---- network watch: roaming and Doze ------------------------------------------------
+
+    /// The network under the phone moves (Wi-Fi <-> 4G, a new DHCP lease) and Android's Doze
+    /// freezes the app for minutes. Either way every open p2p socket is on a dead path: the
+    /// NAT mappings are gone, a udx socket may be bound to an interface that no longer
+    /// routes, and a libp2p connection object survives looking alive. Rather than wait for
+    /// the 15 s silence detector — or forever, for a connection the host de-dups back into
+    /// the next dial — notice both and restart the session now: poll the interface addresses
+    /// every 2 s, and treat a gap of more than 10 s of CLOCK_BOOTTIME between ticks as a
+    /// resume (BOOTTIME keeps counting through suspend; a frozen process sees the gap too).
+    /// A restart = bump target.version_: the running session gives way, the libp2p loop
+    /// dials again and the hyperswarm loop builds a fresh transport.
+    private void netWatch() nothrow
+    {
+        import vibe.core.core : sleep;
+        import std.conv : to;
+
+        string sig = netSignature();
+        long last = bootNanos();
+        for (;;)
+        {
+            try
+                sleep(2.seconds);
+            catch (Exception)
+                return;
+            immutable now = bootNanos();
+            immutable cur = netSignature();
+            string why;
+            immutable resumed = last > 0 && now - last > 10_000_000_000L;
+            immutable addrChanged = cur != sig;   // judged on its own: a wake may ALSO move the network
+            try
+            {
+                if (resumed)
+                    why = "resumed after " ~ ((now - last) / 1_000_000_000L).to!string ~ " s asleep";
+                if (addrChanged)
+                    why ~= (why.length ? "; " : "") ~ "network changed [" ~ sig ~ "] -> [" ~ cur ~ "]";
+            }
+            catch (Exception)
+            {
+            }
+            last = now;
+            sig = cur;
+            if (why.length == 0)
+                continue;
+            // A moved network ALWAYS restarts: an earlier bump (a timeout, a new code) cannot
+            // have accounted for an address change that came after it, and a restart is cheap.
+            // A resume skips only a restart that already followed the wake — one within the
+            // last tick (the gap is > 10 s, so an older bump predates the suspend). Under a real
+            // suspend MonoTime stops (CLOCK_MONOTONIC excludes it), the session's silence
+            // detector may never fire, and this watcher is then the only trigger.
+            bool bumped;
+            try
+                synchronized (lock)
+                    if (addrChanged || lastBumpBoot < now - 3_000_000_000L)
+                    {
+                        bumpLocked();
+                        bumped = true;
+                    }
+            catch (Exception)
+            {
+            }
+            try
+                plog("p2p: ", why, bumped ? " — restarting the session" : " — session already restarting");
+            catch (Exception)
+            {
+            }
+        }
+    }
+
+    /// Nanoseconds of CLOCK_BOOTTIME (0 if unavailable): unlike MonoTime it runs on while
+    /// the device is suspended, which is what makes a Doze/suspend gap visible.
+    private static long bootNanos() nothrow @nogc
+    {
+        import core.sys.linux.time : CLOCK_BOOTTIME;
+        import core.sys.posix.time : clock_gettime, timespec;
+
+        timespec ts;
+        if (clock_gettime(CLOCK_BOOTTIME, &ts) != 0)
+            return 0;
+        return ts.tv_sec * 1_000_000_000L + ts.tv_nsec;
+    }
+
+    /// Every address of an UP, non-loopback interface (IPv6 link-local skipped: it is
+    /// per-link noise), as sorted "iface=addr" — a different string means a moved network.
+    private static string netSignature() nothrow
+    {
+        import core.sys.linux.ifaddrs : ifaddrs, getifaddrs, freeifaddrs;
+        import core.sys.posix.arpa.inet : inet_ntop;
+        import core.sys.posix.netinet.in_ : sockaddr_in, sockaddr_in6, INET6_ADDRSTRLEN;
+        import core.sys.posix.sys.socket : AF_INET, AF_INET6;
+        import std.algorithm : sort;
+        import std.array : join;
+        import std.string : fromStringz;
+
+        enum uint iffUp = 0x1, iffLoopback = 0x8;   // <net/if.h>; not in dmd's druntime
+        ifaddrs* list;
+        if (getifaddrs(&list) != 0)
+            return "";
+        scope (exit)
+            freeifaddrs(list);
+        string[] parts;
+        try
+            for (auto a = list; a !is null; a = a.ifa_next)
+            {
+                if (a.ifa_addr is null || (a.ifa_flags & iffUp) == 0 || (a.ifa_flags & iffLoopback) != 0)
+                    continue;
+                char[INET6_ADDRSTRLEN + 1] buf = 0;
+                const(char)* ok;
+                if (a.ifa_addr.sa_family == AF_INET)
+                    ok = inet_ntop(AF_INET, &(cast(sockaddr_in*) a.ifa_addr).sin_addr, buf.ptr, cast(uint) buf.length);
+                else if (a.ifa_addr.sa_family == AF_INET6)
+                {
+                    auto six = cast(sockaddr_in6*) a.ifa_addr;
+                    const ubyte[] b = six.sin6_addr.s6_addr[];
+                    if (b[0] == 0xfe && (b[1] & 0xc0) == 0x80)
+                        continue;   // fe80::/10 link-local
+                    ok = inet_ntop(AF_INET6, &six.sin6_addr, buf.ptr, cast(uint) buf.length);
+                }
+                if (ok is null)
+                    continue;
+                parts ~= fromStringz(a.ifa_name).idup ~ "=" ~ fromStringz(buf.ptr).idup;
+            }
+        catch (Exception)
+        {
+        }
+        parts.sort();
+        try
+            return parts.join(",");
+        catch (Exception)
+            return "";
+    }
+
     private void client()
     {
         import vibe.core.core : sleep, runTask;
+        // roaming / Doze detection for either flavor: see netWatch. Owned here: stopped on
+        // every way out of client().
+        auto watcher = runTask(&netWatch);
+        scope (exit)
+            stopTask(watcher);
         // The piece store, for BOTH flavors: the hyperswarm branch below returns early, and
         // its pulls land here too (spawnPull hands `pieces` to pullPieces) — created after
         // the branch, it was null there and the first hyperswarm download crashed.
@@ -851,29 +1022,59 @@ final class P2pBridge : Bridge
 
             loadOrCreateIdentity(identityFile);
             auto seed = cast(ubyte[]) read(identityFile);
-            auto ht = new HsTransport(HsTransport.defaultBootstrap(), seed);
-            ht.onPeer = (HsConn c) nothrow {
-                try runTask(() nothrow { try hsRun(c); catch (Exception) {} });
-                catch (Exception) {}
-            };
             plog("p2p: hyperswarm flavor — this phone is ", hexKey(seed));
-            string joined;
+            // One transport per target version. A new code, a cleared target, a network
+            // change or a resume from Doze (netWatch), or a dead link (hsRun) all bump the
+            // version: the old transport is closed — its udx sockets, DHT membership and LAN
+            // registration go with it — and a fresh one rejoins the topic from the network we
+            // are on now. Re-start()ing one long-lived swarm kept sockets bound to the old path.
+            HsTransport ht;
+            bool built;
+            uint builtVersion;
             for (;;)
             {
                 Target t;
                 synchronized (lock)
                     t = target;
-                if (t.valid && t.token.length && t.token != joined)
+                if (!built || t.version_ != builtVersion)
                 {
-                    joined = t.token;
-                    // Pass the KEY: HsTransport derives the topic and turns on the LAN
-                    // rendezvous (browse) for the same key — on the LAN it hears the udx
-                    // line and connects straight, in parallel with the DHT/punch path.
-                    ht.start(cast(const(ubyte)[]) t.token, /*asServer*/ false);
-                    plog("p2p: joined the pairing topic on the public DHT");
+                    built = true;
+                    builtVersion = t.version_;
+                    if (ht !is null)
+                    {
+                        plog("p2p: target changed — closing the hyperswarm transport");
+                        try
+                            ht.close();
+                        catch (Exception)
+                        {
+                        }
+                        ht = null;
+                    }
+                    if (t.valid && t.token.length)
+                    {
+                        ht = new HsTransport(HsTransport.defaultBootstrap(), seed);
+                        ht.onPeer = hsOnPeer(t.version_);
+                        // Pass the KEY: HsTransport derives the topic and turns on the LAN
+                        // rendezvous (browse) for the same key — on the LAN it hears the udx
+                        // line and connects straight, in parallel with the DHT/punch path.
+                        ht.start(cast(const(ubyte)[]) t.token, /*asServer*/ false);
+                        plog("p2p: joined the pairing topic on the public DHT");
+                    }
                 }
                 sleep(500.msecs);
             }
+        }
+
+        // The onPeer of the transport built for target version `gen`: a helper so each
+        // transport's callback owns its own `gen` (a closure in hsClient's loop would share it).
+        private void delegate(HsConn) nothrow hsOnPeer(uint gen)
+        {
+            import vibe.core.core : runTask;
+
+            return (HsConn c) nothrow {
+                try runTask(() nothrow { try hsRun(c, gen); catch (Exception) {} });
+                catch (Exception) {}
+            };
         }
 
         private static string hexKey(const(ubyte)[] seed)
@@ -884,7 +1085,7 @@ final class P2pBridge : Bridge
 
         // One connection: mux over the byte pipe, auth/pair on an 'i' control stream, then
         // the IPC pump + piece push/pull on 'p' streams. Structure mirrors session().
-        private void hsRun(HsConn c)
+        private void hsRun(HsConn c, uint gen)
         {
             import vibe.core.core : runTask, sleep;
             import core.time : MonoTime;
@@ -893,15 +1094,37 @@ final class P2pBridge : Bridge
             immutable peerKey = toHexString!(LetterCase.lower)(c.remotePublicKey[]).idup;
             immutable myRank = isPrivateIp4("/ip4/" ~ c.remoteAddress.host ~ "/") ? 2 : 1;
             HsConn toClose;
+            bool stale, dup;
             synchronized (lock)
             {
-                if (auto ss = peerKey in hsSessions)
+                // a late connection from a transport already replaced (target moved on)
+                stale = target.version_ != gen;
+                if (!stale)
                 {
-                    if (myRank <= ss.rank) { plog("hs: dup path rank ", myRank, " <= ", ss.rank, " — skip"); return; }
-                    toClose = ss.conn;
+                    if (auto ss = peerKey in hsSessions)
+                    {
+                        if (myRank <= ss.rank)
+                            dup = true;
+                        else
+                            toClose = ss.conn;
+                    }
+                    if (!dup)
+                        hsSessions[peerKey] = HsSess(c, myRank);
                 }
-                hsSessions[peerKey] = HsSess(c, myRank);
             }
+            if (stale || dup)
+            {
+                plog(stale ? "hs: connection from a replaced transport — dropped"
+                    : "hs: dup path, not better than the current one — dropped");
+                c.destroy();   // nobody else owns it: leaving it open leaked it
+                return;
+            }
+            scope (failure)
+                try
+                    c.destroy();   // any exception past here: this session owned the connection
+                catch (Exception)
+                {
+                }
             plog("hs: session start rank ", myRank, " addr ", c.remoteAddress.host);
             if (toClose !is null)
             {
@@ -927,12 +1150,28 @@ final class P2pBridge : Bridge
 
             // auth (and pair if the desktop asks), synchronously, before pumping the UI
             plog("hs: auth on new path (rank ", myRank, ")");
-            if (!hsAuth(ctl))
+            bool admitted;
+            try
+                admitted = hsAuth(ctl);
+            catch (Exception e)
+                plog("hs: auth failed: ", e.msg);   // a dropped or garbled reply
+            if (!admitted)
+            {
+                c.destroy();   // refused: close it here, the teardown below is never reached
                 return;
+            }
+            synchronized (lock)
+                stale = target.version_ != gen;
+            if (stale)
+            {
+                plog("hs: target moved while authenticating — dropped");
+                c.destroy();
+                return;
+            }
             plog("hs: auth ok (rank ", myRank, ")");
             deliverLink(true, toHexString!(LetterCase.lower)(c.remotePublicKey[]).idup, null);
 
-            bool done;
+            bool done, silent;
             auto lastRecv = MonoTime.currTime;
             auto reader = runTask(() nothrow {
                 try
@@ -1020,6 +1259,12 @@ final class P2pBridge : Bridge
             auto lastPing = MonoTime.currTime;
             while (!done && !dead)
             {
+                {
+                    uint v;
+                    synchronized (lock) v = target.version_;
+                    if (v != gen)
+                        break;   // a new code, a moved network or a resume: take no more work
+                }
                 foreach (line; link.takeInbox())
                     if (line.length && !done)
                         try writeLengthPrefixed(ctl, cast(const(ubyte)[]) line);
@@ -1047,12 +1292,8 @@ final class P2pBridge : Bridge
                 if (now - lastRecv >= deadAfter)
                 {
                     plog("p2p: hyperswarm link silent — dropping");
+                    silent = true;
                     break;
-                }
-                uint v;
-                synchronized (lock) v = target.version_;
-                if (v != joinedVersion)
-                {
                 }
                 sleep(20.msecs);
             }
@@ -1064,6 +1305,12 @@ final class P2pBridge : Bridge
                 deliverLink(false, null, "connection closed");
             else
                 plog("hs: superseded — silent exit (rank ", myRank, ")");
+            // The live path went dead: a fresh transport rediscovers the computer (the old
+            // one would not re-dial a peer it still believes it has).
+            if (stillCurrent && silent)
+                synchronized (lock)
+                    if (target.version_ == gen)
+                        bumpLocked();
             try c.closeGracefully(2.seconds); catch (Exception) {}
         }
 
@@ -1218,27 +1465,6 @@ final class P2pBridge : Bridge
         // path preempts the running session — closing the old connection so its pump exits at
         // once — and takes over; an equal/worse duplicate is dropped. Same rule as the hs flavor.
         immutable myRank = isPrivateIp4(conn.remoteAddr.toString) ? 2 : 1;
-        Connection toClose;
-        synchronized (lock)
-        {
-            if (auto ss = peerKey in lpSessions)
-            {
-                if (myRank <= ss.rank) { plog("p2p(libp2p): dup path rank ", myRank, " <= ", ss.rank, " — skip"); return; }
-                toClose = ss.conn;
-            }
-            lpSessions[peerKey] = LpSess(conn, myRank);
-        }
-        if (toClose !is null)
-        {
-            plog("p2p: better path (rank ", myRank, ") — switching; closing old");
-            toClose.close();
-            plog("p2p(libp2p): old closed");
-        }
-        scope (exit)
-            synchronized (lock)
-                if (auto ss = peerKey in lpSessions)
-                    if (ss.conn is conn)
-                        lpSessions.remove(peerKey);
         // The token names who we expect; the IPC auth below is what actually rejects a stranger
         // that answered the same rendezvous (same as hs). Captured once for this session.
         Target t;
@@ -1246,9 +1472,142 @@ final class P2pBridge : Bridge
             t = target;
         if (!t.valid)
             return;
-        auto s = conn.newStream(ipcProtocol);
+        // Every direct connection lands here — the computer's, but also DHT peers' and the
+        // one to a relay server. Only a peer that speaks the Photo Wagon IPC protocol is a
+        // computer: until this stream opens the connection is NOT ours, and whatever happens
+        // it stays open (closing a DHT or relay connection would cut the WAN rendezvous itself).
+        // The negotiation itself can stall (a path that stopped answering; TCP/yamux gives it
+        // no deadline) before the session guard below exists: watch it on its own. A peer
+        // that does not speak the protocol rejects it within milliseconds, so this only ever
+        // closes a connection that stopped responding — or one caught mid-negotiation by a
+        // target move (a moved network or a resume makes it dead anyway).
+        bool negotiated;
+        auto negotiation = runTask(() nothrow {
+            import core.time : MonoTime;
+
+            immutable deadline = MonoTime.currTime + 20.seconds;
+            while (!negotiated)
+            {
+                try
+                    sleep(250.msecs);
+                catch (Exception)
+                    return;   // interrupted: the negotiation finished
+                if (negotiated)
+                    return;
+                uint v;
+                try
+                    synchronized (lock)
+                        v = target.version_;
+                catch (Exception)
+                {
+                }
+                if (v != t.version_ || MonoTime.currTime >= deadline)
+                {
+                    try
+                        plog("p2p(libp2p): IPC negotiation stalled or the target moved — closing that connection");
+                    catch (Exception)
+                    {
+                    }
+                    closeQuietly(conn);
+                    return;
+                }
+            }
+        });
+        Stream s;
+        try
+            s = conn.newStream(ipcProtocol);
+        catch (Exception)
+        {
+            negotiated = true;
+            stopTask(negotiation);
+            return;   // not a Photo Wagon computer (or the watch closed it): leave the rest alone
+        }
+        negotiated = true;
+        stopTask(negotiation);
         scope (exit)
             s.close();
+        // Roaming: a private-IP (LAN) path outranks a public/relay-punched (WAN) path. A better
+        // path preempts the running session — closing the old connection so its pump exits at
+        // once — and takes over; an equal/worse duplicate is dropped. Same rule as the hs flavor.
+        Connection toClose;
+        bool same, dup;
+        synchronized (lock)
+        {
+            if (auto ss = peerKey in lpSessions)
+            {
+                if (ss.conn is conn)
+                    same = true;            // the same connection announced again: already served
+                else if (myRank <= ss.rank)
+                    dup = true;
+                else
+                    toClose = ss.conn;
+            }
+            if (!same && !dup)
+                lpSessions[peerKey] = LpSess(conn, myRank);
+        }
+        if (same)
+            return;
+        if (dup)
+        {
+            // A second path to the computer, not better than the live one. Close it: left open
+            // and sessionless, host.connect would de-dup the next dial straight onto it after
+            // the current path dies (a roam), and nothing would run on it.
+            plog("p2p(libp2p): dup path rank ", myRank, " — not better than the current one, closing it");
+            closeQuietly(conn);
+            return;
+        }
+        if (toClose !is null)
+        {
+            plog("p2p: better path (rank ", myRank, ") — switching; closing old");
+            closeQuietly(toClose);
+            plog("p2p(libp2p): old closed");
+        }
+        scope (exit)
+            synchronized (lock)
+                if (auto ss = peerKey in lpSessions)
+                    if (ss.conn is conn)
+                        lpSessions.remove(peerKey);
+        // From here the connection is this session's, and every way out closes it — the
+        // normal end, a thrown read, a failed auth: after a network change or a resume the
+        // connection object survives on a dead path, and host.connect would de-dup the next
+        // dial onto it (a TCP one never times out). A fresh dial finds the live route.
+        scope (exit)
+            closeQuietly(conn);
+        // The WHOLE session gives way when the target moves (a new code, a network change, a
+        // resume) — not only the pump below: auth, pairing and the status request can each
+        // block on a read. Closing the connection fails that read at once.
+        bool ended;
+        auto guard = runTask(() nothrow {
+            while (!ended)
+            {
+                try
+                    sleep(250.msecs);
+                catch (Exception)
+                    return;   // interrupted: the session ended
+                uint v;
+                try
+                    synchronized (lock)
+                        v = target.version_;
+                catch (Exception)
+                {
+                }
+                if (!ended && v != t.version_)
+                {
+                    try
+                        plog("p2p(libp2p): target moved — ending the session");
+                    catch (Exception)
+                    {
+                    }
+                    closeQuietly(conn);
+                    return;
+                }
+            }
+        });
+        scope (exit)
+        {
+            ended = true;
+            stopTask(guard);
+        }
         JSONValue auth = ["id": JSONValue(0), "method": JSONValue("daemon.auth"),
             "params": JSONValue(["token": JSONValue(t.token), "name": JSONValue(deviceName())])];
         writeLengthPrefixed(s, cast(const(ubyte)[]) auth.toString());
@@ -1293,6 +1652,9 @@ final class P2pBridge : Bridge
                 throw new Exception("pairing was not confirmed on the computer");
             pairCode = null;   // paired: a later re-pairing will make a fresh code
         }
+        synchronized (lock)
+            if (target.version_ != t.version_)
+                return;   // moved on while authenticating/pairing: don't announce a stale link
         deliverLink(true, peer.toString, null);
         synchronized (lock)
             if (auto ss = peerKey in lpSessions)
@@ -1540,6 +1902,13 @@ final class P2pBridge : Bridge
         // threadlocalwaiter.d), and 20 ms of latency on a phone is nothing.
         while (!done)
         {
+            {
+                uint v;
+                synchronized (lock)
+                    v = target.version_;
+                if (v != t.version_)
+                    break;   // a new code, a moved network or a resume: take no more work
+            }
             foreach (line; link.takeInbox())
                 if (line.length && !done)
                 {
@@ -1593,11 +1962,6 @@ final class P2pBridge : Bridge
                 plog("p2p: link silent for ", deadAfter.total!"seconds", "s — dropping to re-dial");
                 break;                                    // no answer to the pings: the link is dead
             }
-            uint v;
-            synchronized (lock)
-                v = target.version_;
-            if (v != t.version_)
-                break;                                    // a new code: drop this session
             sleep(20.msecs);
         }
         bool stillCurrent;
@@ -1605,7 +1969,7 @@ final class P2pBridge : Bridge
             if (auto ss = peerKey in lpSessions)
                 stillCurrent = ss.conn is conn;
         if (stillCurrent)
-            deliverLink(false, null, "connection closed");
+            deliverLink(false, null, "connection closed");   // conn.close(): the scope(exit) above
         else
             plog("p2p(libp2p): superseded — silent exit (rank ", myRank, ")");
     }

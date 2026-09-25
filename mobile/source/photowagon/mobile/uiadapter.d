@@ -41,6 +41,12 @@ final class UiBridge : Bridge
         inner.onEvent = (string event, JSONValue data) {
             if (testDown)   // a dropped link loses what the core says meanwhile
                 return;
+            version (Android) {} else
+                if (pagingTest !is null && event == "computer.link" && data.type == JSONType.object)
+                    pagingTest.onLink("connected" in data && data["connected"].type == JSONType.true_);
+            version (Android) {} else
+                if (pagingTest !is null && event == "index.done")
+                    pagingTest.onIndexed();
             if (event == "core.permission" && data.type == JSONType.object && "needed" in data
                 && data["needed"].type == JSONType.true_)
                 permissionNeeded();
@@ -48,6 +54,15 @@ final class UiBridge : Bridge
                 onEvent(event, data);
         };
         inner.onConnected = &coreUp;
+        version (Android) {} else
+        {
+            import std.process : environment;
+            import photowagon.mobile.pagingtest : PagingTest;
+
+            immutable mode = environment.get("PW_TEST_PAGING", "");
+            if (mode.length)
+                pagingTest = new PagingTest(inner, mode);
+        }
         inner.start();
         testRelink();
     }
@@ -59,6 +74,7 @@ final class UiBridge : Bridge
     {
         if (up)
         {
+            inner.beginSession();   // what the previous session had pending is cut short
             immutable st = inner.coreState();
             if (st["permissionNeeded"].type == JSONType.true_)
                 permissionNeeded();
@@ -74,6 +90,10 @@ final class UiBridge : Bridge
     // a separate core process will need, testable now.
     private QTimer relinkDown, relinkUp;
     private bool testDown;
+    version (Android) {} else
+        private import photowagon.mobile.pagingtest : PagingTest;
+    version (Android) {} else
+        private PagingTest pagingTest;
 
     private void testRelink()
     {
@@ -117,6 +137,13 @@ final class UiBridge : Bridge
 
     override void request(string method, JSONValue params, ResultCb cb)
     {
+        version (Android) {} else
+            if (pagingTest !is null && (method == "library.page" || method == "photo.neighbours"))
+            {
+                // the paging test owns the core's one listing; the UI's own would supersede it
+                cb(JSONValue(null), JSONValue(["code": JSONValue("test"), "message": JSONValue("paging test running")]));
+                return;
+            }
         if (method == "photo.share")
         {
             inner.request(method, params, (JSONValue r, JSONValue e) {
@@ -138,7 +165,8 @@ final class UiBridge : Bridge
 
     override void requestRaw(string method, string paramsJson, ResultCb cb)
     {
-        if (method == "photo.share")   // the share sheet is ours whichever way it is asked for
+        // the share sheet is ours whichever way it is asked for (and the paging test's guard)
+        if (method == "photo.share" || method == "library.page" || method == "photo.neighbours")
         {
             request(method, parseJSON(paramsJson), cb);
             return;

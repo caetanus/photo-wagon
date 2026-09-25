@@ -151,6 +151,8 @@ int main()
     // (share sheet, permission prompt). See docs/phone-core-service.md.
     phoneCore = buildPhoneCore();
     lib.start(new UiBridge(phoneCore.bridge));
+    version (Android) {} else
+        testViewer(lib);
 
     // The binding collects unparented D-owned QObjects. Keep the engine owned by
     // the application throughout exec(), after this local's last use: collecting
@@ -180,4 +182,57 @@ int main()
     plog("phone: exiting ", rc);
     import core.stdc.stdlib : exit;
     exit(rc);
+}
+
+version (Android) {} else
+{
+    import qt.quick.qtimer : QTimer;
+
+    private __gshared QTimer viewerOpen, viewerReport, viewerRelist;
+
+    // PW_TEST_VIEWER=<photo id>:<seconds>[:<ms>]: open that photo in the viewer after
+    // <seconds>, and log what the viewer shows 20 s later (its prev/next) — with
+    // PW_TEST_RELINK, the viewer's recovery across a core reconnect. <ms>: start a new
+    // listing that long after opening, cutting its neighbours search short.
+    private void testViewer(Library lib)
+    {
+        import std.conv : to;
+
+        auto spec = environment.get("PW_TEST_VIEWER", "").split(":");
+        if (spec.length < 2)
+            return;
+        if (spec.length > 2)
+        {
+            viewerRelist = new QTimer(cast(cppq.QObject) null);
+            viewerRelist.setSingleShot(true);
+            viewerRelist.setInterval(spec[2].to!int);
+            viewerRelist.connectTimeout({
+                plog("ui: [test] new listing while the viewer looks for neighbours");
+                lib.loadPage(0, 60, 0, 0, 0);
+            });
+        }
+        immutable id = spec[0].to!int;
+        viewerOpen = new QTimer(cast(cppq.QObject) null);
+        viewerOpen.setSingleShot(true);
+        viewerOpen.setInterval(spec[1].to!int * 1000);
+        viewerOpen.connectTimeout({
+            plog("ui: [test] open photo ", id);
+            lib.openPhoto(id);
+            viewerReport.start();
+            if (viewerRelist !is null)
+                viewerRelist.start();
+        });
+        viewerReport = new QTimer(cast(cppq.QObject) null);
+        viewerReport.setSingleShot(true);
+        viewerReport.setInterval(20_000);
+        viewerReport.connectTimeout({
+            import std.json : parseJSON, JSONType;
+
+            auto cur = lib.current.length ? parseJSON(lib.current) : parseJSON("{}");
+            plog("ui: [test] viewer shows ", "id" in cur ? cur["id"].toString() : "nothing",
+                " prev ", "prev" in cur ? cur["prev"].toString() : "-",
+                " next ", "next" in cur ? cur["next"].toString() : "-");
+        });
+        viewerOpen.start();
+    }
 }

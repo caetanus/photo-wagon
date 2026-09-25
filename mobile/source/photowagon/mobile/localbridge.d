@@ -19,6 +19,7 @@ import std.base64 : Base64;
 import std.conv : to;
 import std.file : read, exists, readText, write, mkdirRecurse;
 import std.json;
+import core.thread : Thread;
 import core.time : MonoTime, minutes;
 import std.path : baseName, buildPath, dirName;
 import std.stdio : writeln, stdout;
@@ -107,6 +108,30 @@ final class LocalBridge : Bridge
     private bool remoteDone;
     private JSONValue[] localBuf, remoteBuf;
     private JSONValue[] served;        // everything handed out so far, merged order
+    private bool listing;              // a listing was started (served is meaningful)
+
+    // Page operations run one at a time, in order (docs/phone-core-service.md, "Sessions and
+    // state"). A new listing (offset 0) or a new UI session supersedes whatever is pending:
+    // those answer with an error at once — never left hanging — and a late computer reply
+    // for a superseded operation mutates nothing. pageGen counts listings (and sessions).
+    private final class PageOp
+    {
+        ResultCb cb;
+        bool done;
+    }
+    private struct QueuedPage
+    {
+        JSONValue params;
+        ResultCb cb;
+        bool neighbours;   // photo.neighbours: may page further until it finds the photo
+    }
+    private QueuedPage[] pageQueue;
+    private PageOp curOp;
+    private long pageGen, sessionGen;
+    private QTimer pageDeadline;       // a computer that does not answer a page in time is skipped
+    private void delegate() onPageDeadline;
+    private enum pageDeadlineMs = 20_000;
+    private enum neighboursMaxServed = 100_000;  // how far photo.neighbours pages to find a photo
     private bool[string] localKeys;    // "name|size" of local photos, for dedupe
     private bool[string] localHashes;  // a known content hash survives metadata size changes
     private long dupes;
@@ -115,8 +140,11 @@ final class LocalBridge : Bridge
     private string remoteFileDir;      // originals downloaded from the computer (photo.download)
     private bool testDownloadDone;     // PW_TEST_DOWNLOAD fired once
 
+    private Thread owner;   // the Qt thread: paging state and events live here
+
     this(PhoneIndex index, Bridge computer, string settingsDir = null)
     {
+        owner = Thread.getThis();
         this.index = index;
         this.computer = computer;
         if (settingsDir.length)
@@ -353,7 +381,8 @@ final class LocalBridge : Bridge
         {
             switch (method)
             {
-            case "library.page":    timed("library.page", 30, { page(params, cb); }); return;
+            case "library.page":    enqueuePage(params, cb, false); return;
+            case "photo.neighbours": enqueuePage(params, cb, true); return;
             case "library.dates":   timed("library.dates", 30, { dates(cb); }); return;
             case "photo.get":       get(num(params, "id"), cb); return;
             case "photo.upload":    upload(num(params, "id"), cb); return;
@@ -419,19 +448,6 @@ final class LocalBridge : Bridge
         case "library.rescan":
             index.scan();
             return JSONValue.emptyObject;
-        case "photo.neighbours":
-            {
-                immutable id = num(p, "id");
-                long prev, next;
-                foreach (i, ref it; served)
-                    if (it["id"].integer == id)
-                    {
-                        if (i > 0) prev = served[i - 1]["id"].integer;
-                        if (i + 1 < served.length) next = served[i + 1]["id"].integer;
-                        break;
-                    }
-                return JSONValue(["prev": prev ? JSONValue(prev) : JSONValue(null), "next": next ? JSONValue(next) : JSONValue(null)]);
-            }
         case "p2p.status":
             return JSONValue(["peerId": JSONValue(null), "addrs": JSONValue(cast(JSONValue[]) []), "peers": JSONValue(cast(JSONValue[]) []), "off": JSONValue(true)]);
         case "library.sendAll":       // turns the automatic sync on and starts it now
@@ -458,17 +474,175 @@ final class LocalBridge : Bridge
 
     // ---- the merged timeline -----------------------------------------------------------
 
-    private void page(JSONValue p, ResultCb cb)
+    /// A new UI session (a (re)connection): whatever paging the previous one had pending is
+    /// answered with an error, and its late computer replies change nothing.
+    void beginSession()
+    {
+        sessionGen++;
+        supersedePaging("session_superseded", "a new UI session started");
+    }
+
+    private void enqueuePage(JSONValue p, ResultCb cb, bool neighbours)
+    {
+        // a new listing makes everything pending about the old one moot
+        if (!neighbours && num(p, "offset") == 0)
+            supersedePaging("superseded", "a new listing started", [QueuedPage(p, cb, neighbours)]);
+        else
+            pageQueue ~= QueuedPage(p, cb, neighbours);
+        pumpPages();
+    }
+
+    /// Cut everything pending short. The replacement (if any) is in the queue BEFORE any
+    /// victim is answered: a victim's callback that starts yet another listing then
+    /// supersedes the replacement, not the other way round.
+    private void supersedePaging(string code, string why, QueuedPage[] replacement = null)
+    {
+        pageGen++;
+        auto victims = pageQueue;
+        auto cur = curOp;
+        pageQueue = replacement.dup;
+        curOp = null;
+        if (pageDeadline !is null)
+            pageDeadline.stop();
+        onPageDeadline = null;
+        immutable err = error(code, why);
+        if (cur !is null && !cur.done)
+        {
+            cur.done = true;
+            answerQuietly(cur.cb, JSONValue(null), err);
+        }
+        foreach (q; victims)
+            answerQuietly(q.cb, JSONValue(null), err);
+    }
+
+    // a failing answer must not stall or skip the ones after it
+    private static void answerQuietly(ResultCb cb, JSONValue r, JSONValue e)
+    {
+        try
+            cb(r, e);
+        catch (Exception ex)
+            plog("paging: an answer's callback failed: ", ex.msg);
+    }
+
+    private void pumpPages()
+    {
+        while (curOp is null && pageQueue.length)
+        {
+            auto q = pageQueue[0];
+            pageQueue = pageQueue[1 .. $];
+            auto op = new PageOp;
+            op.cb = q.cb;
+            curOp = op;
+            try
+            {
+                if (q.neighbours)
+                    neighbours(q.params, op);
+                else
+                    page(q.params, op);
+            }
+            catch (Exception e)
+                finishOp(op, JSONValue(null), error("internal", e.msg));
+        }
+    }
+
+    /// Answer an operation exactly once; the next queued one runs after it.
+    private void finishOp(PageOp op, JSONValue r, JSONValue e)
+    {
+        if (op.done)
+            return;
+        op.done = true;
+        if (curOp is op)
+        {
+            curOp = null;
+            if (pageDeadline !is null)
+                pageDeadline.stop();
+            onPageDeadline = null;
+        }
+        answerQuietly(op.cb, r, e);
+        pumpPages();
+    }
+
+    private void page(JSONValue p, PageOp op)
     {
         immutable offset = num(p, "offset");
         immutable limit = cast(size_t) num(p, "limit", 60);
-        if (offset == 0 || served.length == 0)
+        if (offset == 0 || !listing)
             resetPaging(p);
-        fillPage(limit, cb);
+        // a stretch already handed out (a UI rebuilding its list, a reply it lost): the same
+        // items again, not the next ones
+        if (offset > 0 && offset < served.length)
+        {
+            immutable long end = offset + limit < served.length ? offset + limit : served.length;
+            auto items = served[cast(size_t) offset .. cast(size_t) end].dup;
+            immutable total = currentTotal();
+            withRemoteThumbs(items, () {
+                finishOp(op, JSONValue(["total": JSONValue(total), "offset": JSONValue(end), "items": JSONValue(items)]), JSONValue(null));
+            });
+            return;
+        }
+        fillSome(limit, op, (JSONValue[] out_) {
+            immutable total = currentTotal();
+            immutable long end = served.length;   // captured now, not read when the answer goes out
+            withRemoteThumbs(out_, () {
+                finishOp(op, JSONValue(["total": JSONValue(total), "offset": JSONValue(end), "items": JSONValue(out_)]), JSONValue(null));
+            });
+        });
+    }
+
+    /// The photos before and after `id` in the current listing. Pages further (without
+    /// answering anyone) until it finds the photo — a viewer re-opened after a reconnect may
+    /// show one far past the first page.
+    private void neighbours(JSONValue p, PageOp op)
+    {
+        immutable id = num(p, "id");
+        foreach (i, ref it; served)
+            if (it["id"].integer == id)
+            {
+                // the last one served: its successor may be on the next page
+                if (i + 1 == served.length && canAdvance())
+                {
+                    if (served.length < neighboursMaxServed)
+                        break;
+                    finishOp(op, JSONValue(null), error("search_limit",   // successor unknown
+                        "photo at the end of the first " ~ neighboursMaxServed.to!string ~ " of the listing"));
+                    return;
+                }
+                immutable prev = i > 0 ? served[i - 1]["id"].integer : 0;
+                immutable next = i + 1 < served.length ? served[i + 1]["id"].integer : 0;
+                finishOp(op, JSONValue(["prev": prev ? JSONValue(prev) : JSONValue(null),
+                    "next": next ? JSONValue(next) : JSONValue(null)]), JSONValue(null));
+                return;
+            }
+        if (!listing)
+        {
+            finishOp(op, JSONValue(["prev": JSONValue(null), "next": JSONValue(null)]), JSONValue(null));
+            return;
+        }
+        if (served.length >= neighboursMaxServed)
+        {
+            // not "no neighbours": the search gave up (the viewer keeps its photo, without arrows)
+            finishOp(op, JSONValue(null), error("search_limit",
+                "photo not within the first " ~ neighboursMaxServed.to!string ~ " of the listing"));
+            return;
+        }
+        fillSome(200, op, (JSONValue[] out_) {
+            if (out_.length == 0)   // the listing is exhausted
+            {
+                // found as the very last photo (it has no successor), or not in it at all
+                long prev;
+                if (served.length && served[$ - 1]["id"].integer == id && served.length > 1)
+                    prev = served[$ - 2]["id"].integer;
+                finishOp(op, JSONValue(["prev": prev ? JSONValue(prev) : JSONValue(null), "next": JSONValue(null)]), JSONValue(null));
+            }
+            else
+                neighbours(p, op);
+        });
     }
 
     private void resetPaging(JSONValue p)
     {
+        pageGen++;
+        listing = true;
         pageParams = JSONValue.emptyObject;
         foreach (key; ["year", "month", "day", "albumId", "personId", "rootId", "favorites"])
             if (p.type == JSONType.object)
@@ -481,7 +655,7 @@ final class LocalBridge : Bridge
         remoteDone = !computer.connected;
         localBuf.length = 0;
         remoteBuf.length = 0;
-        served.length = 0;
+        served = null;   // a fresh array: slices held by pending thumbnail fetches stay theirs
         dupes = 0;
         localKeys = null;
         localHashes = null;
@@ -493,7 +667,43 @@ final class LocalBridge : Bridge
         }
     }
 
-    private void fillPage(size_t limit, ResultCb cb)
+    /// Whether the listing can still grow: buffered items, phone photos not read yet, or a
+    /// computer that has more.
+    private bool canAdvance()
+    {
+        return localBuf.length || remoteBuf.length || !remoteDone
+            || (!remoteOnly && localOff < index.count(localFilter));
+    }
+
+    /// fillPage until it yields something or the listing is exhausted: a computer page that
+    /// was all duplicates of phone photos merges to nothing without being the end. Goes on
+    /// as long as a round makes progress (a source advanced); every round that asks the
+    /// computer continues from its reply, so the stack does not grow with the rounds.
+    private void fillSome(size_t limit, PageOp op, void delegate(JSONValue[]) then)
+    {
+        immutable lo = localOff, ro = remoteOff;
+        immutable rd = remoteDone;
+        fillPage(limit, op, (JSONValue[] out_) {
+            immutable progressed = localOff != lo || remoteOff != ro || remoteDone != rd;
+            if (out_.length == 0 && canAdvance() && progressed)
+                fillSome(limit, op, then);
+            else
+                then(out_);
+        });
+    }
+
+    /// The computer is left out from here on (an error, or no answer in time): what it had
+    /// not delivered yet is no longer part of the total.
+    private void abandonRemote()
+    {
+        remoteDone = true;
+        if (remoteTotal > remoteOff)
+            remoteTotal = remoteOff;
+    }
+
+    /// Top up both buffers (asking the computer when needed), merge up to `limit` items onto
+    /// `served`, and hand them to `then` — unless `op` was superseded meanwhile.
+    private void fillPage(size_t limit, PageOp op, void delegate(JSONValue[]) then)
     {
         // top up the local buffer
         if (!remoteOnly && localBuf.length < limit)
@@ -510,33 +720,117 @@ final class LocalBridge : Bridge
             JSONValue params = pageParams;
             params["offset"] = remoteOff;
             params["limit"] = limit;
-            computer.request("library.page", params, (r, e) {
-                if (e.type != JSONType.null_)
-                    remoteDone = true;
-                else
-                {
-                    remoteTotal = r["total"].integer;
-                    auto items = r["items"].array;
-                    remoteOff += items.length;
-                    if (items.length == 0 || remoteOff >= remoteTotal)
-                        remoteDone = true;
-                    foreach (it; items)
+            bool settled;
+            void merge()
+            {
+                then(mergeServed(limit));
+            }
+            // The computer gets pageDeadlineMs to answer; after that this listing goes on
+            // without it (remoteDone) and a late reply is dropped.
+            if (pageDeadline is null)
+            {
+                pageDeadline = new QTimer(cast(cppq.QObject) null);
+                pageDeadline.setSingleShot(true);
+                pageDeadline.connectTimeout({
+                    if (auto dg = onPageDeadline)
                     {
-                        immutable key = (it["path"].type == JSONType.string ? it["path"].str.baseName : "") ~ "|" ~ it["size"].integer.to!string;
-                        immutable hash = "hash" in it && it["hash"].type == JSONType.string ? it["hash"].str : "";
-                        if (!remoteOnly && ((hash.length && hash in localHashes) || key in localKeys))
-                        {
-                            dupes++;
-                            continue; // the local copy stands for it
-                        }
-                        remoteBuf ~= toPhoneItem(it);
+                        onPageDeadline = null;
+                        dg();
                     }
-                }
-                mergeAndAnswer(limit, cb);
+                });
+            }
+            onPageDeadline = () {
+                if (settled || op.done || curOp !is op)
+                    return;
+                settled = true;
+                plog("paging: the computer did not answer library.page in ", pageDeadlineMs / 1000, " s — listing without it");
+                abandonRemote();
+                try
+                    merge();
+                catch (Exception ex)
+                    finishOp(op, JSONValue(null), error("internal", ex.msg));
+            };
+            pageDeadline.setInterval(pageDeadlineMs);
+            pageDeadline.start();
+            testDelayed(() {
+                computer.request("library.page", params, (r, e) {
+                    // superseded (a new listing or session), timed out, or already answered:
+                    // this reply belongs to state that is gone
+                    if (settled || op.done || curOp !is op)
+                        return;
+                    settled = true;
+                    pageDeadline.stop();
+                    onPageDeadline = null;
+                    try
+                    {
+                        if (e.type != JSONType.null_)
+                            abandonRemote();
+                        else
+                        {
+                            remoteTotal = r["total"].integer;
+                            auto items = r["items"].array;
+                            remoteOff += items.length;
+                            if (items.length == 0 || remoteOff >= remoteTotal)
+                                remoteDone = true;
+                            foreach (it; items)
+                            {
+                                immutable key = (it["path"].type == JSONType.string ? it["path"].str.baseName : "") ~ "|" ~ it["size"].integer.to!string;
+                                immutable hash = "hash" in it && it["hash"].type == JSONType.string ? it["hash"].str : "";
+                                if (!remoteOnly && ((hash.length && hash in localHashes) || key in localKeys))
+                                {
+                                    dupes++;
+                                    continue; // the local copy stands for it
+                                }
+                                remoteBuf ~= toPhoneItem(it);
+                            }
+                        }
+                        merge();
+                    }
+                    catch (Exception ex)   // a malformed reply: answer, never leave the queue stuck
+                    {
+                        abandonRemote();
+                        finishOp(op, JSONValue(null), error("internal", ex.msg));
+                    }
+                });
             });
             return;
         }
-        mergeAndAnswer(limit, cb);
+        then(mergeServed(limit));
+    }
+
+    // PW_TEST_PAGE_DELAY=<max ms>: the computer's page requests go out after a random delay,
+    // so their replies arrive late and in any order (the stage-3 paging test); =<ms> for a
+    // fixed one (the deadline test); =<ms>@<n> delays only the n-th request (a later page).
+    private QTimer[] testTimers;
+    private int testRequests;
+
+    private void testDelayed(void delegate() dg)
+    {
+        import std.process : environment;
+        import std.random : uniform;
+
+        import std.string : split;
+
+        auto spec = environment.get("PW_TEST_PAGE_DELAY", "").split("@");
+        immutable s = spec.length ? spec[0] : "";
+        ++testRequests;
+        if (s.length == 0 || (spec.length > 1 && spec[1].to!int != testRequests))
+        {
+            dg();
+            return;
+        }
+        auto t = new QTimer(cast(cppq.QObject) null);
+        t.setSingleShot(true);
+        t.setInterval(s[0] == '=' ? s[1 .. $].to!int : uniform(0, s.to!int + 1));
+        t.connectTimeout({
+            dg();
+            import std.algorithm : remove, countUntil;
+            immutable at = testTimers.countUntil!(x => x is t);
+            if (at >= 0)
+                testTimers = testTimers.remove(at);
+        });
+        testTimers ~= t;
+        t.start();
     }
 
     /// A computer item as the phone shows it: shifted id, marked remote.
@@ -549,7 +843,8 @@ final class LocalBridge : Bridge
         return it;
     }
 
-    private void mergeAndAnswer(size_t limit, ResultCb cb)
+    /// Merge up to `limit` items from the two buffers by date onto `served`.
+    private JSONValue[] mergeServed(size_t limit)
     {
         JSONValue[] out_;
         while (out_.length < limit && (localBuf.length || remoteBuf.length))
@@ -573,15 +868,17 @@ final class LocalBridge : Bridge
         // the remote buffer may still be short while the local one is long; that is
         // fine: next page tops both up again
         served ~= out_;
+        return out_;
+    }
+
+    private long currentTotal()
+    {
         long total = remoteOnly ? 0 : index.count(localFilter);
         if (remoteTotal > 0)
             total += remoteTotal - dupes;
         if (total < served.length)
             total = served.length;
-        immutable totalFinal = total;
-        withRemoteThumbs(out_, () {
-            cb(JSONValue(["total": JSONValue(totalFinal), "offset": JSONValue(served.length), "items": JSONValue(out_)]), JSONValue(null));
-        });
+        return total;
     }
 
     /// Fills thumbUrl of remote items in `items` (data: URLs), then calls `done`.
@@ -628,11 +925,12 @@ final class LocalBridge : Bridge
         // first ones show while the rest are still coming.
         enum batch = 24;
         for (size_t at = 0; at < want.length; at += batch)
-            fetchThumbs(want[at .. (at + batch < want.length ? at + batch : want.length)], served, remoteBase);
+            fetchThumbs(want[at .. (at + batch < want.length ? at + batch : want.length)]);
     }
 
-    private void fetchThumbs(JSONValue[] want, JSONValue[] served, long remoteBase)
+    private void fetchThumbs(JSONValue[] want)
     {
+        immutable gen = pageGen;   // the cache outlives a listing; patching `served` may not
         long[] ids;
         foreach (w; want)
             ids ~= w.integer;
@@ -659,11 +957,14 @@ final class LocalBridge : Bridge
             }
         }, () {
             plog("thumbs: ", received, "/", ids.length, " via pieces, ", rawBytes, " bytes raw (no base64)");
+            if (Thread.getThis() !is owner)
+                plog("BUG: thumbnail batch completed off the Qt thread");
             // patch what was already served, so a reload / the viewer see the thumbs
-            foreach (ref it; served)
-                if (it["id"].integer >= remoteBase && it["thumbUrl"].type == JSONType.null_)
-                    if (auto t = (it["id"].integer - remoteBase) in thumbCache)
-                        it["thumbUrl"] = *t;
+            if (gen == pageGen)
+                foreach (ref it; served)
+                    if (it["id"].integer >= remoteBase && it["thumbUrl"].type == JSONType.null_)
+                        if (auto t = (it["id"].integer - remoteBase) in thumbCache)
+                            it["thumbUrl"] = *t;
             if (got)
                 emit("library.changed", JSONValue.emptyObject);
         });

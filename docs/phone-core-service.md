@@ -227,7 +227,9 @@ mode, so removing them from `LocalBridge` does not break it.
    indexing reset, `core.permission`; reconnect tested in-process by dropping the bridge
    (`PW_TEST_RELINK=<s>[:<gap>]`, events lost while down). Done.
 3. **Paging ownership.** Session and paging generations, overlap handling, viewer re-open
-   with its neighbours; tested with deliberately delayed/reordered computer replies.
+   with its neighbours; tested with deliberately delayed/reordered computer replies
+   (`PW_TEST_PAGING=full|deadline|deadline2` + `PW_TEST_PAGE_DELAY`, `PW_TEST_VIEWER`). Done;
+   thumbnail completions also moved onto the Qt thread (they ran on the libp2p thread).
 4. **Process-safe persistence and files.** Single-writer lock, stale-socket rule, atomic
    thumbnail/preview publication, preview files, owned save worker + synchronous flush.
 5. **Framing and transport.** `CoreServer`/`CoreClient` over QLocalServer/QLocalSocket with

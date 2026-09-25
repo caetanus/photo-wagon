@@ -189,6 +189,7 @@ version (WithUi)
         return null;
     }
     private long openId; // photo being opened/shown; faces answers for others are dropped
+    private long pageEpoch;   // bumped by each new listing (offset 0): older page replies are dropped
     private int pageLimit = 240;
     private bool indexing;
     private string progressText;
@@ -1063,8 +1064,18 @@ version (WithUi)
         if (fTag.length && fTagGroup.length) params[fTagGroup] = fTag;
         if (fKeyword.length) params["keyword"] = fKeyword;
         immutable off = offset;
+        immutable epoch = offset == 0 ? ++pageEpoch : pageEpoch;
         client.request("library.page", params, (r, e) {
-            if (e.type != JSONType.null_) { report("page", e); return; }
+            if (epoch != pageEpoch)
+                return;   // a newer listing replaced this one
+            if (e.type != JSONType.null_)
+            {
+                if (!isSuperseded(e))   // the phone core cut an outdated request short: not a failure
+                    report("page", e);
+                return;
+            }
+            if (off != 0 && off != items.length)
+                return;   // another answer for this stretch already arrived (a repeated load-more)
             if (off == 0)
                 items.length = 0;
             total = r["total"].integer;
@@ -1147,8 +1158,24 @@ version (WithUi)
             if (fFavorites) nb["favorites"] = true;
             if (fKind.length) nb["kind"] = fKind;
             loadFaces(id);
-            client.request("photo.neighbours", nb, (n, e2) {
+            // A new listing (a refresh after library.changed, say) cuts a neighbours search
+            // short on the phone core: ask again. No cap — the new request queues behind the
+            // listing that cut this one short, so it repeats only once per real new listing.
+            void delegate(JSONValue, JSONValue) onNeighbours;
+            onNeighbours = (JSONValue n, JSONValue e2) {
                 if (id != openId) return;
+                if (isSuperseded(e2))
+                {
+                    writeln("library: neighbours search cut short by a new listing — asking again");
+                    stdout.flush();
+                    client.request("photo.neighbours", nb, onNeighbours);
+                    return;
+                }
+                if (e2.type != JSONType.null_)   // e.g. search_limit: shown, without arrows
+                {
+                    writeln("library: no neighbours for ", id, ": ", e2.toString());
+                    stdout.flush();
+                }
                 JSONValue photo = r;
                 photo["prev"] = (e2.type == JSONType.null_ && "prev" in n) ? n["prev"] : JSONValue(null);
                 photo["next"] = (e2.type == JSONType.null_ && "next" in n) ? n["next"] : JSONValue(null);
@@ -1174,7 +1201,8 @@ version (WithUi)
                     current = cur.toString();
                     currentChanged.emit();
                 });
-            });
+            };
+            client.request("photo.neighbours", nb, onNeighbours);
         });
     }
 
@@ -1729,9 +1757,10 @@ version (WithUi)
             });
             refresh();
             loadDevices();
-            // The open viewer keeps what it shows (its file and data stay valid). Re-reading it
-            // here would ask photo.neighbours right after refresh() reset the served pages —
-            // swiping belongs with the paging session (docs/phone-core-service.md, stage 3).
+            // The viewer's photo, re-read: its neighbours come from the listing refresh() just
+            // started over, which the core pages through until it finds the photo.
+            if (openId)
+                openPhoto(cast(int) openId);
         }
         setStatus(up, indexing, up ? (progressText.length ? progressText : "connected") : "daemon unreachable, retrying…");
     }
@@ -2024,6 +2053,13 @@ version (WithUi)
         s["text"] = text;
         status = s.toString();
         statusChanged.emit();
+    }
+
+    private static bool isSuperseded(JSONValue err)
+    {
+        if (err.type != JSONType.object || !("code" in err) || err["code"].type != JSONType.string)
+            return false;
+        return err["code"].str == "superseded" || err["code"].str == "session_superseded";
     }
 
     private void report(string what, JSONValue err)

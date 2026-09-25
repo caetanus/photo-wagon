@@ -99,6 +99,14 @@ final class P2pBridge : Bridge
     // thumbnails for the grid: raw JPEG bytes on a piece stream (THUMB op), not base64 in JSON
     private static struct ThumbJob { long[] ids; void delegate(long, const(ubyte)[]) onThumb; void delegate() done; }
     private ThumbJob[] thumbJobs;        // under lock
+    // A thumbnail batch runs on the vibe thread; its caller's callbacks must run on the Qt
+    // thread (they touch the UI's paging state and emit events into Qt). The worker collects
+    // the bytes into the batch and posts a thumbsDone ticket; drain() hands them over.
+    private static final class ThumbBatch { long[] rids; immutable(ubyte)[][] jpegs; }
+    private static struct ThumbCbs { void delegate(long, const(ubyte)[]) onThumb; void delegate() done; }
+    private ThumbBatch[long] thumbBatches;   // under lock: finished batches, by ticket
+    private ThumbCbs[long] thumbCbs;         // Qt thread only: ticket -> the caller's callbacks
+    private long nextThumbs = 1;
     private ResultCb[long] pullCbs;      // Qt thread only: ticket -> callback for a download
     private long nextPull = 1;
     private long lastBumpBoot;           // under lock: CLOCK_BOOTTIME of the last target.version_ bump
@@ -373,7 +381,24 @@ final class P2pBridge : Bridge
         // p2p up: raw bytes on a piece stream (THUMB op), drained by the pump. Otherwise
         // mirror request()'s fallback — the TCP bridge's base-class JSON library.thumbs.
         if (p2pUp)
-            synchronized (lock) thumbJobs ~= ThumbJob(ids.dup, onThumb, done);
+        {
+            immutable ticket = nextThumbs++;
+            thumbCbs[ticket] = ThumbCbs(onThumb, done);
+            auto batch = new ThumbBatch;
+            synchronized (lock) thumbJobs ~= ThumbJob(ids.dup,
+                (long rid, const(ubyte)[] jpeg) {   // vibe thread
+                    auto copy = jpeg.idup;
+                    synchronized (lock)
+                    {
+                        batch.rids ~= rid;
+                        batch.jpegs ~= copy;
+                    }
+                },
+                () {                                // vibe thread
+                    synchronized (lock) thumbBatches[ticket] = batch;
+                    link.deliver(JSONValue(["thumbsDone": JSONValue(ticket)]).toString());
+                });
+        }
         else if (tcp.connected)
             tcp.fetchThumbs(ids, onThumb, done);
         else if (done !is null)
@@ -534,6 +559,39 @@ final class P2pBridge : Bridge
                 plog("p2p: ", up ? "connected to " ~ p2pWith : "disconnected" ~ (d["error"].type == JSONType.string ? ": " ~ d["error"].str : ""));
                 if (onConnected)
                     onConnected(connected);
+                continue;
+            }
+            if (obj.type == JSONType.object && "thumbsDone" in obj)
+            {
+                immutable ticket = obj["thumbsDone"].integer;
+                ThumbBatch batch;
+                synchronized (lock)
+                    if (auto b = ticket in thumbBatches)
+                    {
+                        batch = *b;
+                        thumbBatches.remove(ticket);
+                    }
+                if (auto cbp = ticket in thumbCbs)
+                {
+                    auto cbs = *cbp;
+                    thumbCbs.remove(ticket);
+                    // a failing callback must not lose the rest of this drained batch
+                    try
+                    {
+                        if (batch !is null && cbs.onThumb !is null)
+                            foreach (i, rid; batch.rids)
+                                cbs.onThumb(rid, batch.jpegs[i]);
+                    }
+                    catch (Exception e)
+                        plog("p2p: thumbnail callback failed: ", e.msg);
+                    try
+                    {
+                        if (cbs.done !is null)
+                            cbs.done();
+                    }
+                    catch (Exception e)
+                        plog("p2p: thumbnail completion failed: ", e.msg);
+                }
                 continue;
             }
             if (obj.type == JSONType.object && "pullDone" in obj)

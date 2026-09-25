@@ -240,6 +240,9 @@ mode, so removing them from `LocalBridge` does not break it.
 5. **Framing and transport.** `CoreServer`/`CoreClient` over QLocalServer/QLocalSocket with
    the limits above; tests for fragmented/coalesced frames, malformed envelopes, duplicate
    ids, limits, backpressure, reentrancy.
+   Done (`coreipc.d`; `mobile/tests/core_socket_test.py`). The host core is
+   `photo-wagon-mobile -service`; a UI with `PW_CORE_SOCKET=<dataDir>/core.sock` is its
+   client. The socket path must fit sun_path (107 bytes).
 6. **Host child mode.** Readiness barrier, queues/deadlines, restart supervision,
    supersession; kill either process and reconnect to a surviving core.
 7. **Android service ownership.** The core moves into `:core` for real; lifecycle →

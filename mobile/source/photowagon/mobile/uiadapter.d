@@ -26,19 +26,46 @@ version (Android)
 
 final class UiBridge : Bridge
 {
-    private LocalBridge inner;
+    private Bridge inner;        // the core: in this process (local) or over its socket (CoreClient)
+    private LocalBridge local;   // set when the core runs in this process
     private QTimer askPermission;
     private bool permissionAsked;
 
-    this(LocalBridge inner)
+    this(LocalBridge local)
     {
-        this.inner = inner;
+        this.inner = local;
+        this.local = local;
+    }
+
+    /// The core in another process (docs/phone-core-service.md, stage 5): the client delivers
+    /// the core.state snapshot itself before reporting it is up.
+    this(Bridge client)
+    {
+        this.inner = client;
     }
 
     override void start()
     {
         // forward what the core tells the UI (set before start, like Library does to us)
-        inner.onEvent = (string event, JSONValue data) {
+        inner.onEvent = &deliver;
+        inner.onConnected = &coreUp;
+        version (Android) {} else
+        {
+            import std.process : environment;
+            import photowagon.mobile.pagingtest : PagingTest;
+
+            immutable mode = environment.get("PW_TEST_PAGING", "");
+            if (mode.length && local !is null)
+                pagingTest = new PagingTest(local, mode);
+        }
+        inner.start();
+        if (local !is null)
+            testRelink();
+    }
+
+    private void deliver(string event, JSONValue data)
+    {
+        {
             if (testDown)   // a dropped link loses what the core says meanwhile
                 return;
             version (Android) {} else
@@ -50,21 +77,12 @@ final class UiBridge : Bridge
             if (event == "core.permission" && data.type == JSONType.object && "needed" in data
                 && data["needed"].type == JSONType.true_)
                 permissionNeeded();
+            if (event == "core.state" && data.type == JSONType.object && "permissionNeeded" in data
+                && data["permissionNeeded"].type == JSONType.true_)
+                permissionNeeded();
             if (onEvent)
                 onEvent(event, data);
-        };
-        inner.onConnected = &coreUp;
-        version (Android) {} else
-        {
-            import std.process : environment;
-            import photowagon.mobile.pagingtest : PagingTest;
-
-            immutable mode = environment.get("PW_TEST_PAGING", "");
-            if (mode.length)
-                pagingTest = new PagingTest(inner, mode);
         }
-        inner.start();
-        testRelink();
     }
 
     // The core is (again) reachable: the UI gets its state snapshot FIRST, then "up" — so a
@@ -72,14 +90,10 @@ final class UiBridge : Bridge
     // code shows that at once (and a stale "indexing" spinner is reset).
     private void coreUp(bool up)
     {
-        if (up)
+        if (up && local !is null)
         {
-            inner.beginSession();   // what the previous session had pending is cut short
-            immutable st = inner.coreState();
-            if (st["permissionNeeded"].type == JSONType.true_)
-                permissionNeeded();
-            if (onEvent)
-                onEvent("core.state", st);
+            local.beginSession();   // what the previous session had pending is cut short
+            deliver("core.state", local.coreState());
         }
         if (onConnected)
             onConnected(up);
@@ -123,7 +137,7 @@ final class UiBridge : Bridge
         relinkUp.setInterval(gap * 1000);
         relinkUp.connectTimeout({
             testDown = false;
-            plog("ui: [test] core link up: ", inner.coreState().toString());
+            plog("ui: [test] core link up: ", local.coreState().toString());
             coreUp(true);
         });
         relinkDown.start();

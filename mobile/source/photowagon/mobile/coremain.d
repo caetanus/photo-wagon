@@ -49,6 +49,15 @@ else
 
 enum CORE_ID = "photo-wagon-mobile";   // same app id: the same data/settings dirs as the UI
 
+version (Android) {} else
+{
+    import photowagon.mobile.corefactory : PhoneCore;
+    import photowagon.mobile.coreipc : CoreServer;
+
+    private __gshared PhoneCore hostCore;      // kept for the life of the process
+    private __gshared CoreServer hostServer;
+}
+
 /// The core's entry. Never returns: like the UI's main it leaves with exit(), because
 /// returning from D's main tears the runtime down under still-running threads.
 int serviceMain()
@@ -68,6 +77,28 @@ int serviceMain()
     QCoreApplication.setOrganizationName("PhotoWagon");
     QCoreApplication.setApplicationName(CORE_ID);
     plog("core: service process up (pid ", getpid(), ")");
+
+    version (Android) {} else
+    {
+        // Host: the core proper — index, computer link, local bridge — served to a UI over
+        // <dataDir>/core.sock (stage 5). On Android the UI process still builds the core until
+        // stage 7 (two cores would fight over the data directory's lock).
+        import photowagon.mobile.corefactory : buildPhoneCore, CoreLockedException;
+        import photowagon.mobile.coreipc : CoreServer;
+        import core.time : seconds;
+
+        try
+            hostCore = buildPhoneCore();
+        catch (CoreLockedException e)
+        {
+            plog("core: ", e.msg, " — not starting a second one");
+            exit(3);
+        }
+        hostServer = new CoreServer(hostCore.bridge, hostCore.dataDir);
+        hostServer.start();
+        hostCore.bridge.start();
+        QCoreApplication.instance().connectAboutToQuit({ hostCore.shutdown(2.seconds); });
+    }
 
     // Heartbeat: shows in logcat that the core keeps running after the UI is gone.
     auto beat = new QTimer(QCoreApplication.instance());

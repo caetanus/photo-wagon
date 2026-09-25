@@ -25,6 +25,7 @@ import std.string : split, indexOf;
 import std.file : exists;
 
 import photowagon.ui.backend : Library;
+import photowagon.ui.transport : Bridge;
 import photowagon.mobile.corefactory : buildPhoneCore, PhoneCore, CoreLockedException;
 import photowagon.mobile.uiadapter : UiBridge;
 // static: coremain mixes in its own createApp (QCoreApplication); keep it out of this scope
@@ -149,25 +150,39 @@ int main()
     // The core (index, computer link, local bridge) — built here in the UI process for now;
     // the UI talks to it only through UiBridge, which also does the Activity-bound parts
     // (share sheet, permission prompt). See docs/phone-core-service.md.
-    try
-        phoneCore = buildPhoneCore();
-    catch (CoreLockedException e)
+    // PW_CORE_SOCKET=<path> (host): the core runs in another process (`-service`) and the UI
+    // is its client over that socket (stage 5; stage 6 has the UI start that process).
+    immutable coreSocket = environment.get("PW_CORE_SOCKET", "");
+    if (coreSocket.length)
     {
-        // Two cores on one data directory would interleave their writes. Stage 7 turns
-        // this into "connect to the running one"; until then, say so and leave.
-        import core.stdc.stdlib : exit;
+        import photowagon.mobile.coreipc : CoreClient;
 
-        plog("phone: ", e.msg, " — not starting a second one");
-        exit(3);
+        plog("ui: using the core at ", coreSocket);
+        lib.start(new UiBridge(cast(Bridge) new CoreClient(coreSocket)));
     }
-    lib.start(new UiBridge(phoneCore.bridge));
-    // an orderly quit (the desktop window closed, QCoreApplication.quit) flushes the index;
-    // SIGTERM/SIGINT keep their immediate exit (the atomic checkpoints are the fallback)
-    QCoreApplication.instance().connectAboutToQuit({
-        import core.time : seconds;
+    else
+    {
+        try
+            phoneCore = buildPhoneCore();
+        catch (CoreLockedException e)
+        {
+            // Two cores on one data directory would interleave their writes. Stage 7 turns
+            // this into "connect to the running one"; until then, say so and leave.
+            import core.stdc.stdlib : exit;
 
-        phoneCore.shutdown(2.seconds);
-    });
+            plog("phone: ", e.msg, " — not starting a second one");
+            exit(3);
+        }
+        lib.start(new UiBridge(phoneCore.bridge));
+        // an orderly quit (the desktop window closed, QCoreApplication.quit) flushes the
+        // index; SIGTERM/SIGINT keep their immediate exit (the atomic checkpoints are the
+        // fallback)
+        QCoreApplication.instance().connectAboutToQuit({
+            import core.time : seconds;
+
+            phoneCore.shutdown(2.seconds);
+        });
+    }
     version (Android) {} else
     {
         testViewer(lib);
@@ -223,7 +238,10 @@ version (Android) {} else
         quitTimer.setSingleShot(true);
         quitTimer.setInterval(s.to!int * 1000);
         quitTimer.connectTimeout({
-            plog("ui: [test] quitting: ", phoneCore.index.length, " photos indexed");
+            if (phoneCore !is null)
+                plog("ui: [test] quitting: ", phoneCore.index.length, " photos indexed");
+            else
+                plog("ui: [test] quitting");
             QCoreApplication.quit();
         });
         quitTimer.start();

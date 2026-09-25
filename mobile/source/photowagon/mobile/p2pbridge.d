@@ -839,6 +839,12 @@ final class P2pBridge : Bridge
         auto watcher = runTask(&netWatch);
         scope (exit)
             stopTask(watcher);
+        // A client on a NEW thread (the previous event loop died): the LAN rendezvous of the
+        // old one died with its loop — its tasks never run again — so it is started afresh
+        // below, not kept because the token is the same. (Not closed: it belongs to the dead
+        // loop's thread.) Without this the phone never found the computer on a LAN again.
+        lanRv = null;
+        lanRvToken = null;
         // The piece store, for BOTH flavors: the hyperswarm branch below returns early, and
         // its pulls land here too (spawnPull hands `pieces` to pullPieces) — created after
         // the branch, it was null there and the first hyperswarm download crashed.
@@ -1022,11 +1028,21 @@ final class P2pBridge : Bridge
             // the loop keeps trying (patience). A circuit dial lands relayed; DCUtR then
             // upgrades it to a direct connection, which is what reaches the notifiee.
             string[] prefer;
+            bool linkedNow;   // a session is up already (on the LAN, say)
             synchronized (lock)
+            {
                 prefer = t.addrs.dup;
+                foreach (_, ref v; lpSessions)
+                    if (v.linked) { linkedNow = true; break; }
+            }
             foreach (a; prefer)
                 try
                 {
+                    // linked: no relayed meeting point to add — a circuit next to a working
+                    // direct connection only invites a hole punch that has nothing to gain
+                    // (and libp2p's DCUtR crashed the phone's loop doing it, 2026-09-25)
+                    if (linkedNow && a.canFind("/p2p-circuit"))
+                        continue;
                     auto ma = Multiaddr.parse(a);
                     auto comps = ma.components;
                     if (comps.length == 0)

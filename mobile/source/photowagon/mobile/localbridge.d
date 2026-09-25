@@ -1701,6 +1701,44 @@ final class LocalBridge : Bridge
             cb(JSONValue(null), error("no_computer", "not connected to a computer"));
             return;
         }
+        immutable withFacesPush = ph.facesScanned && !ph.facesGaveUp && !ph.facesSent;
+        if (computer.canPush())
+        {
+            // the raw-bytes pipe, streamed from the file like the sync's own pushes: a video
+            // read whole and base64'd would be gigabytes in memory
+            // the file as it is NOW (streamed): an index hash can predate an in-place edit,
+            // and the computer would answer "existed" for the old bytes
+            string hash;
+            try
+                hash = fileSha256(ph.path);
+            catch (Exception e)
+            {
+                cb(JSONValue(null), error("io", e.msg));
+                return;
+            }
+            JSONValue meta = [
+                "name": JSONValue(ph.path.baseName),
+                "takenAt": JSONValue(isoTime(ph.takenTs)),
+                "mtimeMs": JSONValue(ph.mtimeMs),
+                "sha256": JSONValue(hash),
+            ];
+            if (withFacesPush)
+                meta["faces"] = facesToJson(ph.faces);
+            immutable ticket = nextTicket++;
+            computer.uploadFile(ticket, ph.path, meta, (r, e) {
+                if (e.type == JSONType.null_)
+                {
+                    index.markSent(id, hash);
+                    if (withFacesPush && imported(r))
+                        index.markFacesSent(id);
+                    pumpFaces();
+                }
+                else
+                    index.markFailed(id);
+                cb(r, e);
+            });
+            return;
+        }
         ubyte[] bytes;
         try
             bytes = cast(ubyte[]) read(ph.path);
@@ -1951,11 +1989,11 @@ final class LocalBridge : Bridge
         shared(string)[] out_;
         foreach (p; paths)
         {
+            // streamed, never the whole file in memory: a phone video is hundreds of MB, and
+            // reading it at once was a single ~700 MB block that sent the core past its
+            // memory limit (killed, restarted, the same batch again — a crash loop)
             try
-            {
-                auto bytes = cast(ubyte[]) read(p);
-                out_ ~= cast(shared) toHexString!(LetterCase.lower)(sha256Of(bytes)).idup;
-            }
+                out_ ~= cast(shared) fileSha256(p);
             catch (Exception)
                 out_ ~= cast(shared) "";
         }

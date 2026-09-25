@@ -167,7 +167,13 @@ public class MainActivity extends QtActivity
                     {
                         statusSeen = m;
                         JSONObject st = new JSONObject(new String(Files.readAllBytes(file.toPath()), "UTF-8"));
-                        if (st.optBoolean("active", false) && !notifyAsked && Build.VERSION.SDK_INT >= 33 && instance != null
+                        // ask while there is sending to show: a run going, automatic sending on,
+                        // or photos waiting — the sending itself happens in the background (the
+                        // core's service), rarely while this screen is up, so "active" alone
+                        // almost never met the user
+                        boolean sending = st.optBoolean("active", false) || st.optBoolean("enabled", false)
+                            || st.optInt("pending", 0) > 0;
+                        if (sending && !notifyAsked && Build.VERSION.SDK_INT >= 33 && instance != null
                                 && instance.checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED)
                         {
                             notifyAsked = true;

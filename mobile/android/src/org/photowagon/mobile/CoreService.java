@@ -1,12 +1,19 @@
 package org.photowagon.mobile;
 
 import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.PowerManager;
 import android.util.Log;
+import java.nio.file.Files;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -24,8 +31,10 @@ import org.qtproject.qt.android.bindings.QtService;
  * its main() again with "-service" (android.app.arguments), which the D side dispatches to
  * the core's own entry (coremain.d) — no QML, no window.
  *
- * Foreground only while there is background work to keep going — auto-sync on, the same
- * settings/autosync flag MainActivity uses for SyncService. A foreground service keeps the
+ * Foreground only while there is background work to keep going — auto-sync on (the
+ * settings/autosync flag; the sync state the core writes follows it). It carries the app's one
+ * notification — the sync's progress — and holds a partial wake lock while a photo is going
+ * (5c: both moved here from the UI process's old SyncService). A foreground service keeps the
  * process out of Android's cached-app freezer (it does NOT exempt it from Doze's network
  * restrictions: after an idle period the core must reconnect, which netWatch does on
  * resume). It is also budgeted: Android 15+ gives dataSync services six hours per 24 h,
@@ -37,11 +46,16 @@ import org.qtproject.qt.android.bindings.QtService;
 public class CoreService extends QtService
 {
     static final String TAG = "photowagon";
-    // Transitional: SyncService still holds id 1 in the activity process until the core
-    // takes over the sync state; then this service carries the one notification.
-    static final int NOTIFICATION_ID = 2;
+    static final String CHANNEL = "sync";
+    static final int NOTIFICATION_ID = 1;   // the sync's progress, while in the foreground
+    static final int SUMMARY_ID = 3;        // what the last sync did, after auto-sync went off
     static final String EXTRA_FOREGROUND = "foreground";
     private boolean foreground;
+    private JSONObject lastStatus;          // the sync state the core last wrote
+    private Handler watcher;
+    private long statusSeen;
+    private PowerManager.WakeLock wakeLock;
+    private long refusedAt;                 // elapsedRealtime of the last refused foreground start
 
     static boolean autosync(Context ctx)
     {
@@ -81,19 +95,28 @@ public class CoreService extends QtService
             return;
         try
         {
-            JSONObject st = new JSONObject();
-            try { st.put("standby", true); st.put("enabled", true); } catch (Exception e) { }
-            Notification n = SyncService.build(this, st);
+            JSONObject st = lastStatus;
+            if (st == null)
+            {
+                st = new JSONObject();
+                try { st.put("standby", true); st.put("enabled", true); } catch (Exception e) { }
+            }
+            Notification n = build(this, st);
             if (Build.VERSION.SDK_INT >= 29)
                 startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
             else
                 startForeground(NOTIFICATION_ID, n);
             foreground = true;
+            refusedAt = 0;
             Log.i(TAG, "core service: foreground (pid " + android.os.Process.myPid() + ")");
+            // syncing again: the old summary is moot; a transfer already going gets the CPU
+            ((NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE)).cancel(SUMMARY_ID);
+            holdCpu(lastStatus != null && lastStatus.optBoolean("active", false));
         }
         catch (Exception e)
         {
             // e.g. Android 12+ refusing a foreground start from the background
+            refusedAt = android.os.SystemClock.elapsedRealtime();
             Log.w(TAG, "core service: cannot enter the foreground: " + e.getMessage());
         }
     }
@@ -103,6 +126,7 @@ public class CoreService extends QtService
         if (!foreground)
             return;
         stopForeground(Service.STOP_FOREGROUND_REMOVE);
+        holdCpu(false);   // no foreground, no reason to keep the CPU up
         foreground = false;
         Log.i(TAG, "core service: left the foreground (auto-sync off)");
     }
@@ -116,6 +140,7 @@ public class CoreService extends QtService
         // on re-reading a setting that may have changed since the request. onStartCommand,
         // which follows at once, leaves the foreground again if this start did not ask for it.
         enterForeground();
+        watchSyncStatus();
         // off the main thread: a first-install copy of 120 MB must not hold onCreate (the
         // service-execution timeout); the core waits for the files to appear
         Thread x = new Thread(this::extractModels, "extract-models");
@@ -165,13 +190,12 @@ public class CoreService extends QtService
     public int onStartCommand(Intent intent, int flags, int startId)
     {
         super.onStartCommand(intent, flags, startId);
-        // The request says whether to be in the foreground; a sticky restart (null intent)
-        // falls back to the setting.
-        boolean fg = intent != null ? intent.getBooleanExtra(EXTRA_FOREGROUND, autosync(this)) : autosync(this);
-        if (fg)
+        // A startForegroundService() request must be answered with startForeground() —
+        // even when the setting flipped since it was sent; the setting as it is NOW then
+        // decides (a request may be older than the auto-sync switch the watcher already saw).
+        if (intent != null && intent.getBooleanExtra(EXTRA_FOREGROUND, false))
             enterForeground();
-        else
-            leaveForeground();
+        reconcileForeground();
         return START_STICKY;
     }
 
@@ -192,6 +216,168 @@ public class CoreService extends QtService
     public void onDestroy()
     {
         Log.i(TAG, "core service: destroyed");
+        if (watcher != null)
+            watcher.removeCallbacksAndMessages(null);
+        holdCpu(false);
         super.onDestroy();
+    }
+
+    // ---- the sync's notification and wake lock (5c: they live where the sync runs) --------
+
+    /**
+     * The core writes files/settings/sync-status (atomically) whenever the sync state changes;
+     * every 2 s this reads it and keeps the notification, the wake lock and the foreground in
+     * step: foreground while auto-sync is on, the CPU held only while a photo is going.
+     */
+    private void watchSyncStatus()
+    {
+        final File file = new File(new File(getFilesDir(), "settings"), "sync-status");
+        watcher = new Handler(Looper.getMainLooper());
+        watcher.post(new Runnable() {
+            public void run()
+            {
+                try
+                {
+                    reconcileForeground();   // every tick, whatever the status file says
+                    long m = file.lastModified();
+                    if (m != 0 && m != statusSeen)
+                    {
+                        statusSeen = m;
+                        applyStatus(new JSONObject(new String(Files.readAllBytes(file.toPath()), "UTF-8")));
+                    }
+                }
+                catch (Exception e)
+                {
+                    Log.w(TAG, "sync status: " + e.getMessage());
+                }
+                watcher.postDelayed(this, 2000);
+            }
+        });
+    }
+
+    /**
+     * Foreground exactly while auto-sync is on. The settings/autosync flag is the one source
+     * of truth — read now, on every tick and every start request, so no stale request or
+     * status can leave the service on the wrong side.
+     */
+    private void reconcileForeground()
+    {
+        boolean want = autosync(this);
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (want && !foreground)
+        {
+            // refused before (Android 12+ from the background): try again at most once a
+            // minute; the next start from a visible activity gets it at once
+            if (refusedAt != 0 && android.os.SystemClock.elapsedRealtime() - refusedAt < 60_000)
+                return;
+            enterForeground();
+        }
+        else if (!want && foreground)
+            leaveForeground();
+    }
+
+    private void applyStatus(JSONObject st)
+    {
+        lastStatus = st;
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        reconcileForeground();
+        if (foreground)
+            nm.notify(NOTIFICATION_ID, build(this, st));
+        else if (st.optInt("failed", 0) > 0 || st.optInt("sent", 0) > 0)
+        {
+            // auto-sync is off: a dismissible summary under its own id (the foreground one is
+            // being cancelled asynchronously and would take a replacement with it), never a
+            // progress bar — and kept current while the last transfer winds down
+            JSONObject sum = new JSONObject();
+            try
+            {
+                sum.put("enabled", false);
+                sum.put("active", false);
+                sum.put("sent", st.optInt("sent", 0));
+                sum.put("failed", st.optInt("failed", 0));
+            }
+            catch (Exception e) { }
+            nm.notify(SUMMARY_ID, build(this, sum));
+        }
+        holdCpu(foreground && st.optBoolean("active", false));
+    }
+
+    /** CPU on while a photo is actually going; off in standby, so waiting costs nothing. */
+    private void holdCpu(boolean on)
+    {
+        try
+        {
+            if (on)
+            {
+                if (wakeLock == null)
+                {
+                    PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "photowagon:sync");
+                    wakeLock.setReferenceCounted(false);
+                }
+                if (!wakeLock.isHeld())
+                    wakeLock.acquire();
+            }
+            else if (wakeLock != null && wakeLock.isHeld())
+                wakeLock.release();
+        }
+        catch (Exception e)
+        {
+            Log.w(TAG, "core service: wake lock: " + e.getMessage());
+        }
+    }
+
+    static Notification build(Context ctx, JSONObject st)
+    {
+        NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(CHANNEL) == null)
+        {
+            NotificationChannel ch = new NotificationChannel(CHANNEL, "Sending photos", NotificationManager.IMPORTANCE_LOW);
+            ch.setDescription("Progress of the photos going to the computer");
+            nm.createNotificationChannel(ch);
+        }
+        boolean enabled = st.optBoolean("enabled", true);
+        boolean active = st.optBoolean("active", false);
+        boolean connected = st.optBoolean("connected", false);
+        int total = st.optInt("total", 0), done = st.optInt("done", 0);
+        int pending = st.optInt("pending", 0), failed = st.optInt("failed", 0), sent = st.optInt("sent", 0);
+        String title, text;
+        if (active)
+        {
+            title = "Sending photos to the computer";
+            text = (done + 1) + " of " + total + (failed > 0 ? " · " + failed + " failed" : "");
+        }
+        else if (enabled && !connected && pending > 0)
+        {
+            title = pending + " photos waiting for the computer";
+            text = "They go as soon as it is reachable";
+        }
+        else if (enabled && !connected)
+        {
+            title = "Looking for the computer";
+            text = "New photos go over as soon as it answers";
+        }
+        else if (enabled && (st.optBoolean("standby", false) || sent + failed == 0))
+        {
+            title = "In touch with the computer";
+            text = "New photos go over as they appear";
+        }
+        else
+        {
+            title = failed > 0 ? "Some photos did not go" : "Photos are on the computer";
+            text = sent + " sent" + (failed > 0 ? ", " + failed + " failed" : "");
+        }
+        Intent open = new Intent(ctx, MainActivity.class);
+        PendingIntent pi = PendingIntent.getActivity(ctx, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(ctx, CHANNEL) : new Notification.Builder(ctx);
+        b.setSmallIcon(R.drawable.ic_notification)
+         .setContentTitle(title)
+         .setContentText(text)
+         .setContentIntent(pi)
+         .setOngoing(enabled)
+         .setOnlyAlertOnce(true);
+        if (active && total > 0)
+            b.setProgress(total, done, false);
+        return b.build();
     }
 }

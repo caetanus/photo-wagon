@@ -197,8 +197,9 @@ mode, so removing them from `LocalBridge` does not break it.
   `onStartCommand` promotes/demotes a live service; Android 15+'s dataSync budget ends
   through `onTimeout` → leave the foreground, stop); a plain started service otherwise,
   (re)started on every activity start.
-- After 5b: the sync-status notification and the wake lock move from `SyncService` (UI
-  process) to `CoreService`, and the status watcher moves with them (5c).
+- 5c (done): the sync-status notification (id 1), the partial wake lock (held only while a
+  photo is going) and the status watcher live in `CoreService`, the core's process;
+  `SyncService` is gone. MainActivity only asks for the notification permission.
 - **Shutdown contract.** `PhoneIndex.saveNow()` today starts a daemon writer and returns
   (and skips when a save is already running) — not a flush. The core gets an owned save
   worker and ONE idempotent `shutdown(deadline)` shared by `onTimeout` and `onDestroy`

@@ -65,10 +65,6 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/qtprovider_paths"/>
         </provider>
-            <service
-            android:name="org.photowagon.mobile.SyncService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
         <!-- The core (index, faces, sync, p2p) in its own process: same .so, main() is
              called again with "-service" and dispatches to coremain.d. See CoreService.java. -->
         <service

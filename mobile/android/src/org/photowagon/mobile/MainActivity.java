@@ -41,7 +41,6 @@ public class MainActivity extends QtActivity
     private static MainActivity instance;
     private static Handler watcher;
     private static long statusSeen;
-    private static boolean coreForegroundSeen = true;   // last auto-sync state the core was reconciled with
     private static boolean notifyAsked;
 
     @Override
@@ -58,11 +57,6 @@ public class MainActivity extends QtActivity
         instance = this;
         exportQtEnvironment();
         watchSyncStatus();
-        // Auto-sync on → the foreground service from the very first moment, before Qt is
-        // even up: it is what keeps this process off Android's cached-app freezer once the
-        // screen goes off or the user leaves, so the p2p link and the pushes keep going.
-        if (new File(new File(getFilesDir(), "settings"), "autosync").exists())
-            SyncService.standby(getApplicationContext());
         handle(getIntent());
     }
 
@@ -141,17 +135,16 @@ public class MainActivity extends QtActivity
     }
 
     /**
-     * The D side writes files/settings/sync-status whenever the sync state changes;
-     * every 2 s this reads it and keeps the notification (and the foreground service
-     * that keeps the process alive) in step. Lives on the main looper for the life of
-     * the process, so the notification follows the sync after the activity is gone.
+     * The core writes files/settings/sync-status whenever the sync state changes. The
+     * notification, the wake lock and the foreground follow it in CoreService (the core's
+     * process); this only asks for the notification permission — which needs an activity —
+     * the first time a photo is going.
      */
     private void watchSyncStatus()
     {
         if (watcher != null)
             return;
         final File file = new File(new File(getFilesDir(), "settings"), "sync-status");
-        final Context app = getApplicationContext();
         watcher = new Handler(Looper.getMainLooper());
         watcher.post(new Runnable() {
             public void run()
@@ -169,14 +162,7 @@ public class MainActivity extends QtActivity
                             notifyAsked = true;
                             instance.requestPermissions(new String[] { "android.permission.POST_NOTIFICATIONS" }, REQUEST_NOTIFY);
                         }
-                        SyncService.update(app, st);
-                        // auto-sync flipped: move the core in or out of the foreground with it
-                        boolean enabled = st.optBoolean("enabled", true);
-                        if (enabled != coreForegroundSeen)
-                        {
-                            coreForegroundSeen = enabled;
-                            CoreService.start(app);
-                        }
+
                     }
                 }
                 catch (Exception e)

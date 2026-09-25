@@ -251,6 +251,11 @@ final class FileTagWriter
 					auto u = db.prepare("UPDATE photos SET size = ? WHERE id = ?");
 					u.bind(1, cast(long) getSize(path)).bind(2, id);
 					u.run();
+					// the kept digest (fingerprint, piece hashes) described the bytes before
+					// this rewrite: it goes, and is computed again when the file is next served
+					auto dd = db.prepare("DELETE FROM photo_digest WHERE hash = (SELECT hash FROM photos WHERE id = ?)");
+					dd.bind(1, id);
+					dd.run();
 				}
 				catch (Exception)
 				{

@@ -19,6 +19,7 @@ import libp2p.util.fibers : FiberGroup;
 
 import photowagon.core.config : Config;
 import photowagon.core.indexer.hash : sha256File;
+import photowagon.core.sync.digest : fingerprintOf;
 import photowagon.core.indexer.scan : Candidate, scanImages;
 import photowagon.core.library.calendar : isoTime;
 import photowagon.core.ipc.events : Events;
@@ -26,6 +27,23 @@ import photowagon.core.library.photos : Photo, PhotoRepo;
 import photowagon.core.metadata.exif : ExifInfo, readExif;
 import photowagon.core.library.kind : Signals, classify;
 import photowagon.core.thumbs.vips : ThumbResult, makeThumbnail, imageStats;
+
+/// digestFile's result in a form a worker thread can hand back (immutable).
+struct IndexDigest
+{
+	string sha;
+	string fingerprint;
+	immutable(ubyte)[] pieces;   // raw, 32 bytes each
+	long size;
+}
+
+IndexDigest digestForIndex(string path)
+{
+	import photowagon.core.sync.digest : digestFile, rawPieces;
+
+	auto d = digestFile(path);
+	return IndexDigest(d.sha, d.fingerprint, rawPieces(d.pieces).idup, d.size);
+}
 
 final class Indexer
 {
@@ -159,7 +177,34 @@ final class Indexer
 			logDiagnostic("indexer: changed %s (size %s → %s, mtime %s → %s)", c.path, known.get.size, c.size,
 				known.get.mtimeMs, c.mtimeMs);
 
-		immutable hash = jobs.background({ return async(&sha256File, c.path).getResult(); });
+		// Same size, new mtime: the kept fingerprint (size + eight sampled 4 KiB blocks, the
+		// user's rule) says whether the CONTENT changed — eight small reads instead of a
+		// full re-hash, thumbnail and classification. The full check happens when the file
+		// is next sent (each piece is checked against the kept manifest).
+		if (!known.isNull && known.get.size == c.size)
+		{
+			auto kd = photos.digest(known.get.hash);
+			if (!kd.isNull && kd.get.size == c.size)
+			{
+				string fp;
+				try
+					fp = jobs.background({ return async(&fingerprintOf, c.path).getResult(); });
+				catch (Exception)
+				{
+				}
+				if (fp.length && fp == kd.get.fingerprint)
+				{
+					photos.setMtime(known.get.id, c.mtimeMs);
+					logDiagnostic("indexer: %s touched, same content (fingerprint)", c.path);
+					return false;
+				}
+			}
+		}
+
+		// one streamed pass: the sha256, the piece hashes and the fingerprint together, kept
+		immutable dg = jobs.background({ return async(&digestForIndex, c.path).getResult(); });
+		immutable hash = dg.sha;
+		photos.setDigest(hash, dg.fingerprint, dg.pieces, dg.size);
 		auto same = photos.byHash(hash);
 		if (!same.isNull && same.get.path != c.path)
 		{

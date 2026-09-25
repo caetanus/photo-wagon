@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 18;
+enum currentVersion = 19;
 
 void migrate(Database db)
 {
@@ -58,6 +58,8 @@ void migrate(Database db)
 			db.exec(schemaV17);
 		if (have < 18)
 			migrateV18(db);
+		if (have < 19)
+			db.exec(schemaV19);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -269,6 +271,20 @@ private enum schemaV17 = `
 CREATE TABLE peer_names (
     peer_id  TEXT PRIMARY KEY,
     name     TEXT NOT NULL
+);
+`;
+
+// v19: what is known of a file's content, computed once in the same pass as its sha256
+// (core/sync/digest.d) and kept by that hash: the fingerprint (size + eight sampled 4 KiB
+// blocks) that tells a rescan the file is still the same one when only its mtime moved,
+// and the piece hashes (the piece protocol's manifest), so serving a file never re-reads
+// it to announce it. Filled in as files are (re)indexed; a missing row is computed on use.
+private enum schemaV19 = `
+CREATE TABLE photo_digest (
+    hash         TEXT PRIMARY KEY,
+    fingerprint  TEXT NOT NULL,
+    pieces       BLOB NOT NULL,
+    size         INTEGER NOT NULL
 );
 `;
 

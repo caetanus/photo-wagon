@@ -16,7 +16,8 @@ import libp2p.swarm.connection : Connection;
 
 import photowagon.core.p2p.devices : DeviceRepo, DeviceState;
 import photowagon.core.store.partials : PartialStore;
-import photowagon.core.sync.pieces : PieceService, PieceStore, ThumbSource, pieceProtocol;
+import photowagon.core.sync.pieces : PieceService, PieceStore, ThumbSource, pieceProtocol, Manifest;
+import photowagon.core.library.photos : PhotoRepo;
 
 enum pushProtocol = "/photowagon/push/1.0.0";
 /// The resumable pipe. Header, big-endian: `(32 bytes sha256)(long size)(long offset)`; the
@@ -36,6 +37,29 @@ enum pullProtocol = "/photowagon/pull/1.0.0";
 /// Bytes that have arrived on the push pipe, waiting for their `library.import` to claim
 /// them by ticket. The phone acks the blob before sending the metadata, so the bytes are
 /// here by the time the import request lands; a cap drops the oldest if a phone dies mid-push.
+/// A piece service reads, persists and drops the library's kept digests (photo_digest).
+void wireDigests(PieceService svc, PhotoRepo photos)
+{
+	svc.stored = (string sha, out string fp) => keptManifest(photos, sha, fp);
+	svc.persist = (string sha, string fp, const(ubyte)[] raw, long size) { photos.setDigest(sha, fp, raw, size); };
+	svc.forget = (string sha) { photos.clearDigest(sha); };
+}
+
+/// The manifest the library kept for a hash (photo_digest), for PieceService.stored.
+Manifest keptManifest(PhotoRepo photos, string sha, out string fingerprint)
+{
+	import photowagon.core.sync.digest : piecesFromRaw;
+
+	auto d = photos.digest(sha);
+	if (d.isNull)
+		return Manifest.init;
+	fingerprint = d.get.fingerprint;
+	Manifest m;
+	m.size = d.get.size;
+	m.pieces = piecesFromRaw(d.get.pieces);
+	return m;
+}
+
 final class BlobStash
 {
 	private ubyte[][long] byTicket;
@@ -222,6 +246,7 @@ final class PieceOverP2p
 			auto have = photos.byHash(sha);
 			return !have.isNull && have.get.path !is null && have.get.path.exists ? have.get.path : null;
 		}, store);
+		wireDigests(service, photos);
 		host.setStreamHandler(pieceProtocol, &serve);
 	}
 

@@ -112,6 +112,46 @@ FileDigest digestFile(string path)
 	return d;
 }
 
+/// digestFile's result in a form a worker thread can hand back (immutable), and the call
+/// that computes it — for vibe's async(), so a big file is read off the event loop.
+struct SharedDigest
+{
+	string sha;
+	string fingerprint;
+	immutable(ubyte)[] pieces;   // raw, 32 bytes each
+	long size;
+}
+
+SharedDigest digestShared(string path)
+{
+	auto d = digestFile(path);
+	return SharedDigest(d.sha, d.fingerprint, rawPieces(d.pieces).idup, d.size);
+}
+
+/// The piece hashes as raw bytes (32 each) — the database form — and back.
+ubyte[] rawPieces(const(ubyte[32])[] pieces)
+{
+	ubyte[] raw;
+	raw.reserve(pieces.length * 32);
+	foreach (ref p; pieces)
+		raw ~= p[];
+	return raw;
+}
+
+/// ditto
+ubyte[32][] piecesFromRaw(const(ubyte)[] raw)
+{
+	ubyte[32][] out_;
+	if (raw.length % 32 != 0)
+		return out_;
+	foreach (i; 0 .. raw.length / 32)
+	{
+		ubyte[32] p = raw[i * 32 .. i * 32 + 32];
+		out_ ~= p;
+	}
+	return out_;
+}
+
 /// The piece hashes as one base64 string (32 bytes each), for storing beside the photo.
 string encodePieces(const(ubyte[32])[] pieces)
 {

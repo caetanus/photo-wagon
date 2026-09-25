@@ -97,6 +97,48 @@ final class PhotoRepo
 		return Nullable!Photo(readRow(s));
 	}
 
+	/// The content digest kept for `hash` (schema v19): fingerprint, raw piece hashes
+	/// (32 bytes each) and the size they describe.
+	struct Digest
+	{
+		string fingerprint;
+		ubyte[] pieces;
+		long size;
+	}
+
+	Nullable!Digest digest(string hash)
+	{
+		auto s = db.prepare("SELECT fingerprint, pieces, size FROM photo_digest WHERE hash = ?");
+		s.bind(1, hash);
+		if (!s.step())
+			return Nullable!Digest.init;
+		return Nullable!Digest(Digest(s.getString(0), s.getBlob(1), s.getLong(2)));
+	}
+
+	void setDigest(string hash, string fingerprint, const(ubyte)[] pieces, long size)
+	{
+		auto s = db.prepare("INSERT OR REPLACE INTO photo_digest (hash, fingerprint, pieces, size) VALUES (?, ?, ?, ?)");
+		s.bind(1, hash).bind(2, fingerprint).bind(3, pieces).bind(4, size);
+		s.step();
+	}
+
+	/// A kept digest that turned out wrong (the file changed where the fingerprint does not
+	/// look, or a metadata rewrite kept the size): it goes, and is computed again on use.
+	void clearDigest(string hash)
+	{
+		auto s = db.prepare("DELETE FROM photo_digest WHERE hash = ?");
+		s.bind(1, hash);
+		s.step();
+	}
+
+	/// Only the file's mtime moved (its fingerprint still matches): keep the row, note the time.
+	void setMtime(long id, long mtimeMs)
+	{
+		auto s = db.prepare("UPDATE photos SET mtime_ms = ? WHERE id = ?");
+		s.bind(1, mtimeMs).bind(2, id);
+		s.step();
+	}
+
 	Nullable!Photo byHash(string hash)
 	{
 		auto s = db.prepare(selectColumns ~ " FROM photos p WHERE p.hash = ?");

@@ -480,7 +480,12 @@ final class PieceService
 
 	/// Serve thumbnails over this service: `t` maps a photo id to its JPEG bytes.
 	void serveThumbsFrom(ThumbSource t) { thumbs = t; }
-	private Manifest[string] cache;   // complete files' manifests (vibe thread)
+	private static struct Cached
+	{
+		Manifest m;
+		string fp;   // the file's fingerprint when it was cached
+	}
+	private Cached[string] cache;   // complete files' manifests (vibe thread)
 	private enum size_t cacheMax = 64;
 
 	this(Source source, PieceStore store)
@@ -489,14 +494,77 @@ final class PieceService
 		this.store = store;
 	}
 
+	/// The digest kept for a hash (the library's photo_digest), if the node has one: a
+	/// served file is then never re-read just to announce it. Used only while the file's
+	/// size AND fingerprint (8 sampled blocks) still match it — a metadata rewrite that
+	/// kept the size is caught here.
+	Manifest delegate(string sha, out string fingerprint) stored;
+	/// A digest computed here (none was kept) — persisted so the next serve does not read
+	/// the file again. Called only when the file's sha256 is still `sha`.
+	void delegate(string sha, string fingerprint, const(ubyte)[] rawPieces, long size) persist;
+	/// A kept digest turned out wrong (a piece read no longer matches it): drop it.
+	void delegate(string sha) forget;
+
 	private Manifest manifestFor(string sha, string path)
 	{
+		import photowagon.core.sync.digest : fingerprintOf, digestShared, piecesFromRaw;
+		import vibe.core.concurrency : async;
+
+		// a cached manifest is used only while the file is still the one it describes (a
+		// metadata rewrite or a truncation since): the eight sampled reads are cheap
 		if (auto c = sha in cache)
-			return *c;
-		auto m = manifestOf(path);
+		{
+			try
+			{
+				import std.file : getSize;
+
+				if (c.m.size == cast(long) getSize(path) && c.fp == fingerprintOf(path))
+					return c.m;
+			}
+			catch (Exception)
+			{
+			}
+			cache.remove(sha);
+		}
+		Manifest m;
+		string mfp;
+		if (stored !is null)
+		{
+			try
+			{
+				import std.file : getSize;
+
+				string fp;
+				m = stored(sha, fp);
+				if (m.count == 0 || m.size != cast(long) getSize(path) || fp != fingerprintOf(path))
+					m = Manifest.init;
+				else
+					mfp = fp;
+			}
+			catch (Exception)
+				m = Manifest.init;
+		}
+		if (m.count == 0)
+		{
+			// one pass for all of it, OFF the event loop (a video is hundreds of MB); served
+			// and kept only if the file still IS `sha` — other bytes under this name would
+			// fail the requester's whole-file check anyway
+			auto d = async(&digestShared, path).getResult();
+			if (d.sha != sha)
+				return Manifest.init;
+			m.size = d.size;
+			m.pieces = piecesFromRaw(d.pieces);
+			mfp = d.fingerprint;
+			if (persist !is null)
+				try
+					persist(sha, d.fingerprint, d.pieces, d.size);
+				catch (Exception)
+				{
+				}
+		}
 		if (cache.length >= cacheMax)
 			cache.clear();
-		cache[sha] = m;
+		cache[sha] = Cached(m, mfp);
 		return m;
 	}
 
@@ -584,6 +652,11 @@ final class PieceService
 			if (complete !is null)
 			{
 				auto m = manifestFor(sha, complete);
+				if (m.count == 0)   // the file is no longer that content: nothing to offer
+				{
+					s.write([PieceStatus.unknown]);
+					return;
+				}
 				Bitfield b = Bitfield(m.count);
 				foreach (i; 0 .. m.count)
 					b.set(i);
@@ -607,6 +680,11 @@ final class PieceService
 			if (complete !is null)
 			{
 				gman = manifestFor(sha, complete);
+				if (gman.count == 0)   // no longer that content
+				{
+					s.write([PieceStatus.unknown]);
+					return;
+				}
 				if (i >= gman.count)
 				{
 					s.write([PieceStatus.badPiece]);
@@ -618,6 +696,21 @@ final class PieceService
 				bytes = new ubyte[gman.lengthOf(i)];
 				fh.seek(cast(long) i * pieceSize);
 				fh.read(bytes);
+				// the file must still be what its manifest says: a change the fingerprint
+				// missed shows here — the digest is dropped (the next ask computes it again)
+				// and the piece refused, never sent with a proof it does not match
+				if (sha256Of(bytes) != gman.pieces[i])
+				{
+					cache.remove(sha);
+					if (forget !is null)
+						try
+							forget(sha);
+						catch (Exception)
+						{
+						}
+					s.write([PieceStatus.unknown]);
+					return;
+				}
 			}
 			else if (store !is null && store.have(sha).has(i))
 			{

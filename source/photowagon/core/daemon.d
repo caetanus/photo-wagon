@@ -280,6 +280,11 @@ final class Daemon : ServerControl
 				return !have.isNull && have.get.path !is null && have.get.path.exists ? have.get.path : null;
 			}, pieces);
 			hsPieces.serveThumbsFrom(&thumbSrc);
+			{
+				import photowagon.core.p2p.blobpush : wireDigests;
+
+				wireDigests(hsPieces, photos);
+			}
 			node.onConnection = (HsConn c) nothrow {
 				try
 					new HsMuxServe(c, registry, events, token, deviceRepo, pairingMgr, hsPieces);

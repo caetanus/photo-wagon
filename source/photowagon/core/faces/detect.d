@@ -17,7 +17,7 @@ struct FaceHit
 }
 
 /// The face embedding dimension. ArcFace r100 is 512-d.
-enum faceDim = 512;
+public import photowagon.core.faces.dims : faceDim; // shared with the no-vision build
 
 /// SFace's published cosine threshold for "same person".
 enum sameFaceCosine = 0.363f;

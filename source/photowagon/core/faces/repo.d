@@ -1,7 +1,7 @@
 /// The `faces` and `persons` tables.
 module photowagon.core.faces.repo;
 
-import photowagon.core.faces.detect : faceDim;
+import photowagon.core.faces.dims : faceDim;
 
 import std.json;
 

@@ -1134,6 +1134,7 @@ version (WithUi)
         openId = id;
         JSONValue params = ["id": JSONValue(id)];
         client.request("photo.get", params, (r, e) {
+            if (id != openId) return;   // closed, or another photo opened meanwhile
             if (e.type != JSONType.null_) { report("photo.get", e); return; }
             JSONValue nb = JSONValue.emptyObject;
             nb["id"] = id;
@@ -1147,6 +1148,7 @@ version (WithUi)
             if (fKind.length) nb["kind"] = fKind;
             loadFaces(id);
             client.request("photo.neighbours", nb, (n, e2) {
+                if (id != openId) return;
                 JSONValue photo = r;
                 photo["prev"] = (e2.type == JSONType.null_ && "prev" in n) ? n["prev"] : JSONValue(null);
                 photo["next"] = (e2.type == JSONType.null_ && "next" in n) ? n["next"] : JSONValue(null);
@@ -1165,7 +1167,7 @@ version (WithUi)
                 fp["id"] = id;
                 fp["maxEdge"] = 2048;
                 client.request("photo.file", fp, (f, e3) {
-                    if (e3.type != JSONType.null_ || current.length == 0) return;
+                    if (e3.type != JSONType.null_ || current.length == 0 || id != openId) return;
                     auto cur = parseJSON(current);
                     if (cur["id"].integer != id) return; // moved on already
                     cur["fileUrl"] = "data:" ~ f["mime"].str ~ ";base64," ~ f["base64"].str;
@@ -1665,6 +1667,55 @@ version (WithUi)
 
     // ---- daemon → D ------------------------------------------------------------
 
+    /// The phone core's full state after a (re)connection (docs/phone-core-service.md): applied
+    /// field by field instead of replaying events — a fake index.done would reload everything.
+    /// Resets a stale "indexing" spinner when the core comes back idle.
+    private void applyCoreState(JSONValue st)
+    {
+        if (st.type != JSONType.object)
+            return;
+        if ("computer" in st && st["computer"].type == JSONType.object)
+        {
+            auto c = st["computer"];
+            computerConnected = "connected" in c && c["connected"].type == JSONType.true_;
+            if ("endpoint" in c && c["endpoint"].type == JSONType.string)
+                endpoint = c["endpoint"].str;
+            endpointChanged.emit();
+        }
+        if ("pairingCode" in st)
+        {
+            pairingCode = st["pairingCode"].type == JSONType.string
+                ? JSONValue(["code": st["pairingCode"]]).toString() : "{}";
+            pairingCodeChanged.emit();
+        }
+        if ("sync" in st && st["sync"].type == JSONType.object)
+        {
+            sync = st["sync"].toString();
+            syncChanged.emit();
+        }
+        if ("indexing" in st && st["indexing"].type == JSONType.object)
+        {
+            auto ix = st["indexing"];
+            if ("active" in ix && ix["active"].type == JSONType.true_)
+            {
+                indexing = true;
+                if ("imported" in ix && "total" in ix)
+                    progressText = "indexing " ~ (ix["imported"].integer
+                        + ("skipped" in ix ? ix["skipped"].integer : 0)).to!string
+                        ~ " / " ~ ix["total"].integer.to!string;
+            }
+            else if (indexing)
+            {
+                indexing = false;   // the core is idle: whatever spinner we had is stale
+                progressText = "library up to date";
+                writeln("library: stale indexing state reset (the core is idle)");
+            }
+        }
+        writeln("library: core state applied (computer ", computerConnected ? "up" : "down",
+            ", indexing ", indexing ? "on" : "off", ")");
+        stdout.flush();
+    }
+
     private void onLink(bool up)
     {
         if (up)
@@ -1678,6 +1729,9 @@ version (WithUi)
             });
             refresh();
             loadDevices();
+            // The open viewer keeps what it shows (its file and data stay valid). Re-reading it
+            // here would ask photo.neighbours right after refresh() reset the served pages —
+            // swiping belongs with the paging session (docs/phone-core-service.md, stage 3).
         }
         setStatus(up, indexing, up ? (progressText.length ? progressText : "connected") : "daemon unreachable, retrying…");
     }
@@ -1852,6 +1906,9 @@ version (WithUi)
         case "sync.status":
             sync = data.toString();
             syncChanged.emit();
+            break;
+        case "core.state":
+            applyCoreState(data);
             break;
         case "log":
             writeln("daemon: ", data["message"].str);

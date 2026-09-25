@@ -33,22 +33,80 @@ final class UiBridge : Bridge
     this(LocalBridge inner)
     {
         this.inner = inner;
-        // before start(): the first scan can already find the permission missing
-        inner.onPermissionNeeded = &permissionNeeded;
     }
 
     override void start()
     {
         // forward what the core tells the UI (set before start, like Library does to us)
         inner.onEvent = (string event, JSONValue data) {
+            if (testDown)   // a dropped link loses what the core says meanwhile
+                return;
+            if (event == "core.permission" && data.type == JSONType.object && "needed" in data
+                && data["needed"].type == JSONType.true_)
+                permissionNeeded();
             if (onEvent)
                 onEvent(event, data);
         };
-        inner.onConnected = (bool up) {
-            if (onConnected)
-                onConnected(up);
-        };
+        inner.onConnected = &coreUp;
         inner.start();
+        testRelink();
+    }
+
+    // The core is (again) reachable: the UI gets its state snapshot FIRST, then "up" — so a
+    // UI (re)connecting to a core that is already linked, indexing or waiting for a pairing
+    // code shows that at once (and a stale "indexing" spinner is reset).
+    private void coreUp(bool up)
+    {
+        if (up)
+        {
+            immutable st = inner.coreState();
+            if (st["permissionNeeded"].type == JSONType.true_)
+                permissionNeeded();
+            if (onEvent)
+                onEvent("core.state", st);
+        }
+        if (onConnected)
+            onConnected(up);
+    }
+
+    // PW_TEST_RELINK=<seconds>[:<gap>]: once, after that long, act as if the core went away
+    // (its events are lost) and came back <gap> seconds later (default 1) — the recovery path
+    // a separate core process will need, testable now.
+    private QTimer relinkDown, relinkUp;
+    private bool testDown;
+
+    private void testRelink()
+    {
+        import std.conv : to;
+        import std.process : environment;
+        import photowagon.mobile.plog : plog;
+
+        import std.string : split;
+
+        immutable spec = environment.get("PW_TEST_RELINK", "").split(":");
+        if (spec.length == 0 || spec[0].length == 0)
+            return;
+        immutable s = spec[0];
+        immutable gap = spec.length > 1 ? spec[1].to!int : 1;
+        relinkDown = new QTimer(cast(cppq.QObject) null);
+        relinkDown.setSingleShot(true);
+        relinkDown.setInterval(s.to!int * 1000);
+        relinkDown.connectTimeout({
+            plog("ui: [test] core link down");
+            testDown = true;
+            if (onConnected)
+                onConnected(false);
+            relinkUp.start();
+        });
+        relinkUp = new QTimer(cast(cppq.QObject) null);
+        relinkUp.setSingleShot(true);
+        relinkUp.setInterval(gap * 1000);
+        relinkUp.connectTimeout({
+            testDown = false;
+            plog("ui: [test] core link up: ", inner.coreState().toString());
+            coreUp(true);
+        });
+        relinkDown.start();
     }
 
     override bool connected() const { return inner.connected(); }

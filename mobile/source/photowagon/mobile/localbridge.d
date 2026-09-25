@@ -47,8 +47,6 @@ final class LocalBridge : Bridge
     private QTimer rescan;        // until the permission lands, keep trying
     private int rescanTries;
     private bool permissionAsked;
-    /// The scan found the photo permission missing: the UI asks for it (see uiadapter).
-    void delegate() onPermissionNeeded;
     // ---- sync: every photo not on the computer yet goes there, in the background,
     // whenever a computer is connected. The queue is the index itself (sent / tries
     // per photo, saved after every step), so a crash or a kill loses nothing: the next
@@ -218,19 +216,20 @@ final class LocalBridge : Bridge
         rescan.setInterval(2000);
         rescan.connectTimeout(&retryScan);
         index.onScanned = (size_t found) {
+            if (found > 0)
+                setPermissionNeeded(false);   // readable now (granted meanwhile)
             if (found > 0 || rescanTries > 60)
             {
                 rescan.stop();
                 return;
             }
             // nothing readable: the permission is missing. Asking is the UI's job (it needs the
-            // Activity, which is not in the core's process once the core moves out): tell it
-            // once, and keep looking for a while.
+            // Activity, which is not in the core's process once the core moves out): report it
+            // (core.permission), and keep looking for a while.
             if (!permissionAsked)
             {
                 permissionAsked = true;
-                if (onPermissionNeeded)
-                    onPermissionNeeded();
+                setPermissionNeeded(true);
             }
             rescan.start();
         };
@@ -256,8 +255,66 @@ final class LocalBridge : Bridge
 
     private void emit(string ev, JSONValue data)
     {
+        remember(ev, data);
         if (onEvent)
             onEvent(ev, data);
+    }
+
+    // ---- the core's state, for a UI that (re)connects ---------------------------------------
+    // Everything the UI would have learned from events it missed: kept as the events go out,
+    // served as one snapshot (core.state) before the UI is told the core is up
+    // (docs/phone-core-service.md, "Sessions and state").
+    private bool indexActive;
+    private JSONValue lastProgress;
+    private string pendingPairingCode;
+    private bool permissionNeeded;
+
+    private void remember(string ev, JSONValue data)
+    {
+        switch (ev)
+        {
+        case "index.progress":
+            indexActive = true;
+            lastProgress = data;
+            break;
+        case "index.done":
+            indexActive = false;
+            break;
+        case "pairing.code":
+            pendingPairingCode = data.type == JSONType.object && "done" in data ? null
+                : data.type == JSONType.object && "code" in data && data["code"].type == JSONType.string ? data["code"].str : null;
+            break;
+        default:
+            break;
+        }
+    }
+
+    /// The snapshot a (re)connecting UI applies before it is told the core is up.
+    JSONValue coreState()
+    {
+        JSONValue ix = ["active": JSONValue(indexActive)];
+        if (indexActive && lastProgress.type == JSONType.object)
+            foreach (k; ["imported", "skipped", "total"])
+                if (k in lastProgress)
+                    ix[k] = lastProgress[k];
+        return JSONValue([
+            "endpoint": JSONValue(computer.endpoint),
+            "computer": JSONValue(["connected": JSONValue(computer.connected), "endpoint": JSONValue(computer.endpoint)]),
+            "sync": syncStatus(),
+            "indexing": ix,
+            "pairingCode": pendingPairingCode.length ? JSONValue(pendingPairingCode) : JSONValue(null),
+            "permissionNeeded": JSONValue(permissionNeeded),
+        ]);
+    }
+
+    // The photo permission's state, as an event: a snapshot can go out before the first scan
+    // knows, so each flip is sent on its own (the UI asks when it turns true).
+    private void setPermissionNeeded(bool needed)
+    {
+        if (needed == permissionNeeded)
+            return;
+        permissionNeeded = needed;
+        emit("core.permission", JSONValue(["needed": JSONValue(needed)]));
     }
 
     private static JSONValue error(string code, string message)
@@ -302,6 +359,7 @@ final class LocalBridge : Bridge
             case "photo.upload":    upload(num(params, "id"), cb); return;
             case "photo.download":  download(num(params, "id"), cb); return;
             case "photo.share":     share(num(params, "id"), cb); return;
+            case "core.state":      cb(coreState(), JSONValue(null)); return;
             case "album.list":      albums(cb); return;
             case "photo.faces":     faces(num(params, "id"), cb); return;
             case "people.list":     people(cb); return;

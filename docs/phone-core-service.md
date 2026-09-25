@@ -131,8 +131,10 @@ The events `Library` consumes today, exactly (backend.d `onEvent`):
 manufacturing events: a fake `index.done` would trigger reloads): computer link, pairing,
 sync status, and indexing — including RESETTING a stale "indexing" spinner when the core
 comes back idle. Only then does it report `onConnected(true)`; `Library.onLink(true)`
-re-reads collections and the first page as today, and additionally re-opens the photo in
-the viewer (by id) if one is open.
+re-reads collections and the first page as today. The open viewer keeps what it shows (its
+file and data stay valid); re-opening it by id — so swiping works again — waits for the
+paging session (stage 3), because `photo.neighbours` answers from the pages served in the
+current session, which the reconnect's `refresh()` starts over.
 
 After the snapshot the core keeps the UI current with the live events in the table above
 (snapshot-backed: each is also a field of `core.state`), plus one dedicated event for the
@@ -222,9 +224,10 @@ mode, so removing them from `LocalBridge` does not break it.
    PhoneIndex/P2pBridge/LocalBridge; sharing and permission prompting move out of
    `LocalBridge` into a UI adapter. Still one process.
 2. **Authoritative state and recovery.** The `core.state` schema, `Library.applyCoreState`,
-   indexing reset, viewer re-open; reconnect tested in-process by dropping the bridge.
-3. **Paging ownership.** Session and paging generations, overlap handling; tested with
-   deliberately delayed/reordered computer replies.
+   indexing reset, `core.permission`; reconnect tested in-process by dropping the bridge
+   (`PW_TEST_RELINK=<s>[:<gap>]`, events lost while down). Done.
+3. **Paging ownership.** Session and paging generations, overlap handling, viewer re-open
+   with its neighbours; tested with deliberately delayed/reordered computer replies.
 4. **Process-safe persistence and files.** Single-writer lock, stale-socket rule, atomic
    thumbnail/preview publication, preview files, owned save worker + synchronous flush.
 5. **Framing and transport.** `CoreServer`/`CoreClient` over QLocalServer/QLocalSocket with

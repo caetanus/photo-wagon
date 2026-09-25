@@ -244,6 +244,9 @@ struct PhonePhoto
     bool sent;      // already delivered to the computer
     bool declined;  // the computer turned this hash away (deleted there): never offer it again
     string hash;    // sha256 of the file, once computed (for the computer's dedupe)
+    string pieces;  // its piece hashes (base64, core/sync/digest.d): the push's manifest, never re-read
+    string fp;      // its fingerprint (size + 8 sampled 4 KiB blocks): "still the same file?"
+    long digestSize;  // the size the digest (hash, pieces) was computed for
     int tries;      // failed sends; after `maxTries` the photo waits for a manual retry
     bool isVideo;   // a camera video: no frame thumbnail here (the computer makes one on sync)
     long durationMs;
@@ -811,7 +814,13 @@ final class PhoneIndex
                 d.c = c;
                 d.gen = gen;
                 try
+                {
                     d.p = decode(c, thumbDir, decodeReader, decodeImg);
+                    // eight 4 KiB reads: what merge() compares to keep a known file's digest
+                    import photowagon.core.sync.digest : fingerprintOf;
+
+                    d.p.fp = fingerprintOf(c.path);
+                }
                 catch (Exception e)
                     d.error = e.msg;
                 processed++;
@@ -869,6 +878,25 @@ final class PhoneIndex
             p.id = nextId++;
             p.path = d.c.path;
         }
+        // A known file seen again with another size or mtime: same content if its fingerprint
+        // (size + 8 sampled blocks) still matches — the stored sha256 and piece hashes stay,
+        // and the full check happens when it is next shown or sent. Otherwise it is new
+        // content: the digest goes (computed again before the next offer) and it is unsent.
+        if (auto known = d.c.path in byPath)
+            if (known.size != d.c.size || known.mtimeMs != d.c.mtimeMs)
+            {
+                immutable same = known.fp.length && d.p.fp.length && known.fp == d.p.fp && known.size == d.c.size;
+                if (!same)
+                {
+                    p.hash = null;
+                    p.pieces = null;
+                    p.sent = false;
+                    p.declined = false;
+                    p.tries = 0;
+                }
+            }
+        if (d.p.fp.length)
+            p.fp = d.p.fp;
         p.size = d.c.size;
         p.mtimeMs = d.c.mtimeMs;
         p.takenTs = d.p.takenTs;
@@ -1240,7 +1268,69 @@ final class PhoneIndex
         foreach (ref p; photos)
             if (p.id == id)
             {
+                if (p.hash != hash)
+                {
+                    // other content: the kept manifest and fingerprint described the old one,
+                    // and whatever was sent or refused was the old one too
+                    p.pieces = null;
+                    p.fp = null;
+                    p.digestSize = 0;
+                    if (p.hash.length)
+                    {
+                        p.sent = false;
+                        p.declined = false;
+                        p.tries = 0;
+                    }
+                }
                 p.hash = hash;
+                byPath[p.path] = p;
+            }
+        dirty = true;
+    }
+
+    /// The file's content digest, computed once (core/sync/digest.d) and kept.
+    void setDigest(long id, string sha, string pieces, string fp, long size)
+    {
+        if (!sha.length)
+            return;
+        foreach (ref p; photos)
+            if (p.id == id)
+            {
+                if (p.hash.length && p.hash != sha)
+                {
+                    // the content changed under a digest we held: new photo, as far as the
+                    // computer is concerned
+                    p.sent = false;
+                    p.declined = false;
+                    p.tries = 0;
+                }
+                p.hash = sha;
+                p.pieces = pieces;
+                p.digestSize = size;
+                if (fp.length)
+                    p.fp = fp;
+                byPath[p.path] = p;
+            }
+        dirty = true;
+    }
+
+    /// Forget a digest that turned out stale (a piece did not match while sending): it is
+    /// computed again before the photo is offered next.
+    void clearDigest(long id, string expected = null)
+    {
+        foreach (ref p; photos)
+            if (p.id == id)
+            {
+                if (expected.length && p.hash != expected)
+                    continue;   // a late report about content this photo no longer has
+                p.hash = null;
+                p.pieces = null;
+                p.fp = null;
+                p.digestSize = 0;
+                // new content as far as the computer knows: offered again from scratch
+                p.sent = false;
+                p.declined = false;
+                p.tries = 0;
                 byPath[p.path] = p;
             }
         dirty = true;
@@ -1251,6 +1341,10 @@ final class PhoneIndex
         foreach (ref p; photos)
             if (p.id == id)
             {
+                // the content that went must still be this photo's: a recheck or a rescan may
+                // have replaced or dropped its digest while it was being sent — then it is not
+                if (p.hash != hash)
+                    continue;
                 p.sent = true;
                 p.tries = 0;
                 if (hash.length) p.hash = hash;
@@ -1266,8 +1360,11 @@ final class PhoneIndex
         foreach (ref p; photos)
             if (p.id == id)
             {
+                // a failure of OTHER content (a recheck replaced the digest meanwhile) is not
+                // this photo's: neither a try nor its hash
+                if (p.hash != hash)
+                    continue;
                 p.tries++;
-                if (hash.length) p.hash = hash;
                 byPath[p.path] = p;
             }
         dirty = true;
@@ -1312,6 +1409,9 @@ final class PhoneIndex
                 p.sent = "sent" in e ? e["sent"].boolean : false;
                 p.declined = "declined" in e ? e["declined"].boolean : false;
                 p.hash = "hash" in e && e["hash"].type == JSONType.string ? e["hash"].str : null;
+                p.pieces = "pieces" in e && e["pieces"].type == JSONType.string ? e["pieces"].str : null;
+                p.fp = "fp" in e && e["fp"].type == JSONType.string ? e["fp"].str : null;
+                p.digestSize = "dsize" in e && e["dsize"].type == JSONType.integer ? e["dsize"].integer : 0;
                 p.tries = "tries" in e ? cast(int) e["tries"].integer : 0;
                 p.isVideo = "video" in e ? e["video"].boolean : false;
                 p.durationMs = "duration" in e ? e["duration"].integer : 0;
@@ -1507,6 +1607,9 @@ private final class IndexSaver
                 "h": JSONValue(p.height), "o": JSONValue(p.orientation),
                 "thumb": p.thumb is null ? JSONValue(null) : JSONValue(p.thumb), "sent": JSONValue(p.sent),
                 "declined": JSONValue(p.declined), "hash": p.hash.length ? JSONValue(p.hash) : JSONValue(null),
+                "pieces": p.pieces.length ? JSONValue(p.pieces) : JSONValue(null),
+                "fp": p.fp.length ? JSONValue(p.fp) : JSONValue(null),
+                "dsize": JSONValue(p.digestSize),
                 "tries": JSONValue(p.tries), "video": JSONValue(p.isVideo), "duration": JSONValue(p.durationMs),
                 "kind": p.kind.length ? JSONValue(p.kind) : JSONValue(null),
                 "faces": facesToJson(p.faces), "facesScanned": JSONValue(p.facesScanned),

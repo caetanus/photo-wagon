@@ -91,7 +91,8 @@ final class P2pBridge : Bridge
     private MdnsRendezvous lanRv;        // vibe thread: the LAN rendezvous (browse) for the current token
     private string lanRvToken;           // the token lanRv was started for
     private string[] dhtSeeds;          // vibe thread only: DHT peers the computer was connected to (Ed25519, ip4) — our way in
-    private static struct PushJob { long ticket; string path; string sha; long offset; }   // sha empty = whole-blob v1
+    // sha empty = whole-blob v1; pieces = the photo's kept manifest (base64, digest.d), "" = compute it
+    private static struct PushJob { long ticket; string path; string sha; long offset; string pieces; long keptSize; }
     private PushJob[] pushJobs;          // under lock: files queued to push on the blob pipe
     private ResultCb[long] pushCbs;      // Qt thread only: ticket -> callback for a push
     private static struct PullJob { long ticket; long id; string dest; string sha; }   // sha set = piece protocol
@@ -473,6 +474,11 @@ final class P2pBridge : Bridge
         }
         immutable sha = meta.type == JSONType.object && "sha256" in meta && meta["sha256"].type == JSONType.string
             ? meta["sha256"].str : "";
+        // the manifest the index kept for this photo (pushPieces checks every piece against it)
+        immutable kept = meta.type == JSONType.object && "pieces" in meta && meta["pieces"].type == JSONType.string
+            ? meta["pieces"].str : "";
+        immutable keptSize = meta.type == JSONType.object && "size" in meta && meta["size"].type == JSONType.integer
+            ? meta["size"].integer : -1L;
         if (sha.length != 64)
         {
             pushCbs[ticket] = (JSONValue _, JSONValue perr) {
@@ -513,7 +519,13 @@ final class P2pBridge : Bridge
                 pushCbs[ticket] = (JSONValue _, JSONValue perr) {
                     if (perr.type != JSONType.null_)
                     {
-                        if (n < maxAttempts && p2pUp)
+                        import std.algorithm : canFind;
+
+                        // a changed file is not a dropped link: sending again cannot help — the
+                        // caller hashes it again and offers what the file is now
+                        immutable changed = perr.type == JSONType.object && "message" in perr
+                            && perr["message"].type == JSONType.string && perr["message"].str.canFind("file_changed");
+                        if (n < maxAttempts && p2pUp && !changed)
                         {
                             plog("push: ", path.baseName, " interrupted (", perr["message"].str, ") — retrying");
                             attempt(n + 1);   // re-probe: the computer says where to resume
@@ -527,7 +539,7 @@ final class P2pBridge : Bridge
                     request("library.import", p, cb);
                 };
                 synchronized (lock)
-                    pushJobs ~= PushJob(ticket, path, sha, piecesOk ? -1 : have);   // -1 = piece protocol
+                    pushJobs ~= PushJob(ticket, path, sha, piecesOk ? -1 : have, kept, keptSize);   // -1 = piece protocol
             });
         }
         attempt(1);
@@ -1316,7 +1328,8 @@ final class P2pBridge : Bridge
             void spawnPush(PushJob job)
             {
                 immutable jt = job.ticket, jo = job.offset;
-                immutable jp = job.path, js = job.sha;
+                immutable jp = job.path, js = job.sha, jk = job.pieces;
+                immutable jz = job.keptSize;
                 runTask(() nothrow {
                     string err;
                     try
@@ -1325,7 +1338,7 @@ final class P2pBridge : Bridge
                         ps.write([muxTagPiece]);
                         scope (exit) ps.close();
                         if (js.length)
-                            pushPieces(ps, jp, js);
+                            pushPieces(ps, jp, js, jk, jz);
                         else
                             throw new Exception("hyperswarm flavor needs a sha256 (pieces)");
                     }
@@ -1924,6 +1937,8 @@ final class P2pBridge : Bridge
             immutable jp = job.path;
             immutable js = job.sha;
             immutable jo = job.offset;
+            immutable jk = job.pieces;
+            immutable jz = job.keptSize;
             runTask(() nothrow {
                 string err;
                 try
@@ -1932,7 +1947,7 @@ final class P2pBridge : Bridge
                     {
                         auto ps = conn.newStream(pieceProtocol);
                         scope (exit) ps.close();
-                        pushPieces(ps, jp, js);
+                        pushPieces(ps, jp, js, jk, jz);
                     }
                     else if (js.length)
                         pushResumable(conn, jp, js, jo);
@@ -2198,19 +2213,42 @@ private enum pushProtocolV2 = "/photowagon/push/2.0.0";
 /// Upload over the piece protocol: tell the computer the manifest, ask which pieces it has,
 /// send the missing ones (each verified on arrival), one stream per request. A drop costs
 /// at most the piece in flight; the next attempt asks again and sends only what is missing.
-private void pushPieces(Stream st, string path, string sha)
+private void pushPieces(Stream st, string path, string sha, string keptPieces = null, long keptSize = -1)
 {
     import std.conv : to;
+    import std.digest.sha : sha256Of;
+    import std.file : getSize;
     import vibe.core.file : openFile, FileMode;
+    import photowagon.core.sync.digest : decodePieces;
 
-    auto man = manifestOf(path);
+    // The manifest the photo was hashed with, kept in the index: nothing re-reads the file
+    // to announce it. Each piece read below is checked against it — only that piece, never
+    // the whole file — and one that differs means the file changed since: the push stops
+    // ("file_changed") and the phone hashes it again before offering it anew. Without a
+    // kept manifest (an older index entry) it is computed here, as before.
+    Manifest man;
+    auto kept = decodePieces(keptPieces);
+    immutable size = cast(long) getSize(path);
+    if (kept.length)
+    {
+        // the exact size the manifest was made for (a file that grew inside its last piece
+        // has the same piece count), else at least the piece count
+        if ((keptSize >= 0 && size != keptSize) || kept.length != Manifest.countFor(size))
+            throw new Exception("file_changed: " ~ path.baseName ~ " is " ~ size.to!string
+                ~ " bytes, not what its manifest was made for");
+        man.size = size;
+        man.pieces = kept;
+    }
+    else
+        man = manifestOf(path);
     if (!tellManifest(st, sha, man))
         throw new Exception("computer refused the manifest");
     auto theirs = askHave(st, sha, man.count);
     if (theirs.count == 0)
         theirs = Bitfield(man.count);
     immutable missing = man.count - theirs.haveCount;
-    plog("push: ", path.baseName, " ", man.count, " pieces, computer has ", theirs.haveCount, ", sending ", missing);
+    plog("push: ", path.baseName, " ", man.count, " pieces (manifest ", kept.length ? "kept" : "computed now",
+        "), computer has ", theirs.haveCount, ", sending ", missing);
     auto fh = openFile(path, FileMode.read);
     scope (exit)
         fh.close();
@@ -2222,9 +2260,15 @@ private void pushPieces(Stream st, string path, string sha)
         immutable n = man.lengthOf(i);
         fh.seek(cast(long) i * pieceSize);
         fh.read(buf[0 .. n]);
+        if (kept.length && sha256Of(buf[0 .. n]) != man.pieces[i])
+            throw new Exception("file_changed: piece " ~ i.to!string ~ " of " ~ path.baseName
+                ~ " no longer matches its manifest");
         if (!givePiece(st, sha, i, buf[0 .. n]))
             throw new Exception("computer refused piece " ~ i.to!string);
     }
+    // grown (or shrunk) while it went: the pieces read were the old content's, not the file's
+    if (kept.length && cast(long) getSize(path) != man.size)
+        throw new Exception("file_changed: " ~ path.baseName ~ " changed size while it was sent");
 }
 
 /// Download over the piece protocol: the computer's manifest, our piece store's bitfield,

@@ -211,7 +211,7 @@ link() {
         ../source/photowagon/core/indexer/scan.d ../source/photowagon/core/library/calendar.d ../source/photowagon/core/jobs/memguard.d \
         ../source/photowagon/core/library/kind.d ../source/photowagon/core/thumbs/imagestats.d \
         ../source/photowagon/core/metadata/exifparse.d ../source/photowagon/core/metadata/datefromname.d \
-        ../source/photowagon/core/pairingcode.d ../source/photowagon/core/sync/pieces.d \
+        ../source/photowagon/core/pairingcode.d ../source/photowagon/core/sync/pieces.d ../source/photowagon/core/sync/digest.d \
         "$DSIDE/runtime/qrc/qrc.d" \
         -Isource -I../source -I"$GEN" -I"$DSIDE/runtime/qrc" -J=../qml \
         -L--gc-sections -L--as-needed \

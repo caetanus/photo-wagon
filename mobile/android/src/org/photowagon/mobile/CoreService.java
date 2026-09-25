@@ -332,8 +332,11 @@ public class CoreService extends QtService
      */
     private void reconcileForeground()
     {
-        // auto-sync on, or a one-time "Send all now" run still going
-        boolean want = autosync(this) || (lastStatus != null && lastStatus.optBoolean("manual", false));
+        // Foreground (and so a notification) only while photos are actually being sent —
+        // a batch hashed, offered or pushed. Idle, with or without auto-sync, there is nothing
+        // to tell and no notification (the user's rule). A status file from an older core
+        // (no "busy") falls back to "active".
+        boolean want = lastStatus != null && lastStatus.optBoolean("busy", lastStatus.optBoolean("active", false));
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (want && !foreground)
         {
@@ -354,7 +357,9 @@ public class CoreService extends QtService
         reconcileForeground();
         if (foreground)
             nm.notify(NOTIFICATION_ID, build(this, st));
-        else if (st.optInt("failed", 0) > 0 || st.optInt("sent", 0) > 0)
+        // after a run: only its failures are worth a notification (the run's own counters are
+        // reset when it ends; runFailed keeps them)
+        else if (st.optInt("runFailed", st.optInt("failed", 0)) > 0)
         {
             // auto-sync is off: a dismissible summary under its own id (the foreground one is
             // being cancelled asynchronously and would take a replacement with it), never a
@@ -365,7 +370,7 @@ public class CoreService extends QtService
                 sum.put("enabled", false);
                 sum.put("active", false);
                 sum.put("sent", st.optInt("sent", 0));
-                sum.put("failed", st.optInt("failed", 0));
+                sum.put("failed", st.optInt("runFailed", st.optInt("failed", 0)));
             }
             catch (Exception e) { }
             nm.notify(SUMMARY_ID, build(this, sum));

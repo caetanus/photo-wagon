@@ -14,7 +14,7 @@ module photowagon.mobile.localbridge;
 import photowagon.mobile.plog : plog, timed, useCrashStack;
 import photowagon.core.library.calendar : fileUrl;
 
-import std.algorithm : min;
+import std.algorithm : min, canFind;
 import std.base64 : Base64;
 import std.conv : to;
 import std.file : read, exists, readText, write, mkdirRecurse;
@@ -66,6 +66,8 @@ final class LocalBridge : Bridge
     private string syncStatusFile;     // files/settings/sync-status, read by the Java notifier
     private long[] sendQueue;         // the WANTED photos (negotiated), waiting for their bytes
     private long sent, sendTotal, sendFailed, skipped, declined;
+    private long lastRunFailed;   // failures of the last finished run, for the service's summary
+    private int manualUploads;    // single-photo Sends in flight (busy, for the notification)
     private bool sending;
     private bool negotiating;         // a library.offer round is in flight
     private QTimer prepPoll;           // watches the preparation thread
@@ -84,6 +86,9 @@ final class LocalBridge : Bridge
     private static struct HashBatch
     {
         shared(string)[] hashes;   // parallel to pendingHashIds; "" on a read failure
+        shared(long)[] sizes;      // the sizes they were computed for
+        shared(string)[] pieces;   // their piece hashes (base64), same order
+        shared(string)[] fps;      // their fingerprints, same order
         bool done;
     }
 
@@ -93,7 +98,8 @@ final class LocalBridge : Bridge
         string name;
         string takenAt;
         long mtimeMs;
-        string hash;
+        string hash;         // sha256 of the bytes actually read (and sent)
+        string knownHash;    // the hash the photo had when it was offered ("" = none yet)
         string paramsJson;   // the whole library.import params, serialised on the worker
         string facesJson;    // pre-serialised "faces" array (on the Qt thread), spliced in below
         string error;
@@ -577,7 +583,8 @@ final class LocalBridge : Bridge
             {
                 setAutoSync(p.type == JSONType.object && "on" in p && p["on"].type == JSONType.true_);
                 if (autoSync) startSync();
-                else { sendQueue.length = 0; publishSync(); }
+                else { sendQueue.length = 0;
+            offeredHash = null; publishSync(); }
                 return syncStatus();
             }
         case "library.syncStatus":
@@ -1188,7 +1195,7 @@ final class LocalBridge : Bridge
             return;
         closing = true;   // first: a cancelled caller that asks again is refused, not admitted
         supersedePaging("shutting_down", "the phone core is shutting down");
-        foreach (t; [rescan, prepPoll, hashPoll, syncDeadline, pageDeadline, facesRetryTimer, meteredPoll])
+        foreach (t; [rescan, prepPoll, hashPoll, syncDeadline, pageDeadline, facesRetryTimer, meteredPoll, recheckPoll])
             if (t !is null)
                 t.stop();
         onPageDeadline = null;
@@ -1369,7 +1376,10 @@ final class LocalBridge : Bridge
             if (ph is null)
                 cb(JSONValue(null), error("not_found", "no such photo"));
             else
+            {
                 cb(ph.toJson(), JSONValue(null));
+                recheckLater(id);   // shown: its kept digest is checked in full now
+            }
             return;
         }
         if (!computer.connected)
@@ -1674,6 +1684,114 @@ final class LocalBridge : Bridge
         armLater();
     }
 
+    // ---- "checked again the next time it is shown" -----------------------------------
+    // A rescan keeps a file's digest on its fingerprint alone (size + 8 samples). The full
+    // check happens when the photo is shown: the viewer opening it re-digests it off-thread,
+    // one at a time, once per session; a different sha256 replaces the kept digest (and makes
+    // the photo unsent — it is new content). A push checks every piece it sends as well.
+    private static struct RecheckBox
+    {
+        long id;
+        string sha, pieces, fp;
+        long size;
+        bool done;
+    }
+    private long[] recheckQueue;
+    private bool[long] rechecked;
+    private shared(RecheckBox)* rechecking;
+    private QTimer recheckPoll;
+
+    private void recheckLater(long id)
+    {
+        auto ph = index.get(id);
+        // No digest yet: the next offer computes it anyway. A video is not checked here: the
+        // player does not read the whole file to show it, so the check would cost a full read
+        // (its pieces are checked as they are sent). A photo was just read whole to be shown
+        // — the check reads it back from the page cache, no storage I/O, only the sha256.
+        if (ph is null || !ph.hash.length || ph.isVideo || (id in rechecked) !is null)
+            return;
+        rechecked[id] = true;
+        recheckQueue ~= id;
+        pumpRecheck();
+    }
+
+    private void pumpRecheck()
+    {
+        if (rechecking !is null || closing)
+            return;
+        while (recheckQueue.length)
+        {
+            immutable id = recheckQueue[0];
+            recheckQueue = recheckQueue[1 .. $];
+            auto ph = index.get(id);
+            if (ph is null)
+                continue;
+            auto box = new shared(RecheckBox);
+            box.id = id;
+            rechecking = box;
+            immutable path = ph.path;
+            auto t = new Thread({ useCrashStack(); digestInto(box, path); });
+            t.name = "recheck";
+            t.isDaemon = true;
+            t.start();
+            if (recheckPoll is null)
+            {
+                recheckPoll = new QTimer(cast(cppq.QObject) null);
+                recheckPoll.setInterval(200);
+                recheckPoll.connectTimeout(&onRechecked);
+            }
+            recheckPoll.start();
+            return;
+        }
+    }
+
+    private static void digestInto(shared(RecheckBox)* b, string path)
+    {
+        version (Posix)
+        {
+            import core.sys.posix.sys.resource : setpriority, PRIO_PROCESS;
+
+            setpriority(PRIO_PROCESS, 0, 12);   // behind the UI, like the sync's hashing
+        }
+        try
+        {
+            import photowagon.core.sync.digest : digestFile, encodePieces;
+
+            auto d = digestFile(path);
+            b.sha = d.sha;
+            b.pieces = encodePieces(d.pieces);
+            b.fp = d.fingerprint;
+            b.size = d.size;
+        }
+        catch (Exception)
+        {
+        }
+        b.done = true;
+    }
+
+    private void onRechecked()
+    {
+        auto b = rechecking;
+        if (b is null || !b.done)
+            return;
+        recheckPoll.stop();
+        rechecking = null;
+        if (b.sha.length)
+        {
+            bool changed;
+            if (auto ph = index.get(b.id))
+                changed = ph.hash.length && ph.hash != b.sha;
+            index.setDigest(b.id, cast(string) b.sha, cast(string) b.pieces, cast(string) b.fp, b.size);
+            if (changed)
+            {
+                plog("index: photo ", b.id, " changed since it was hashed — its digest is replaced");
+                index.saveNow();   // kept even if the process dies next
+                startSync();       // new content: offered now if auto-sync is on
+            }
+        }
+        pumpRecheck();
+    }
+
     private static string fileSha256(string path)
     {
         import std.digest : toHexString, LetterCase;
@@ -1764,11 +1882,21 @@ final class LocalBridge : Bridge
         {
             // the raw-bytes pipe, streamed from the file like the sync's own pushes: a video
             // read whole and base64'd would be gigabytes in memory
-            // the file as it is NOW (streamed): an index hash can predate an in-place edit,
-            // and the computer would answer "existed" for the old bytes
-            string hash;
+            // the file as it is NOW (one streamed pass): an index hash can predate an in-place
+            // edit, and the computer would answer "existed" for the old bytes. The digest is
+            // kept, so nothing reads this file again to offer or push it.
+            string hash, pieces;
+            long dgSize;
             try
-                hash = fileSha256(ph.path);
+            {
+                import photowagon.core.sync.digest : digestFile, encodePieces;
+
+                auto dg = digestFile(ph.path);
+                hash = dg.sha;
+                pieces = encodePieces(dg.pieces);
+                dgSize = dg.size;
+                index.setDigest(id, hash, pieces, dg.fingerprint, dg.size);
+            }
             catch (Exception e)
             {
                 cb(JSONValue(null), error("io", e.msg));
@@ -1779,11 +1907,16 @@ final class LocalBridge : Bridge
                 "takenAt": JSONValue(isoTime(ph.takenTs)),
                 "mtimeMs": JSONValue(ph.mtimeMs),
                 "sha256": JSONValue(hash),
+                "pieces": JSONValue(pieces),
+                "size": JSONValue(dgSize),
             ];
             if (withFacesPush)
                 meta["faces"] = facesToJson(ph.faces);
             immutable ticket = nextTicket++;
+            manualUploads++;
+            publishSync();   // busy: the service shows the send while it runs
             computer.uploadFile(ticket, ph.path, meta, (r, e) {
+                manualUploads--;
                 if (e.type == JSONType.null_)
                 {
                     index.markSent(id, hash);
@@ -1791,8 +1924,11 @@ final class LocalBridge : Bridge
                         index.markFacesSent(id);
                     pumpFaces();
                 }
+                else if (e.toString().canFind("file_changed") || e.toString().canFind("sha256 mismatch"))
+                    index.clearDigest(id, hash);   // changed while it went: hashed again when next offered
                 else
-                    index.markFailed(id);
+                    index.markFailed(id, hash);
+                publishSync();
                 cb(r, e);
             });
             return;
@@ -1818,6 +1954,9 @@ final class LocalBridge : Bridge
         import std.digest : toHexString, LetterCase;
         import std.digest.sha : sha256Of;
         immutable sentHash = toHexString!(LetterCase.lower)(sha256Of(bytes)).idup;
+        // these bytes ARE the photo now: its hash is what was just read (markSent only marks
+        // the content the photo still has)
+        index.setHash(id, sentHash);
         computer.request("library.import", params, (r, e) {
             if (e.type == JSONType.null_)
             {
@@ -1827,7 +1966,7 @@ final class LocalBridge : Bridge
                 pumpFaces();   // faces that finished meanwhile, or that the dedup left behind
             }
             else
-                index.markFailed(id);
+                index.markFailed(id, sentHash);
             cb(r, e);
         });
     }
@@ -1947,6 +2086,8 @@ final class LocalBridge : Bridge
         if (sendTotal < 0)
             sendTotal = 0;
         sendQueue.length = 0;
+            offeredHash = null;
+        offeredHash = null;
         if (!sending)
         {
             sent = sendTotal = sendFailed = skipped = declined = 0;
@@ -1977,6 +2118,11 @@ final class LocalBridge : Bridge
             "enabled": JSONValue(autoSync),
             "connected": JSONValue(computer.connected),
             "active": JSONValue(sending || sendQueue.length > 0),
+            // sending work under way (hashing a batch, asking the computer, or pushing): the
+            // only time the background service shows a notification
+            "busy": JSONValue(sending || negotiating || sendQueue.length > 0 || manualUploads > 0),
+            // failures of the last finished run (the run's counters are reset when it ends)
+            "runFailed": JSONValue(lastRunFailed),
             "pending": JSONValue(pending),
             "total": JSONValue(sendTotal),
             "done": JSONValue(sent + sendFailed),
@@ -2032,6 +2178,7 @@ final class LocalBridge : Bridge
         if (sendTotal == 0 && sendQueue.length == 0)
         {
             sent = sendFailed = skipped = declined = 0;
+            lastRunFailed = 0;
             lastSyncError = null;
         }
         if (sendQueue.length)
@@ -2062,13 +2209,16 @@ final class LocalBridge : Bridge
         if (ids.length > offerBatchN)
             ids = ids[0 .. offerBatchN];
         negotiating = true;
+        publishSync();   // "busy" out now: the service goes foreground while the batch is hashed
         pendingOfferIds = ids.dup;
         long[] needHash;
         string[] paths;
         foreach (id; ids)
         {
             auto p = index.get(id);
-            if (p !is null && !p.hash.length)
+            // no digest yet, or an older index entry with a hash but no piece hashes: one
+            // pass fills in all of it
+            if (p !is null && (!p.hash.length || !p.pieces.length))
             {
                 needHash ~= id;
                 paths ~= p.path;
@@ -2105,18 +2255,36 @@ final class LocalBridge : Bridge
 
             setpriority(PRIO_PROCESS, 0, 12);
         }
-        shared(string)[] out_;
+        import photowagon.core.sync.digest : digestFile, encodePieces;
+
+        shared(string)[] out_, pcs, fps;
+        shared(long)[] szs;
         foreach (p; paths)
         {
-            // streamed, never the whole file in memory: a phone video is hundreds of MB, and
-            // reading it at once was a single ~700 MB block that sent the core past its
-            // memory limit (killed, restarted, the same batch again — a crash loop)
+            // One streamed pass per file (never the whole file in memory: a phone video is
+            // hundreds of MB, and reading it at once sent the core past its memory limit): the
+            // sha256, the piece hashes and the fingerprint together — computed once, kept in
+            // the index, never read again to be offered or pushed.
             try
-                out_ ~= cast(shared) fileSha256(p);
+            {
+                auto d = digestFile(p);
+                out_ ~= cast(shared) d.sha;
+                pcs ~= cast(shared) encodePieces(d.pieces);
+                fps ~= cast(shared) d.fingerprint;
+                szs ~= d.size;
+            }
             catch (Exception)
+            {
                 out_ ~= cast(shared) "";
+                pcs ~= cast(shared) "";
+                fps ~= cast(shared) "";
+                szs ~= 0L;
+            }
         }
         hb.hashes = out_;
+        hb.pieces = pcs;
+        hb.fps = fps;
+        hb.sizes = szs;
         hb.done = true;
     }
 
@@ -2128,10 +2296,14 @@ final class LocalBridge : Bridge
         hashPoll.stop();
         hashing = null;
         auto hashes = cast(string[]) hb.hashes;
+        auto pcs = cast(string[]) hb.pieces;
+        auto fps = cast(string[]) hb.fps;
+        auto szs = cast(long[]) hb.sizes;
         foreach (i, id; pendingHashIds)
             if (i < hashes.length && hashes[i].length)
             {
-                index.setHash(id, hashes[i]);
+                index.setDigest(id, hashes[i], i < pcs.length ? pcs[i] : null, i < fps.length ? fps[i] : null,
+                    i < szs.length ? szs[i] : 0);
                 // a hashed photo of ours is a file we can SERVE by sha256 (the piece protocol)
                 import photowagon.mobile.p2pbridge : P2pBridge;
 
@@ -2147,6 +2319,7 @@ final class LocalBridge : Bridge
     {
         JSONValue[] hashes;
         long[string] idOf;
+        string[long] hashOf;   // what was offered for each photo (a recheck may change it later)
         foreach (id; pendingOfferIds)
         {
             auto p = index.get(id);
@@ -2154,6 +2327,7 @@ final class LocalBridge : Bridge
             {
                 hashes ~= JSONValue(p.hash);
                 idOf[p.hash] = id;
+                hashOf[id] = p.hash;
             }
         }
         auto batch = pendingOfferIds.dup;
@@ -2184,8 +2358,14 @@ final class LocalBridge : Bridge
                     if (h.type == JSONType.string)
                         if (auto pid = h.str in idOf)
                         {
-                            skipped++;
-                            index.markSent(*pid, h.str);
+                            // only if the photo still IS that content: a recheck may have
+                            // replaced its digest while the offer was out
+                            if (auto ph = index.get(*pid))
+                                if (ph.hash == h.str)
+                                {
+                                    skipped++;
+                                    index.markSent(*pid, h.str);
+                                }
                             handled[*pid] = true;
                         }
             if (r.type == JSONType.object && "refuse" in r && r["refuse"].type == JSONType.array)
@@ -2193,15 +2373,21 @@ final class LocalBridge : Bridge
                     if (h.type == JSONType.string)
                         if (auto pid = h.str in idOf)
                         {
-                            declined++;
-                            index.markDeclined(*pid);
+                            if (auto ph = index.get(*pid))
+                                if (ph.hash == h.str)
+                                {
+                                    declined++;
+                                    index.markDeclined(*pid);
+                                }
                             handled[*pid] = true;
                         }
             long wanted;
             foreach (id; batch)
-                if (id !in handled)
+                // only what was offered: a photo whose hashing failed was not, and waits for a
+                // later batch (sending it unoffered could bring back something the computer refuses)
+                if (id !in handled && (id in hashOf) !is null)
                 {
-                    queueWanted(id);
+                    queueWanted(id, hashOf[id]);
                     wanted++;
                 }
             plog("sync: computer has ", skipped, ", refuses ", declined, ", wants ", wanted, " of this batch");
@@ -2210,11 +2396,19 @@ final class LocalBridge : Bridge
         });
     }
 
-    private void queueWanted(long id)
+    /// `hash`: the content that was offered (the snapshot taken when the offer was built);
+    /// the photo is sent only if it still is that content. null = no offer (an older computer
+    /// that does not negotiate): the current hash.
+    private void queueWanted(long id, string hash = null)
     {
         sendQueue ~= id;
         sendTotal++;
+        if (hash.length)
+            offeredHash[id] = hash;
+        else if (auto ph = index.get(id))
+            offeredHash[id] = ph.hash;
     }
+    private string[long] offeredHash;
 
     private void pumpSend()
     {
@@ -2235,6 +2429,8 @@ final class LocalBridge : Bridge
                 emit("library.changed", JSONValue.emptyObject);
             }
             index.saveNow();   // the last marks must not wait for the timer: Android may kill us next
+            lastRunFailed = sendFailed;
+            offeredHash = null;
             sent = sendTotal = sendFailed = skipped = declined = 0;
             if (!held())   // a held run keeps its intent: Resume (or Wi-Fi) carries it on
                 manualRun = false;   // a "Send all now" run is over; new photos wait for auto-sync
@@ -2244,7 +2440,8 @@ final class LocalBridge : Bridge
         }
         if (!computer.connected)
         {
-            sendQueue.length = 0;   // resumes on the next connection (startSync)
+            sendQueue.length = 0;
+            offeredHash = null;   // resumes on the next connection (startSync)
             publishSync();
             return;
         }
@@ -2256,8 +2453,18 @@ final class LocalBridge : Bridge
         immutable id = sendQueue[0];
         sendQueue = sendQueue[1 .. $];
         auto ph = index.get(id);
-        if (ph is null)
+        string offered;
+        if (auto o = id in offeredHash)
         {
+            offered = *o;
+            offeredHash.remove(id);
+        }
+        // gone, or changed since the offer (a rescan or a recheck replaced its digest): not
+        // this run's — it is offered again, as what it is now, in the next batch
+        if (ph is null || (offered.length && ph.hash != offered))
+        {
+            if (ph !is null)
+                sendTotal--;
             pumpSend();
             return;
         }
@@ -2278,12 +2485,22 @@ final class LocalBridge : Bridge
                 "mtimeMs": JSONValue(ph.mtimeMs),
                 "sha256": JSONValue(phash),
             ];
+            // the manifest computed when the photo was hashed: the push checks each piece
+            // it reads against it (only the piece — the file is not hashed again)
+            if (ph.pieces.length)
+            {
+                meta["pieces"] = ph.pieces;
+                if (ph.digestSize > 0)
+                    meta["size"] = ph.digestSize;   // the size the manifest was made for: checked exactly
+            }
             if (ph.facesScanned && !ph.facesGaveUp && !ph.facesSent)
             {
                 meta["faces"] = facesToJson(ph.faces);
                 facesInPayload[id] = true;
             }
             plog("sync: photo ", id, " pushing ", ph.path.baseName);
+            inflightId = id;
+            inflightHash = phash;
             syncRequest(uploadTimeoutMs, (cb) { computer.uploadFile(ticket, ppath, meta, cb); }, (r2, e2) {
                 finish(id, e2.type == JSONType.null_, e2.type == JSONType.null_ ? null : e2.toString(), phash, imported(r2));
             });
@@ -2296,6 +2513,7 @@ final class LocalBridge : Bridge
         pr.takenAt = isoTime(ph.takenTs);
         pr.mtimeMs = ph.mtimeMs;
         immutable withFaces = ph.facesScanned && !ph.facesGaveUp && !ph.facesSent;
+        pr.knownHash = ph.hash;
         pr.facesJson = withFaces ? facesToJson(ph.faces).toString() : null;
         if (withFaces)
             facesInPayload[id] = true;
@@ -2316,7 +2534,9 @@ final class LocalBridge : Bridge
         try
         {
             auto bytes = cast(ubyte[]) read(path);
-            immutable h = knownHash.length ? knownHash : toHexString!(LetterCase.lower)(sha256Of(bytes)).idup;
+            // the hash of what was READ, always: bytes that differ from the offered hash are
+            // other content (onPrepared cancels them as a changed file)
+            immutable h = toHexString!(LetterCase.lower)(sha256Of(bytes)).idup;
             pr.hash = h;
             // the JSON is assembled here, once: base64 needs no escaping, so it is spliced
             // in as text and the Qt thread never touches these megabytes
@@ -2356,12 +2576,13 @@ final class LocalBridge : Bridge
         syncRequestSeq++;   // the pending callback is now a stranger
         plog("sync: no answer from the computer in time — reconnecting");
         if (sending)
-            finish(inflightId, false, "timeout", null, false);
+            finish(inflightId, false, "timeout", inflightHash, false);
         negotiating = false;   // a stalled offer must not wedge the queue; startSync retries the batch
         computer.reconnect();
     }
 
     private long inflightId;
+    private string inflightHash;   // the content being sent (completions and timeouts name it)
 
     /// Qt thread: the file is ready — ask the computer by hash, then send if needed.
     private void onPrepared()
@@ -2374,11 +2595,30 @@ final class LocalBridge : Bridge
         immutable id = pr.id;
         if (pr.error.length)
         {
-            finish(id, false, pr.error, null, false);
+            finish(id, false, pr.error, cast(string) pr.knownHash, false);
             return;
         }
         immutable hash = cast(string) pr.hash;
+        immutable known = cast(string) pr.knownHash;
+        if (known.length && hash != known)
+        {
+            finish(id, false, "file_changed: the bytes read are not the offered content", known, false);
+            return;
+        }
+        if (!known.length)
+        {
+            // first hash: what completions are checked against — unless someone recorded
+            // another meanwhile (a manual send read newer bytes): then this read is stale
+            auto cur = index.get(id);
+            if (cur is null || (cur.hash.length && cur.hash != hash))
+            {
+                finish(id, false, "file_changed: the photo changed while it was read", hash, false);
+                return;
+            }
+            index.setHash(id, hash);
+        }
         inflightId = id;
+        inflightHash = hash;
         // The batch negotiation (library.offer) already established the computer wants this
         // one, so no per-photo probe: send the bytes straight away.
         immutable paramsJson = cast(string) pr.paramsJson;
@@ -2531,6 +2771,15 @@ final class LocalBridge : Bridge
             if (facesWent && importedHere)
                 index.markFacesSent(id);   // the upload carried them: drop the embeddings here
             // deduplicated: the faces were not read — pumpFaces sends them on their own
+        }
+        else if (error.canFind("file_changed") || error.canFind("sha256 mismatch"))
+        {
+            // A piece read for the push no longer matched the photo's manifest (or the
+            // computer found the whole file different): the file changed since it was hashed.
+            // The send is cancelled, the digest goes, and the photo is hashed again and
+            // offered as what it is now — not counted as a failure.
+            index.clearDigest(id, hash);
+            plog("sync: photo ", id, " changed since it was hashed — hashing it again: ", error);
         }
         else
         {

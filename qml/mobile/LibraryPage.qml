@@ -26,6 +26,8 @@ Item {
     signal sendAll()
     signal autoSync(bool on)
     signal rescan()
+    signal openKind(string kind)
+    signal openFavorites()
 
     property int seg: 0   // 0 Albums · 1 Computer
     function showComputer() { seg = 1 }
@@ -69,6 +71,45 @@ Item {
                         }
                     }
                     TapHandler { onTapped: view.seg = modelData.i }
+                }
+            }
+        }
+
+        // collections that are always there (the phone's own screenshots and videos work
+        // offline too), above the albums
+        RowLayout {
+            visible: view.seg === 0
+            Layout.fillWidth: true
+            Layout.leftMargin: 12; Layout.rightMargin: 12; Layout.bottomMargin: 4
+            spacing: 8
+            Repeater {
+                model: [
+                    { t: "Favorites", i: "heart", k: "" },
+                    { t: "Screenshots", i: "screenshot", k: "screenshot" },
+                    { t: "Videos", i: "video", k: "video" }
+                ]
+                delegate: Rectangle {
+                    id: coll
+                    required property var modelData
+                    Layout.fillWidth: true
+                    implicitHeight: 76
+                    radius: 14
+                    color: collTap.pressed ? theme.panelAlt : theme.panel
+                    border.color: theme.border
+                    ColumnLayout {
+                        anchors.left: parent.left; anchors.bottom: parent.bottom
+                        anchors.margins: 12
+                        spacing: 6
+                        Image {
+                            source: view.icons.tint(view.icons[coll.modelData.i], theme.accent)
+                            sourceSize.width: 22; sourceSize.height: 22
+                        }
+                        Label { text: coll.modelData.t; color: theme.text; font.pixelSize: 13; font.weight: Font.DemiBold }
+                    }
+                    TapHandler {
+                        id: collTap
+                        onTapped: coll.modelData.k.length ? view.openKind(coll.modelData.k) : view.openFavorites()
+                    }
                 }
             }
         }

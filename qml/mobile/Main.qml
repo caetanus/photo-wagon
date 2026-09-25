@@ -173,12 +173,28 @@ ApplicationWindow {
         if (filterData.search) return "“" + filterData.search + "”"
         if (filterData.personId) return personName(filterData.personId)
         if (filterData.albumId) return albumName(filterData.albumId)
+        // a collection keeps its name, with the date narrowing it
+        const coll = collectionName()
+        if (coll.length) return filterYear === 0 ? coll : coll + " · " + dateTitle()
         if (filterYear === 0) return "Photos"
+        return dateTitle()
+    }
+    function collectionName() {
+        if (filterData.favorites) return "Favorites"
+        if (filterData.kind === "screenshot") return "Screenshots"
+        if (filterData.kind === "video") return "Videos"
+        return ""
+    }
+    function dateTitle() {
         if (filterDay) return new Date(filterYear, filterMonth - 1, filterDay).toLocaleDateString(Qt.locale(), "d MMMM yyyy")
         if (filterMonth) return new Date(filterYear, filterMonth - 1, 1).toLocaleDateString(Qt.locale(), "MMMM yyyy")
         return String(filterYear)
     }
     readonly property bool filtered: filterData.albumId || filterData.personId || !!filterData.search || filterYear !== 0
+                                     || filterData.favorites === true || !!filterData.kind
+    // the collections (Search's categories, Library's cards) open in Photos
+    function openKind(kind) { filterYear = 0; filterMonth = 0; filterDay = 0; library.filterKind(kind); tab = 0 }
+    function openFavorites() { filterYear = 0; filterMonth = 0; filterDay = 0; library.filterFavorites(); tab = 0 }
 
     // An icon button of the app bar: our SVG icons, tinted (Android has no glyph fonts).
     component BarButton: ToolButton {
@@ -348,7 +364,12 @@ ApplicationWindow {
                 emptyText: root.pageData.searching ? "Searching…"
                            : root.filterData.search
                            ? "Nothing matches “" + root.filterData.search + "”."
+                           : root.filterData.favorites === true && !library.computerConnected
+                             ? "Favorites live on your computer — connect it to see them."
+                           : root.filterData.kind === "video" ? "No videos here."
+                           : root.filterData.kind === "screenshot" ? "No screenshots here."
                            : root.filterData.albumId || root.filterData.personId || root.filterYear !== 0
+                             || root.filterData.favorites === true || !!root.filterData.kind
                              ? "No photos here."
                              : "No photos yet — allow access to your photos, or wait for the scan."
                 onLoadMore: library.loadPage(root.pageData.offset, root.pageSize, root.filterYear, root.filterMonth, root.filterDay)
@@ -439,6 +460,8 @@ ApplicationWindow {
             onSearch: (q) => { root.filterYear = 0; root.filterMonth = 0; root.filterDay = 0; library.filterSearch(q); root.tab = 0 }
             onOpenPerson: (id) => { library.filterPerson(id); root.tab = 0 }
             onBrowseDates: dates.open()
+            onOpenKind: (kind) => root.openKind(kind)
+            onOpenFavorites: root.openFavorites()
         }
 
         // 2 — Library (hub: Albums + Computer/sync)
@@ -459,6 +482,8 @@ ApplicationWindow {
             onSendAll: library.sendAll()
             onAutoSync: (on) => library.setAutoSync(on)
             onRescan: library.rescanPhotos()
+            onOpenKind: (kind) => root.openKind(kind)
+            onOpenFavorites: root.openFavorites()
         }
     }
 
@@ -607,7 +632,8 @@ ApplicationWindow {
             selectedMonth: root.filterMonth
             selectedDay: root.filterDay
             scopeName: root.filterData.albumId ? "“" + root.albumName(root.filterData.albumId) + "”"
-                     : root.filterData.personId ? root.personName(root.filterData.personId) + "'s photos" : ""
+                     : root.filterData.personId ? root.personName(root.filterData.personId) + "'s photos"
+                     : root.collectionName()
             searching: !!root.filterData.search
             onPicked: (y, m, d) => root.applyFilter(y, m, d)
         }

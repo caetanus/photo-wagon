@@ -401,7 +401,19 @@ final class LocalBridge : Bridge
         f.year = cast(int) num(p, "year");
         f.month = cast(int) num(p, "month");
         f.day = cast(int) num(p, "day");
+        f.kind = kindOf(p);
         return f;
+    }
+
+    /// The collection asked for: "video" or "screenshot". The UI's default "photo" (the
+    /// desktop timeline's "photographs only") is not one: the phone's timeline has always
+    /// shown its videos and screenshots, and Favorites must not lose starred ones.
+    private static string kindOf(JSONValue p)
+    {
+        if (p.type != JSONType.object || "kind" !in p || p["kind"].type != JSONType.string)
+            return "";
+        immutable k = p["kind"].str;
+        return k == "video" || k == "screenshot" ? k : "";
     }
 
     // ---- requests -------------------------------------------------------------------
@@ -695,6 +707,8 @@ final class LocalBridge : Bridge
             if (p.type == JSONType.object)
                 if (auto v = key in p)
                     pageParams[key] = *v;
+        if (kindOf(p).length)
+            pageParams["kind"] = kindOf(p);
         localFilter = filterOf(p);
         remoteOnly = num(p, "albumId") || num(p, "personId") || flag(p, "favorites");
         localOff = remoteOff = 0;
@@ -706,7 +720,10 @@ final class LocalBridge : Bridge
         dupes = 0;
         localKeys = null;
         localHashes = null;
-        foreach (ref ph; index.page(PhoneFilter.init, 0, long.max))
+        // a computer photo is left out for the phone's copy only when that copy is in this
+        // listing too (a collection or a date: the phone may classify or date the same
+        // picture differently)
+        foreach (ref ph; index.page(localFilter, 0, long.max))
         {
             localKeys[ph.path.baseName ~ "|" ~ ph.size.to!string] = true;
             if (ph.hash.length)

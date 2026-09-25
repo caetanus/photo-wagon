@@ -193,8 +193,8 @@ Filter filterOf(JSONValue p)
 			f.tagGroup = g;
 			f.tag = v;
 		}
-	if (f.kind.length && f.kind != "photo" && f.kind != "screenshot" && f.kind != "meme")
-		throw new ApiError("bad_params", "kind must be photo, screenshot or meme");
+	if (f.kind.length && f.kind != "photo" && f.kind != "screenshot" && f.kind != "meme" && f.kind != "video")
+		throw new ApiError("bad_params", "kind must be photo, screenshot, meme or video");
 	if (p.type == JSONType.object)
 		if (auto v = "favorites" in p)
 			f.favorites = v.type == JSONType.true_;

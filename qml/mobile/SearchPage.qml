@@ -12,10 +12,35 @@ Item {
     required property QtObject theme
     property var people: []
     property bool connected: false
+    Icons { id: icons }
 
     signal search(string q)
     signal openPerson(int id)
     signal browseDates()
+    signal openKind(string kind)      // "screenshot" | "video"
+    signal openFavorites()
+
+    // one suggestion of the Browse list: an icon, a name, where it leads
+    component BrowseRow: Rectangle {
+        id: br
+        required property string icon_
+        required property string label
+        property string note: ""
+        signal tapped()
+        Layout.fillWidth: true
+        implicitHeight: 52
+        color: brTap.pressed ? theme.panelAlt : "transparent"
+        radius: 10
+        RowLayout {
+            anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12
+            spacing: 14
+            Image { source: icons.tint(br.icon_, theme.muted); sourceSize.width: 20; sourceSize.height: 20 }
+            Label { text: br.label; Layout.fillWidth: true; color: theme.text; font.pixelSize: 15 }
+            Label { text: br.note; visible: text.length > 0; color: theme.muted; font.pixelSize: 12 }
+            Label { text: "›"; color: theme.muted; font.pixelSize: 18 }
+        }
+        TapHandler { id: brTap; onTapped: br.tapped() }
+    }
 
     Flickable {
         anchors.fill: parent
@@ -152,13 +177,21 @@ Item {
                 radius: 12
                 color: theme.panel
                 border.color: theme.border; border.width: 1
-                implicitHeight: 52
-                RowLayout {
-                    anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 12
-                    Label { text: "By date"; Layout.fillWidth: true; color: theme.text; font.pixelSize: 14 }
-                    Label { text: "›"; color: theme.muted; font.pixelSize: 18 }
+                implicitHeight: browseCol.implicitHeight + 8
+                ColumnLayout {
+                    id: browseCol
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                    anchors.margins: 4
+                    spacing: 0
+                    BrowseRow { icon_: icons.screenshot; label: "Screenshots"; onTapped: view.openKind("screenshot") }
+                    BrowseRow { icon_: icons.video; label: "Videos"; onTapped: view.openKind("video") }
+                    BrowseRow {
+                        icon_: icons.heart; label: "Favorites"
+                        note: view.connected ? "" : "on the computer"
+                        onTapped: view.openFavorites()
+                    }
+                    BrowseRow { icon_: icons.memories; label: "By date"; onTapped: view.browseDates() }
                 }
-                TapHandler { onTapped: view.browseDates() }
             }
         }
     }

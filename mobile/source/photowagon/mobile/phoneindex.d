@@ -282,6 +282,7 @@ struct PhonePhoto
 struct PhoneFilter
 {
     int year, month, day;
+    string kind;   // "" any · "video" · "screenshot" · "photo" (neither)
 }
 
 enum thumbEdge = 512;
@@ -1070,6 +1071,12 @@ final class PhoneIndex
     {
         // the grid hides stickers & banners (classified 'meme'); photos and screenshots stay
         if (p.kind == "meme")
+            return false;
+        if (f.kind == "video" && !p.isVideo)
+            return false;
+        if (f.kind == "screenshot" && p.kind != "screenshot")
+            return false;
+        if (f.kind == "photo" && (p.isVideo || p.kind == "screenshot"))
             return false;
         if (f.year == 0)
             return true;

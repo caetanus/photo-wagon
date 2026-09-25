@@ -39,7 +39,7 @@ version (Android) private extern (C) int __system_property_get(const(char)* name
 
 import photowagon.core.ipc.link : InProcessLink;
 import photowagon.core.sync.pieces : PieceStore, PieceService, Manifest, Bitfield, manifestOf, askInfo, askHave,
-    askPiece, tellManifest, givePiece, askThumbs, pieceProtocol, pieceSize;
+    askPiece, tellManifest, givePiece, askThumbs, pieceProtocol, pieceSize, sendPiece, pieceAccepted;
 version (PwHyperswarm)
 {
     import photowagon.core.p2p.hswarm : HsTransport;
@@ -2272,20 +2272,50 @@ private void pushPieces(Stream st, string path, string sha, string keptPieces = 
     auto fh = openFile(path, FileMode.read);
     scope (exit)
         fh.close();
-    auto buf = new ubyte[pieceSize];
+    // Several pieces in flight (the computer answers them in order): the link stays full
+    // instead of idling a round trip per piece. `window` buffers, each reused only once its
+    // piece is answered.
+    enum window = 8;
+    auto bufs = new ubyte[][](window);
+    foreach (ref b; bufs)
+        b = new ubyte[pieceSize];
+    uint[] inflight;   // piece indices sent and not yet answered, oldest first
+    size_t sentCount;
+    void answerOldest()
+    {
+        immutable i = inflight[0];
+        inflight = inflight[1 .. $];
+        if (!pieceAccepted(st))
+            throw new Exception("computer refused piece " ~ i.to!string);
+        lastPieceAck = MonoTime.currTime;   // the computer answered: the link is alive
+    }
+    immutable t0 = MonoTime.currTime;
+    long bytesSent;
     foreach (i; 0 .. man.count)
     {
         if (theirs.has(i))
             continue;
+        if (inflight.length == window)
+            answerOldest();
+        auto buf = bufs[sentCount % window];
         immutable n = man.lengthOf(i);
         fh.seek(cast(long) i * pieceSize);
         fh.read(buf[0 .. n]);
         if (kept.length && sha256Of(buf[0 .. n]) != man.pieces[i])
             throw new Exception("file_changed: piece " ~ i.to!string ~ " of " ~ path.baseName
                 ~ " no longer matches its manifest");
-        if (!givePiece(st, sha, i, buf[0 .. n]))
-            throw new Exception("computer refused piece " ~ i.to!string);
-        lastPieceAck = MonoTime.currTime;   // the computer answered: the link is alive
+        sendPiece(st, sha, i, buf[0 .. n]);
+        inflight ~= i;
+        sentCount++;
+        bytesSent += n;
+    }
+    while (inflight.length)
+        answerOldest();
+    if (bytesSent > 0)
+    {
+        immutable ms = (MonoTime.currTime - t0).total!"msecs";
+        plog("push: ", path.baseName, " ", bytesSent / 1024, " KiB in ", ms, " ms (",
+            ms > 0 ? bytesSent / 1024 * 1000 / ms : 0, " KiB/s)");
     }
     // grown (or shrunk) while it went: the pieces read were the old content's, not the file's
     if (kept.length && cast(long) getSize(path) != man.size)

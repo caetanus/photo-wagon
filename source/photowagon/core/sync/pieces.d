@@ -795,6 +795,21 @@ bool givePiece(Stream s, string sha, uint i, const(ubyte)[] bytes)
 	return readStatus(s) == PieceStatus.ok;
 }
 
+/// The two halves of givePiece, for a sender that keeps several pieces in flight: the
+/// server handles a stream's operations in order and answers each in order, so a sender may
+/// write the next pieces before reading the earlier answers — the link stays full instead of
+/// idling one round trip per piece (stop-and-wait held a 4G push to ~50 KB/s).
+void sendPiece(Stream s, string sha, uint i, const(ubyte)[] bytes)
+{
+	s.write(cast(ubyte[])[PieceOp.put] ~ shaBytes(sha)[] ~ uintToBe(i)[] ~ uintToBe(cast(uint) bytes.length)[] ~ bytes);
+}
+
+/// The answer to the oldest piece sent with sendPiece and not yet answered.
+bool pieceAccepted(Stream s)
+{
+	return readStatus(s) == PieceStatus.ok;
+}
+
 unittest
 {
 	// THUMB round-trip over the mux, in memory: the serving side hands out thumbnails by

@@ -245,6 +245,11 @@ mode, so removing them from `LocalBridge` does not break it.
    client. The socket path must fit sun_path (107 bytes).
 6. **Host child mode.** Readiness barrier, queues/deadlines, restart supervision,
    supersession; kill either process and reconnect to a surviving core.
+   Done (`corehost.d`): the default on the host; `PW_CORE_INPROC=1` keeps one process (the
+   in-process test hooks need it), `PW_CORE_SOCKET` uses a core started elsewhere. The UI
+   asks its child to `core.quit` on exit (orderly shutdown), restarts it after an unexpected
+   death (backing off 0.5 s doubling to 10 s, reset after a minute alive), defers to a
+   core that holds the lock (child exit 3) and starts its own when none is reachable.
 7. **Android service ownership.** The core moves into `:core` for real; lifecycle →
    native shutdown, permission/share integration, TLS init; device tests: cold start, UI
    death, core death, permission grant, sharing, image/video decode, faces, foreground

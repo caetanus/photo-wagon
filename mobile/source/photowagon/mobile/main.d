@@ -43,6 +43,12 @@ mixin(qtdApplication!"QGuiApplication");
 
 // Kept for the life of the process (main never returns: it leaves with exit()).
 private __gshared PhoneCore phoneCore;
+version (Android) {} else
+{
+    import photowagon.mobile.corehost : CoreHost;
+
+    private __gshared CoreHost coreHost;   // host: the core child this UI started
+}
 // The resource tree is assembled in CTFE from qml/mobile.qrc (-J=../qml).
 mixin(qrcRegister(import("mobile.qrc"), "qt.quick"));
 
@@ -150,15 +156,38 @@ int main()
     // The core (index, computer link, local bridge) — built here in the UI process for now;
     // the UI talks to it only through UiBridge, which also does the Activity-bound parts
     // (share sheet, permission prompt). See docs/phone-core-service.md.
-    // PW_CORE_SOCKET=<path> (host): the core runs in another process (`-service`) and the UI
-    // is its client over that socket (stage 5; stage 6 has the UI start that process).
-    immutable coreSocket = environment.get("PW_CORE_SOCKET", "");
+    // Host builds run the core in its own process by default: the UI starts it as a child
+    // (`-service`) and is its client over <dataDir>/core.sock (stage 6). PW_CORE_SOCKET=<path>
+    // uses a core someone else started; PW_CORE_INPROC=1 keeps the old single-process wiring
+    // (and the in-process test hooks). Android: the UI process still builds the core until
+    // stage 7.
+    string coreSocket = environment.get("PW_CORE_SOCKET", "");
+    bool childCore;
+    version (Android) {} else
+        if (coreSocket.length == 0 && environment.get("PW_CORE_INPROC", "") != "1")
+        {
+            import std.path : buildPath;
+
+            coreSocket = buildPath(QStandardPaths.writableLocation(
+                QStandardPaths.StandardLocation.AppDataLocation).toString(), "core.sock");
+            childCore = true;
+        }
     if (coreSocket.length)
     {
         import photowagon.mobile.coreipc : CoreClient;
 
-        plog("ui: using the core at ", coreSocket);
-        lib.start(new UiBridge(cast(Bridge) new CoreClient(coreSocket)));
+        plog("ui: using the core at ", coreSocket, childCore ? " (our child)" : "");
+        auto client = new CoreClient(coreSocket);
+        lib.start(new UiBridge(cast(Bridge) client));
+        version (Android) {} else
+            if (childCore)
+            {
+                import photowagon.mobile.corehost : CoreHost;
+
+                coreHost = new CoreHost(client);
+                coreHost.start();
+                QCoreApplication.instance().connectAboutToQuit({ coreHost.stop(); });
+            }
     }
     else
     {

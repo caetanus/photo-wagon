@@ -12,6 +12,7 @@ import photowagon.mobile.localbridge : LocalBridge;
 import photowagon.mobile.plog : plog;
 import photowagon.ui.transport : Bridge, ResultCb;
 
+import qt.quick.qcoreapplication : QCoreApplication;
 import qt.quick.qlocalserver;
 import qt.quick.qlocalsocket;
 import qt.quick.qtimer;
@@ -127,7 +128,7 @@ final class CoreServer
     private ServerConn session;
     private ServerConn[] conns;        // every live connection (session, joining, closing)
     private bool[string] supersededUis;
-    private QTimer tick, soon;
+    private QTimer tick, soon, quitSoon;
     private enum Duration helloWithin = 5.seconds, drainWithin = 1.seconds;
 
     this(LocalBridge bridge, string dataDir)
@@ -222,7 +223,11 @@ final class CoreServer
         session = c;
         c.ui = ui;
         c.attached = true;
-        c.answer(id, JSONValue(["session": JSONValue(c.serial)]), JSONValue(null), false);
+        import core.sys.posix.unistd : getpid;
+
+        // the core's pid: a UI that started a core as its child can tell whether this is it
+        c.answer(id, JSONValue(["session": JSONValue(c.serial), "pid": JSONValue(cast(long) getpid())]),
+            JSONValue(null), false);
         // a new session: whatever the previous one had pending is cut short, then the
         // snapshot — the UI is "up" once it has it
         bridge.beginSession();
@@ -299,6 +304,19 @@ final class CoreServer
         case "bridge.reconnect":
             bridge.reconnect();
             c.answer(id, JSONValue.emptyObject, JSONValue(null));
+            return;
+        case "core.quit":   // the UI that started this core is quitting (host child mode)
+            plog("core: asked to quit by UI session ", c.serial);
+            c.answer(id, JSONValue.emptyObject, JSONValue(null));
+            if (quitSoon is null)
+            {
+                quitSoon = new QTimer(cast(cppq.QObject) null);
+                quitSoon.setSingleShot(true);
+                quitSoon.setInterval(0);
+                // the orderly path: aboutToQuit -> PhoneCore.shutdown (flushes the index)
+                cast(void) quitSoon.connectTimeout({ QCoreApplication.quit(); });
+            }
+            quitSoon.start();
             return;
         default:
             bridge.request(method, params, (JSONValue r, JSONValue e) { c.answer(id, r, e); });
@@ -499,6 +517,7 @@ final class CoreClient : Bridge
     private string cachedEndpoint;
     private bool coreLinked;
     private immutable string uiInstance;   // who this UI is, for the core's supersession rule
+    private long peerPid;                  // the connected core's pid (from its hello answer)
 
     this(string socketPath)
     {
@@ -572,6 +591,9 @@ final class CoreClient : Bridge
         JSONValue msg = ["id": JSONValue(id), "method": JSONValue("core.hello"),
             "params": JSONValue(["uiInstance": JSONValue(uiInstance)])];
         waiting[id] = Waiting((JSONValue r, JSONValue e) {
+            if (e.type == JSONType.null_ && r.type == JSONType.object && "pid" in r
+                && r["pid"].type == JSONType.integer)
+                peerPid = r["pid"].integer;
             if (e.type == JSONType.object && "code" in e && e["code"].type == JSONType.string
                 && e["code"].str == "session_superseded")
             {
@@ -750,6 +772,28 @@ final class CoreClient : Bridge
 
     override bool connected() const { return ready; }
     override bool remote() const { return false; }
+
+    /// The pid of the core this client is connected to (0 before its hello answer).
+    long corePid() const { return ready ? peerPid : 0; }
+
+    /// Another UI took the core over: this client will not reconnect.
+    bool isSuperseded() const { return superseded; }
+
+    /// Write out everything buffered for the core, waiting up to `ms` (before blocking without
+    /// the event loop — the core must actually receive what was asked). True when all is out.
+    bool drainOutput(int ms)
+    {
+        if (sock is null)
+            return false;
+        immutable deadline = MonoTime.currTime + ms.msecs;
+        while (sock.bytesToWrite() > 0)
+        {
+            immutable left = (deadline - MonoTime.currTime).total!"msecs";
+            if (left <= 0 || !sock.waitForBytesWritten(cast(int) left))
+                return sock.bytesToWrite() == 0;
+        }
+        return true;
+    }
     override string endpoint() const { return cachedEndpoint; }
 
     override void setEndpoint(string host, ushort port)

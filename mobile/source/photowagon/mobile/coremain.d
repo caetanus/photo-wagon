@@ -56,6 +56,7 @@ version (Android) {} else
 
     private __gshared PhoneCore hostCore;      // kept for the life of the process
     private __gshared CoreServer hostServer;
+    private __gshared QTimer dieTimer;
 }
 
 /// The core's entry. Never returns: like the UI's main it leaves with exit(), because
@@ -98,6 +99,22 @@ int serviceMain()
         hostServer.start();
         hostCore.bridge.start();
         QCoreApplication.instance().connectAboutToQuit({ hostCore.shutdown(2.seconds); });
+        {
+            // PW_TEST_CORE_DIE_AFTER=<ms>: die (exit 1) that long after starting — the UI's
+            // restart supervision test (it must back off)
+            import std.conv : to;
+            import std.process : environment;
+
+            immutable die = environment.get("PW_TEST_CORE_DIE_AFTER", "");
+            if (die.length)
+            {
+                dieTimer = new QTimer(QCoreApplication.instance());
+                dieTimer.setSingleShot(true);
+                dieTimer.setInterval(die.to!int);
+                dieTimer.connectTimeout({ plog("core: [test] dying"); exit(1); });
+                dieTimer.start();
+            }
+        }
     }
 
     // Heartbeat: shows in logcat that the core keeps running after the UI is gone.

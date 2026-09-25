@@ -76,6 +76,34 @@ final class PartialStore
 		return bytes;
 	}
 
+	/// The finished file for `sha`, verified against its hash while READ IN SLICES, and its
+	/// path returned (the caller moves it away). A video is hundreds of MB: finish() above
+	/// holds it whole in memory. A mismatch removes the spool and throws, like finish().
+	string finishToPath(string sha)
+	{
+		import std.digest : toHexString, LetterCase;
+		import std.digest.sha : SHA256;
+		import std.stdio : File;
+
+		immutable p = pathOf(sha);
+		synchronized (m)
+		{
+			if (!p.exists)
+				throw new Exception("partial: nothing received for " ~ sha);
+			SHA256 h;
+			foreach (chunk; File(p, "rb").byChunk(1 << 20))
+				h.put(chunk);
+			immutable got = toHexString!(LetterCase.lower)(h.finish()).idup;
+			if (got != sha.toLower)
+			{
+				immutable n = getSize(p);
+				remove(p);
+				throw new Exception("partial: sha256 mismatch after " ~ n.to!string ~ " bytes, discarded");
+			}
+		}
+		return p;
+	}
+
 	/// Drops whatever landed for `sha` (the phone gave up, or the user deleted the photo).
 	void discard(string sha)
 	{

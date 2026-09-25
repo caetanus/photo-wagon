@@ -26,6 +26,27 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 {
 	immutable importsRoot = buildPath(cfg.dataDir, "imports");
 
+	// Indexes a file just placed in imports/ (deduped by hash already); the phone's faces
+	// are stored once the photo is in the library.
+	JSONValue landed(string hash, string path, JSONValue facesJson)
+	{
+		immutable rootId = roots.add(importsRoot);
+		// The phone sent faces it detected + embedded (same r100 model; an empty array = it
+		// looked and found nobody): store + cluster them instead of re-detecting here — once
+		// the photo is actually in the library. Indexing is asynchronous, so a lookup right
+		// after indexOne() found nothing and the faces were dropped. `ingestFaces` is null on
+		// a no-vision (node) build.
+		void delegate() then;
+		if (ingestFaces !is null && facesJson.type == JSONType.array)
+			then = () {
+				auto landed = photos.byHash(hash);
+				if (!landed.isNull)
+					cast(void) ingestFaces(landed.get.id, facesJson);
+			};
+		indexer.indexOne(rootId, path, then);   // just this file — no re-scan of the whole imports/ folder
+		return JSONValue(["existed": JSONValue(false), "path": JSONValue(path)]);
+	}
+
 	// Writes `bytes` into imports/<yyyy-mm>/ and indexes just that file; deduped by hash, so
 	// a photo already here is returned as `existed` without a second copy. Shared by the base64
 	// path and the blob-pipe (ticket) path.
@@ -46,22 +67,47 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 		immutable path = freePath(dir, base);
 		write(path, bytes);
 		logInfo("import: %s (%s bytes)", path, bytes.length);
-		immutable rootId = roots.add(importsRoot);
-		// The phone sent faces it detected + embedded (same r100 model; an empty array = it
-		// looked and found nobody): store + cluster them instead of re-detecting here — once
-		// the photo is actually in the library. Indexing is asynchronous, so a lookup right
-		// after indexOne() found nothing and the faces were dropped. `ingestFaces` is null on
-		// a no-vision (node) build.
-		void delegate() then;
-		if (ingestFaces !is null && facesJson.type == JSONType.array)
-			then = () {
-				auto landed = photos.byHash(hash);
-				if (!landed.isNull)
-					cast(void) ingestFaces(landed.get.id, facesJson);
-			};
-		indexer.indexOne(rootId, path, then);   // just this file — no re-scan of the whole imports/ folder
-		return JSONValue(["existed": JSONValue(false), "path": JSONValue(path)]);
+		return landed(hash, path, facesJson);
 	}
+
+	// The same for a file already complete and verified on disk (the piece store, the
+	// offset spool): MOVED into imports/<yyyy-mm>/, never read into memory — a phone video
+	// is hundreds of MB, and holding each one whole (read + hash + write) took the desktop
+	// past its memory limit while a phone pushed its videos (2026-09-25).
+	JSONValue landFile(string name, string takenAt, string src, string hash, JSONValue facesJson = JSONValue(null))
+	{
+		import std.file : rename, copy, remove, getSize;
+
+		immutable base = name.baseName;
+		if (base.length == 0 || base[0] == '.')
+			throw new ApiError("bad_params", "bad file name");
+		if (getSize(src) == 0)
+			throw new ApiError("bad_params", "empty file");
+		auto known = photos.byHash(hash);
+		if (!known.isNull)
+		{
+			try
+				remove(src);
+			catch (Exception)
+			{
+			}
+			return JSONValue(["id": JSONValue(known.get.id), "existed": JSONValue(true), "path": JSONValue(known.get.path)]);
+		}
+		immutable month = monthFolder(takenAt);
+		immutable dir = buildPath(importsRoot, month);
+		mkdirRecurse(dir);
+		immutable path = freePath(dir, base);
+		try
+			rename(src, path);   // same file system (both under the data directory)
+		catch (Exception)
+		{
+			copy(src, path);     // streamed by the OS, not through our heap
+			remove(src);
+		}
+		logInfo("import: %s (%s bytes)", path, getSize(path));
+		return landed(hash, path, facesJson);
+	}
+
 
 	// {hashes: [sha256, …]} → {have: [sha256, …], refuse: [sha256, …]}: the phone offers a
 	// batch of the photos it means to send; the desktop answers which it already has and
@@ -129,20 +175,15 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 		if (p.type == JSONType.object && "complete" in p && p["complete"].type == JSONType.true_)
 		{
 			immutable h = requireString(p, "sha256");
-			ubyte[] bytes;
+			string done;
 			try
 			{
-				// the piece store first (the piece protocol), the offset spool otherwise
+				// the piece store first (the piece protocol), the offset spool otherwise —
+				// both verify the whole file's hash in slices and hand back its path
 				if (pieces !is null && pieces.complete(h))
-				{
-					import std.file : read, remove;
-
-					immutable path = pieces.finish(h);
-					bytes = cast(ubyte[]) read(path);
-					remove(path);
-				}
+					done = pieces.finish(h);
 				else if (partials !is null)
-					bytes = partials.finish(h);
+					done = partials.finishToPath(h);
 				else
 					throw new ApiError("unavailable", "no partial store here");
 			}
@@ -150,7 +191,8 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 				throw e;
 			catch (Exception e)
 				throw new ApiError("bad_blob", e.msg);
-			return landBytes(name, getString(p, "takenAt"), bytes, facesJson);
+			import std.string : toLower;
+			return landFile(name, getString(p, "takenAt"), done, h.toLower, facesJson);
 		}
 		// Ticket path: the whole blob came over the pipe in one go (pre-resume wire).
 		if (p.type == JSONType.object && "ticket" in p && p["ticket"].type == JSONType.integer)

@@ -40,6 +40,21 @@ struct AdbOut
 	string output;
 }
 
+/// A path with a hidden component (a folder or file whose name starts with a dot).
+bool isHiddenPath(string path)
+{
+	import std.algorithm : splitter, any;
+
+	return path.splitter('/').any!(c => c.length > 1 && c[0] == '.');
+}
+
+unittest
+{
+	assert(isHiddenPath("/sdcard/Pictures/.thumbnails/1000022443.jpg"));
+	assert(isHiddenPath("/sdcard/DCIM/Camera/.trashed-1700000000-IMG_1.jpg"));
+	assert(!isHiddenPath("/sdcard/DCIM/Camera/IMG_20260921_153626.jpg"));
+}
+
 /// `adb devices -l`.
 AdbOut adbDevices()
 {
@@ -70,7 +85,10 @@ AdbOut adbPull(string serial, string remote, string local)
 {
 	try
 	{
-		auto r = execute(["adb", "-s", serial, "pull", remote, local]);
+		// -a: keep the file's time — for a picture without EXIF (a WhatsApp image, a
+		// screenshot) it is the only date there is; without it every such photo was dated
+		// the moment of the copy
+		auto r = execute(["adb", "-s", serial, "pull", "-a", remote, local]);
 		return AdbOut(r.status, r.output);
 	}
 	catch (Exception e)
@@ -193,6 +211,11 @@ final class UsbWatcher
 		{
 			immutable path = line.strip;
 			if (!path.length || !(isImagePath(path) || isVideoPath(path)) || path in pulled)
+				continue;
+			// hidden folders are the system's, not the user's photos: Pictures/.thumbnails
+			// (Android's thumbnail cache — 3052 small, undated copies were imported from it,
+			// 2026-09-25), .trashed-…, .pending-…
+			if (isHiddenPath(path))
 				continue;
 			todo ~= path;
 		}

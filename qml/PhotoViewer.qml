@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtMultimedia
@@ -282,17 +283,22 @@ Item {
             source: stage.isVideo ? ""
                                   : viewer.editing ? (viewer.preview.id === (viewer.photo ? viewer.photo.id : -1) ? viewer.preview.url : "")
                                    : (viewer.photo ? (viewer.photo.editedUrl || viewer.photo.fileUrl) : "")
-            cache: false   // a 4096² decode is 64 MB; the filmstrip and the grid have their own small copies
+            // Decoded at the size it is SHOWN (the stage in device pixels, rounded up to 256 so
+            // a resize does not re-decode on every pixel), never bigger than 4096: a 4096² decode
+            // with mipmaps was ~85 MB per photo — the pixel blocks in the 2026-09-25 OOM dump.
+            // Zooming in does not need more: regionImage below lays the original's pixels over
+            // the visible part. At this size the image goes through Qt's pixmap cache, which
+            // shares one decode between every user of the same URL (flyweight) — back and
+            // forth between photos costs no second decode.
+            readonly property real dpr: Screen.devicePixelRatio > 0 ? Screen.devicePixelRatio : 1
+            cache: true
             asynchronous: true
             fillMode: Image.PreserveAspectFit
             autoTransform: true
             smooth: true
-            mipmap: true
-            // Decode scaled to fit 4096²: a 108 MP phone photo is 434 MB decoded, over
-            // Qt's 256 MB image limit, and would not open at all; the JPEG reader scales
-            // while decoding, so this is also faster and lighter.
-            sourceSize.width: 4096
-            sourceSize.height: 4096
+            mipmap: false
+            sourceSize.width: Math.min(4096, 256 * Math.ceil(stage.width * dpr / 256))
+            sourceSize.height: Math.min(4096, 256 * Math.ceil(stage.height * dpr / 256))
         }
         // the zoomed-in region at the original's resolution, laid over the scaled picture
         Image {

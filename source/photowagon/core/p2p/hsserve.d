@@ -197,7 +197,7 @@ final class HsServe
 				catch (Exception)
 				{
 				}
-			});
+			}, this);   // this connection owns the knock (see PairingManager.cancel)
 			emit("pairing.request", JSONValue(["peer": JSONValue(peer), "name": JSONValue(name)]));
 			return;   // no immediate reply: the resolve delegate answers when the operator confirms
 		}
@@ -310,7 +310,7 @@ final class HsServe
 			events.detach(sink);
 			handler.close();
 			if (pairing !is null && !authed)
-				pairing.cancel(peer);   // it left before the desktop authorized it
+				pairing.cancel(peer, this);   // it left before the desktop authorized it
 		}
 		catch (Exception)
 		{

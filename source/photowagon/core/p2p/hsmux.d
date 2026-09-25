@@ -286,7 +286,7 @@ final class HsMuxServe
 				catch (Exception)
 				{
 				}
-			});
+			}, this);   // this connection owns the knock (see PairingManager.cancel)
 			emit("pairing.request", JSONValue(["peer": JSONValue(peer), "name": JSONValue(name)]));
 			return;
 		}
@@ -335,7 +335,7 @@ final class HsMuxServe
 			events.detach(sink);
 			handler.close();
 			if (pairing !is null && !authed)
-				pairing.cancel(peer);
+				pairing.cancel(peer, this);
 		}
 		catch (Exception)
 		{

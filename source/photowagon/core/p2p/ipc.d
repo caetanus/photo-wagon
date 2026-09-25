@@ -92,7 +92,7 @@ private final class Client
 			handler.close();
 			gone = true;
 			if (pairing !is null && !authed)
-				pairing.cancel(peer);   // it left before the desktop authorized it
+				pairing.cancel(peer, this);   // it left before the desktop authorized it
 			s.close();
 			logInfo("ipc/p2p: %s left", peer);
 		}
@@ -217,7 +217,7 @@ private final class Client
 				catch (Exception)
 				{
 				}
-			});
+			}, this);   // this connection owns the knock (see PairingManager.cancel)
 			try
 				events.emit("pairing.request", JSONValue(["peer": JSONValue(peer), "name": JSONValue(name)]));
 			catch (Exception)

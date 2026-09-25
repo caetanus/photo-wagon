@@ -35,6 +35,7 @@ final class PairingManager
         string code;
         string name;
         void delegate(bool ok) resolve;   // called by confirm()/cancel(); admits or refuses the connection
+        Object owner;                     // the connection that knocked: only it may cancel
     }
 
     private Pending[string] pending;   // peer id → what it is waiting on
@@ -42,11 +43,11 @@ final class PairingManager
     /// A phone (peer) is knocking with the code it shows and a suggested name; `resolve` is
     /// how its held connection is answered. Returns the previous waiter's resolve, if any,
     /// so the caller can refuse a superseded attempt.
-    void begin(string peer, string code, string name, void delegate(bool) resolve)
+    void begin(string peer, string code, string name, void delegate(bool) resolve, Object owner = null)
     {
         if (auto p = peer in pending)
             p.resolve(false);   // a second attempt from the same phone: drop the first
-        pending[peer] = Pending(code, name, resolve);
+        pending[peer] = Pending(code, name, resolve, owner);
     }
 
     bool isPending(string peer) const
@@ -75,13 +76,16 @@ final class PairingManager
         return ok;
     }
 
-    /// The connection went away before it was authorized.
-    void cancel(string peer)
+    /// The connection went away before it was authorized. `owner` is that connection: a
+    /// phone often holds several (LAN + DHT/relay paths, a punched one replacing a relayed
+    /// one), and when one it did NOT knock on closes, the pending code must survive —
+    /// keyed by peer alone, a dropped duplicate path cancelled the real knock and the
+    /// operator's confirm then found nothing pending. A null owner cancels unconditionally.
+    void cancel(string peer, Object owner = null)
     {
         if (auto p = peer in pending)
-        {
-            pending.remove(peer);
-        }
+            if (owner is null || p.owner is owner)
+                pending.remove(peer);
     }
 }
 

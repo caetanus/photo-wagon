@@ -596,6 +596,11 @@ final class P2pBridge : Bridge
     private void client()
     {
         import vibe.core.core : sleep, runTask;
+        // The piece store, for BOTH flavors: the hyperswarm branch below returns early, and
+        // its pulls land here too (spawnPull hands `pieces` to pullPieces) — created after
+        // the branch, it was null there and the first hyperswarm download crashed.
+        pieces = new PieceStore(buildPath(dirName(settingsDir), "pieces"));
+        pieceService = new PieceService(&localFileFor, pieces);
         version (PwHyperswarm)
         {
             import std.process : environment;
@@ -642,8 +647,6 @@ final class P2pBridge : Bridge
         // store (resumable in any order); what we have complete — our own camera roll by
         // sha256, and anything already downloaded — we serve to whoever the computer admits
         // us to talk to (today the computer; tomorrow the other phones of a shared album).
-        pieces = new PieceStore(buildPath(dirName(settingsDir), "pieces"));
-        pieceService = new PieceService(&localFileFor, pieces);
         host.setStreamHandler(pieceProtocol, (Stream s, Connection c, string) {
             scope (exit)
                 s.close();

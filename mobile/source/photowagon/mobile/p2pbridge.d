@@ -14,7 +14,7 @@ module photowagon.mobile.p2pbridge;
 import photowagon.mobile.plog : plog, useCrashStack;
 
 import core.sync.mutex : Mutex;
-import core.time : msecs, seconds;
+import core.time : msecs, seconds, MonoTime;
 import vibe.core.task : Task;
 import std.file : exists, readText;
 import std.json;
@@ -81,6 +81,7 @@ final class P2pBridge : Bridge
     private string pairCode;            // the 4-digit code for the current pairing; stable across dial retries
     private Kademlia kad;               // vibe thread only: the DHT client that finds the computer's current addresses
     private static struct LpSess { Connection conn; int rank; bool linked; }
+    private string lastGoodAddr;         // under lock: the last direct address a session ran on
     private LpSess[string] lpSessions; // vibe thread: peer base58 → the connection its session runs on + rank (LAN preempts WAN)
     version (PwHyperswarm)
     {
@@ -1043,7 +1044,8 @@ final class P2pBridge : Bridge
             bool linkedNow;   // a session is up already (on the LAN, say)
             synchronized (lock)
             {
-                prefer = t.addrs.dup;
+                // the path that worked last, first (see runOnConnection)
+                prefer = lastGoodAddr.length ? [lastGoodAddr] ~ t.addrs.dup : t.addrs.dup;
                 foreach (_, ref v; lpSessions)
                     if (v.linked) { linkedNow = true; break; }
             }
@@ -1421,7 +1423,7 @@ final class P2pBridge : Bridge
                     lastPing = now;
                     try writeLengthPrefixed(ctl, ping); catch (Exception) break;
                 }
-                if (now - lastRecv >= deadAfter)
+                if (now - lastRecv >= deadAfter && now - lastPieceAck >= deadAfter)
                 {
                     plog("p2p: hyperswarm link silent — dropping");
                     silent = true;
@@ -1792,6 +1794,17 @@ final class P2pBridge : Bridge
             if (auto ss = peerKey in lpSessions)
                 if (ss.conn is conn)
                     ss.linked = true;   // a real desktop link now holds the meet gate closed
+        // The direct path that just worked (a punched QUIC address, say): after a drop it is
+        // dialled FIRST, so the link comes back in a round trip instead of after another DHT
+        // walk (30–70 s over 4G). Not a relayed one — that is only a meeting point.
+        {
+            immutable ra = conn.remoteAddr.toString;
+            // (a punched webrtc-direct path is not re-dialable: the far side's punch socket
+            // only answers the peer it punched with — re-meeting punches a fresh one)
+            if (!ra.canFind("p2p-circuit") && !ra.canFind("webrtc-direct"))
+                synchronized (lock)
+                    lastGoodAddr = ra ~ "/p2p/" ~ peerKey;
+        }
 
         // Ask the computer for its full address list and remember any new ones (its public
         // address in particular): a later dial off the LAN — on 4G — then has a route to try,
@@ -2091,7 +2104,9 @@ final class P2pBridge : Bridge
                 catch (Exception)
                     break;                                // the write side is gone
             }
-            if (now - lastRecv >= deadAfter)
+            // the computer answering pieces (a big push or pull hogging the link, its pings
+            // queued behind the data) is alive: that counts as much as a control frame
+            if (now - lastRecv >= deadAfter && now - lastPieceAck >= deadAfter)
             {
                 plog("p2p: link silent for ", deadAfter.total!"seconds", "s — dropping to re-dial");
                 break;                                    // no answer to the pings: the link is dead
@@ -2210,6 +2225,11 @@ private ubyte[8] longToBe8(long v) @safe @nogc nothrow pure
 
 private enum pushProtocolV2 = "/photowagon/push/2.0.0";
 
+/// When the computer last answered a piece (either way), for the link watchdog: during a big
+/// transfer the control stream's pings wait behind the data, and a silent control stream then
+/// does not mean a dead link. Thread-local on purpose: the vibe thread's alone.
+private MonoTime lastPieceAck;
+
 /// Upload over the piece protocol: tell the computer the manifest, ask which pieces it has,
 /// send the missing ones (each verified on arrival), one stream per request. A drop costs
 /// at most the piece in flight; the next attempt asks again and sends only what is missing.
@@ -2265,6 +2285,7 @@ private void pushPieces(Stream st, string path, string sha, string keptPieces = 
                 ~ " no longer matches its manifest");
         if (!givePiece(st, sha, i, buf[0 .. n]))
             throw new Exception("computer refused piece " ~ i.to!string);
+        lastPieceAck = MonoTime.currTime;   // the computer answered: the link is alive
     }
     // grown (or shrunk) while it went: the pieces read were the old content's, not the file's
     if (kept.length && cast(long) getSize(path) != man.size)
@@ -2294,6 +2315,7 @@ private long pullPieces(Stream st, PieceStore pieces, string sha, string dest, o
         if (mine.has(i))
             continue;
         auto bytes = askPiece(st, sha, man, i);
+        lastPieceAck = MonoTime.currTime;   // the computer answered: the link is alive
         pieces.store(sha, i, bytes);
     }
     try

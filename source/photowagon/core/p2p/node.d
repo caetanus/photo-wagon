@@ -455,26 +455,46 @@ final class Node : Notifiee
 					&& (circuitAddrsList != providedCircuits || MonoTime.currTime - lastProvide > 30.minutes))
 				{
 					publishing = true;
+					rvPublishing = true;
 					auto circuitsNow = circuitAddrsList.dup;
 					runTask(() nothrow {
 						scope (exit)
+						{
 							publishing = false;
+							rvPublishing = false;
+						}
 						try
 						{
+							import libp2p.util.timeout : withTimeout;
+							import std.conv : to;
+
 							Multiaddr[] mine;
 							foreach (s; addrs)
 								mine ~= Multiaddr.parse(s);
-							immutable took = announceUnder(kad, meetKey, mine);   // the DHT entrance under the sharing key
+							// Bounded: a DHT walk that never ends kept `publishing` set for good,
+							// and the moved circuits were never published again — the DHT kept
+							// only relays we no longer held, and a phone off the LAN could not
+							// reach us (2026-09-25). A timeout just retries on the next tick.
+							immutable took = withTimeout(3.minutes, "rendezvous publish",
+								() => announceUnder(kad, meetKey, mine));   // the DHT entrance under the sharing key
 							providedCircuits = circuitsNow;
 							lastProvide = MonoTime.currTime;
+							rvProvided = circuitsNow;
+							rvAt = lastProvide;
+							rvNote = "published " ~ mine.length.to!string ~ " address(es) to " ~ took.to!string ~ " DHT peer(s)";
 							logInfo("p2p: rendezvous published — %s DHT peer(s) took %s address(es)", took, mine.length);
 						}
 						catch (Exception e)
+						{
 							try
+							{
+								rvNote = "publish failed: " ~ e.msg;
 								logWarn("p2p: rendezvous publish failed: %s", e.msg);
+							}
 							catch (Exception)
 							{
 							}
+						}
 					});
 				}
 
@@ -705,6 +725,12 @@ final class Node : Notifiee
 		return split.peer.toString;
 	}
 
+	// the rendezvous publish, as p2p.status reports it (the relay task updates these)
+	private string rvNote;
+	private string[] rvProvided;
+	private imported!"core.time".MonoTime rvAt;
+	private bool rvPublishing;
+
 	JSONValue status()
 	{
 		JSONValue[] ps;
@@ -734,7 +760,18 @@ final class Node : Notifiee
 		JSONValue[] mine;
 		foreach (a; addrs)
 			mine ~= JSONValue(a);
-		return JSONValue(["peerId": JSONValue(id), "addrs": JSONValue(mine), "peers": JSONValue(ps)]);
+		import core.time : MonoTime;
+
+		JSONValue[] provided;
+		foreach (c; rvProvided)
+			provided ~= JSONValue(c);
+		JSONValue rv = [
+			"note": JSONValue(rvNote),
+			"publishing": JSONValue(rvPublishing),
+			"provided": JSONValue(provided),
+			"agoSeconds": JSONValue(rvAt == MonoTime.init ? -1L : (MonoTime.currTime - rvAt).total!"seconds"),
+		];
+		return JSONValue(["peerId": JSONValue(id), "addrs": JSONValue(mine), "peers": JSONValue(ps), "rendezvous": rv]);
 	}
 
 	// ---- Notifiee ---------------------------------------------------------------

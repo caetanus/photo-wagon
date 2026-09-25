@@ -1090,7 +1090,9 @@ final class P2pBridge : Bridge
                     {
                         joinDht(host);   // get kad into the DHT first — meetUnder only queries it
                         auto key = rendezvousKeyFor("pw", cast(const(ubyte)[]) tok);
-                        cast(void) meetUnder(host, kad, relay, key, 30.seconds);
+                        // 90 s: a DHT walk over 4G alone took 27 s, and meetUnder keeps
+                        // 20 s of it for reaching the peer through its relay
+                        cast(void) meetUnder(host, kad, relay, key, 90.seconds);
                     }
                     catch (Exception e)
                         try plog("p2p: meetUnder: ", e.msg); catch (Exception) {}

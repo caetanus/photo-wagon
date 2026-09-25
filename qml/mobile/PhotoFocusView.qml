@@ -33,6 +33,9 @@ Rectangle {
 
     color: "#000000"
     focus: visible
+    // edge to edge (the window's system bars): the controls stay clear of them
+    readonly property real safeTop: SafeArea.margins.top
+    readonly property real safeBottom: SafeArea.margins.bottom
     Icons { id: icons }
     component GlassButton: RoundButton {
         required property string icon_
@@ -160,8 +163,8 @@ Rectangle {
     property bool framed: true
     onChromeChanged: if (!zoomed) framed = chrome
     onZoomedChanged: if (!zoomed) framed = chrome
-    readonly property real topReserve: framed ? 64 : 0
-    readonly property real bottomReserve: framed ? 72 + (strip && strip.length > 1 ? 60 : 0) : 0
+    readonly property real topReserve: framed ? 64 + safeTop : 0
+    readonly property real bottomReserve: framed ? 72 + safeBottom + (strip && strip.length > 1 ? 60 : 0) : 0
 
     Image {
         id: image
@@ -442,7 +445,7 @@ Rectangle {
         id: topBar
         visible: viewer.chrome
         anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
-        anchors.leftMargin: 4; anchors.rightMargin: 4; anchors.topMargin: 6
+        anchors.leftMargin: 4; anchors.rightMargin: 4; anchors.topMargin: 6 + viewer.safeTop
         height: 52
         spacing: 2
         TopButton { icon_: icons.chevronLeft; onClicked: viewer.closed() }
@@ -558,11 +561,11 @@ Rectangle {
         id: actionBar
         visible: viewer.chrome
         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-        height: visible ? 72 : 0
+        height: visible ? 72 + viewer.safeBottom : 0
         color: Qt.rgba(0, 0, 0, 0.62)
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 8; anchors.rightMargin: 8; anchors.bottomMargin: 4
+            anchors.leftMargin: 8; anchors.rightMargin: 8; anchors.bottomMargin: 4 + viewer.safeBottom
             spacing: 4
             // to WhatsApp / e-mail / … through the Android share sheet
             BarAction {

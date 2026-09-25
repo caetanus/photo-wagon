@@ -25,6 +25,11 @@ ApplicationWindow {
     width: 412
     height: 915
     visible: true
+    // A phone app keeps the status and navigation bars: maximized, not full screen. Where
+    // Android still draws us edge to edge, the safe-area margins keep content off the bars.
+    visibility: Qt.platform.os === "android" ? Window.Maximized : Window.AutomaticVisibility
+    readonly property real safeTop: SafeArea.margins.top
+    readonly property real safeBottom: SafeArea.margins.bottom
     title: "Photo Wagon"
     color: theme.bg
 
@@ -221,7 +226,7 @@ ApplicationWindow {
     // ---- top bar: contextual to the tab ------------------------------------------
     header: ToolBar {
         id: bar
-        height: 58
+        height: 58 + root.safeTop
         Material.elevation: 0
         background: Rectangle {
             color: theme.panel
@@ -232,6 +237,7 @@ ApplicationWindow {
             id: selectionBar
             visible: root.tab === 0 && grid.selecting
             anchors.fill: parent
+            anchors.topMargin: root.safeTop
             anchors.leftMargin: 6; anchors.rightMargin: 8
             spacing: 2
             readonly property var items: { grid.selVersion; return grid.selectedItems() }
@@ -248,6 +254,7 @@ ApplicationWindow {
         RowLayout {
             visible: !selectionBar.visible
             anchors.fill: parent
+            anchors.topMargin: root.safeTop
             anchors.leftMargin: 6; anchors.rightMargin: 14
             spacing: 6
             // menu / jump-to-a-date, top-LEFT; the date drawer slides in from the left to match
@@ -383,7 +390,7 @@ ApplicationWindow {
                 id: selectionPanel
                 visible: grid.selecting
                 Layout.fillWidth: true
-                implicitHeight: selCol.implicitHeight + 16
+                implicitHeight: selCol.implicitHeight + 16 + root.safeBottom
                 color: theme.panel
                 topLeftRadius: 18; topRightRadius: 18
                 Rectangle { width: parent.width; height: 1; color: theme.border; opacity: 0.6 }
@@ -499,6 +506,7 @@ ApplicationWindow {
         visible: !(root.tab === 0 && grid.selecting)
         currentIndex: root.tab
         onCurrentIndexChanged: root.tab = currentIndex
+        bottomPadding: root.safeBottom   // clear of the gesture / navigation bar
         Material.elevation: 0
         background: Rectangle {
             color: theme.panel

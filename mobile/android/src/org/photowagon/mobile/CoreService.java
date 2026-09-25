@@ -8,6 +8,9 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -141,6 +144,7 @@ public class CoreService extends QtService
         // which follows at once, leaves the foreground again if this start did not ask for it.
         enterForeground();
         watchSyncStatus();
+        watchMetered();
         // off the main thread: a first-install copy of 120 MB must not hold onCreate (the
         // service-execution timeout); the core waits for the files to appear
         Thread x = new Thread(this::extractModels, "extract-models");
@@ -218,8 +222,73 @@ public class CoreService extends QtService
         Log.i(TAG, "core service: destroyed");
         if (watcher != null)
             watcher.removeCallbacksAndMessages(null);
+        if (netCallback != null)
+        {
+            try
+            {
+                ((ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE)).unregisterNetworkCallback(netCallback);
+            }
+            catch (Exception e)
+            {
+            }
+            netCallback = null;
+        }
         holdCpu(false);
         super.onDestroy();
+    }
+
+    // ---- metered network (data saver) ---------------------------------------------------
+
+    private ConnectivityManager.NetworkCallback netCallback;
+
+    /**
+     * The data saver holds sending on a metered network (4G, a hotspot marked metered). Android
+     * knows which one that is; the core does not, so the default network's metered flag is
+     * written to files/settings/metered ("1" / "0", atomically) whenever it changes, and the
+     * core reads it.
+     */
+    private void watchMetered()
+    {
+        if (Build.VERSION.SDK_INT < 24)
+            return;
+        final ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        final File file = new File(new File(getFilesDir(), "settings"), "metered");
+        writeMetered(file, cm.isActiveNetworkMetered());
+        netCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onCapabilitiesChanged(Network network, NetworkCapabilities caps)
+            {
+                writeMetered(file, !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED));
+            }
+        };
+        try
+        {
+            cm.registerDefaultNetworkCallback(netCallback);
+        }
+        catch (Exception e)
+        {
+            Log.w(TAG, "metered watch: " + e.getMessage());
+            netCallback = null;
+        }
+    }
+
+    private static void writeMetered(File file, boolean metered)
+    {
+        try
+        {
+            file.getParentFile().mkdirs();
+            File tmp = new File(file.getPath() + ".tmp-java");
+            try (FileOutputStream out = new FileOutputStream(tmp))
+            {
+                out.write(metered ? '1' : '0');
+            }
+            if (!tmp.renameTo(file))
+                tmp.delete();
+        }
+        catch (Exception e)
+        {
+            Log.w(TAG, "metered: " + e.getMessage());
+        }
     }
 
     // ---- the sync's notification and wake lock (5c: they live where the sync runs) --------
@@ -344,7 +413,18 @@ public class CoreService extends QtService
         int total = st.optInt("total", 0), done = st.optInt("done", 0);
         int pending = st.optInt("pending", 0), failed = st.optInt("failed", 0), sent = st.optInt("sent", 0);
         String title, text;
-        if (active)
+        String held = st.optString("held", "");
+        if (!active && "paused".equals(held))
+        {
+            title = "Sending paused";
+            text = pending > 0 ? pending + " photos waiting — resume in Photo Wagon" : "Resume in Photo Wagon";
+        }
+        else if (!active && "metered".equals(held))
+        {
+            title = "Waiting for Wi-Fi";
+            text = "Data saver is on" + (pending > 0 ? " · " + pending + " photos waiting" : "");
+        }
+        else if (active)
         {
             title = "Sending photos to the computer";
             text = (done + 1) + " of " + total + (failed > 0 ? " · " + failed + " failed" : "");

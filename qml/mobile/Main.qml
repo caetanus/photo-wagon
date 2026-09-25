@@ -145,7 +145,10 @@ ApplicationWindow {
                                    : invite ? theme.accent : alarm ? theme.warn : theme.muted
         // the number on the icon: what still has to go (failures first)
         readonly property int badge: failed > 0 ? failed : remaining
-        readonly property string summary: failed > 0
+        readonly property string held: root.syncData.held || ""
+        readonly property string summary: held === "paused" ? "Sending paused" + (remaining > 0 ? " · " + remaining + " waiting" : "")
+            : held === "metered" ? "Waiting for Wi-Fi (data saver)" + (remaining > 0 ? " · " + remaining + " waiting" : "")
+            : failed > 0
               ? failed + (failed === 1 ? " photo couldn't be sent" : " photos couldn't be sent")
               : up
                 ? (remaining === 0 ? "Connected to your computer — everything is there"
@@ -481,6 +484,8 @@ ApplicationWindow {
             onChangeEndpoint: endpointDialog.open()
             onSendAll: library.sendAll()
             onAutoSync: (on) => library.setAutoSync(on)
+            onPauseSync: (paused) => library.pauseSync(paused)
+            onDataSaver: (on) => library.setDataSaver(on)
             onRescan: library.rescanPhotos()
             onOpenKind: (kind) => root.openKind(kind)
             onOpenFavorites: root.openFavorites()

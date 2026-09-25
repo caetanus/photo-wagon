@@ -1809,6 +1809,27 @@ version (WithUi)
         });
     }
 
+    /// Phone: hold sending (the photo in flight finishes) or go on; remembered until changed.
+    @Slot void pauseSync(bool paused)
+    {
+        client.request("library.pauseSync", JSONValue(["paused": JSONValue(paused)]), (r, e) {
+            if (e.type != JSONType.null_) { report("pauseSync", e); return; }
+            sync = r.toString();
+            syncChanged.emit();
+            tell(paused ? "Sending paused" : "Sending resumed");
+        });
+    }
+
+    /// Phone: data saver — nothing goes to the computer over a metered network (4G).
+    @Slot void setDataSaver(bool on)
+    {
+        client.request("library.dataSaver", JSONValue(["on": JSONValue(on)]), (r, e) {
+            if (e.type != JSONType.null_) { report("dataSaver", e); return; }
+            sync = r.toString();
+            syncChanged.emit();
+        });
+    }
+
     /// Phone: push everything not sent yet, one after another (and turn the automatic sync on).
     @Slot void sendAll()
     {

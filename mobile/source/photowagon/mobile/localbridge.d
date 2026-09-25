@@ -56,6 +56,13 @@ final class LocalBridge : Bridge
     private bool autoSync;             // persisted: files/settings/autosync
     private bool manualRun;            // "Send all now": one run to the end, auto-sync untouched
     private string autoSyncFile;
+    // Held sending: paused by the user (persisted: settings/sync-paused), or data saver on
+    // (settings/data-saver) while the network is metered — which CoreService reads from
+    // Android's ConnectivityManager into settings/metered ("1"/"0"). The photo in flight
+    // finishes; the next one waits. Explicit one-photo actions (Send, Add to album) still go.
+    private bool syncPaused, dataSaver, metered;
+    private string pausedFile, dataSaverFile, meteredFile;
+    private QTimer meteredPoll;
     private string syncStatusFile;     // files/settings/sync-status, read by the Java notifier
     private long[] sendQueue;         // the WANTED photos (negotiated), waiting for their bytes
     private long sent, sendTotal, sendFailed, skipped, declined;
@@ -157,6 +164,12 @@ final class LocalBridge : Bridge
             autoSyncFile = buildPath(settingsDir, "autosync");
             syncStatusFile = buildPath(settingsDir, "sync-status");
             autoSync = autoSyncFile.exists;
+            pausedFile = buildPath(settingsDir, "sync-paused");
+            dataSaverFile = buildPath(settingsDir, "data-saver");
+            meteredFile = buildPath(settingsDir, "metered");
+            syncPaused = pausedFile.exists;
+            dataSaver = dataSaverFile.exists;
+            metered = readMetered();
             // Desktop thumbnails land here as JPEG files (a sibling of settings/), so the
             // grid loads them as file:// textures (EGL) instead of base64 in memory, and
             // they survive the p2p link dropping.
@@ -191,6 +204,23 @@ final class LocalBridge : Bridge
         syncDeadline = new QTimer(cast(cppq.QObject) null);
         syncDeadline.setSingleShot(true);
         syncDeadline.connectTimeout(&onSyncTimeout);
+        // the network's metered flag follows Android (CoreService writes it): 4G → hold,
+        // Wi-Fi → go on, without the user doing anything
+        meteredPoll = new QTimer(cast(cppq.QObject) null);
+        meteredPoll.setInterval(3000);
+        meteredPoll.connectTimeout({
+            immutable m = readMetered();
+            if (m == metered)
+                return;
+            metered = m;
+            plog("sync: network is ", m ? "metered" : "not metered", dataSaver ? " (data saver on)" : "");
+            if (held())
+                holdRun();   // drop the queue now: a push the link loses must not leave it "active"
+            else
+                { startSync(); pumpFaces(); }   // faces held back meanwhile go too (auto-sync off: startSync does nothing)
+        });
+        if (meteredFile.length)
+            meteredPoll.start();
         index.onChanged = () { emit("library.changed", JSONValue.emptyObject); };
         index.onFacesReady = &pumpFaces;   // a face pass finished: hand over what the computer lacks
         // Background never hurts foreground: while a photo is being pushed to the computer,
@@ -506,8 +536,36 @@ final class LocalBridge : Bridge
             return JSONValue.emptyObject;
         case "p2p.status":
             return JSONValue(["peerId": JSONValue(null), "addrs": JSONValue(cast(JSONValue[]) []), "peers": JSONValue(cast(JSONValue[]) []), "off": JSONValue(true)]);
+        case "library.pauseSync":     // {paused}: hold sending (persisted) / go on
+            {
+                syncPaused = p.type == JSONType.object && "paused" in p && p["paused"].type == JSONType.true_;
+                setFlagFile(pausedFile, syncPaused);
+                plog("sync: ", syncPaused ? "paused by the user" : "resumed by the user");
+                if (held())
+                    holdRun();
+                else
+                    { startSync(); pumpFaces(); }   // faces held back meanwhile go too (auto-sync off: startSync does nothing)
+                return syncStatus();
+            }
+        case "library.dataSaver":     // {on}: nothing goes over a metered network
+            {
+                dataSaver = p.type == JSONType.object && "on" in p && p["on"].type == JSONType.true_;
+                setFlagFile(dataSaverFile, dataSaver);
+                if (held())
+                    holdRun();
+                else
+                    { startSync(); pumpFaces(); }   // faces held back meanwhile go too (auto-sync off: startSync does nothing)
+                return syncStatus();
+            }
         case "library.sendAll":       // one run now; the automatic-sync preference stays as it is
             {
+                // an explicit "send now" is also a "go on": it ends a pause (data saver still
+                // holds it on a metered network — that is what the switch is for)
+                if (syncPaused)
+                {
+                    syncPaused = false;
+                    setFlagFile(pausedFile, false);
+                }
                 manualRun = true;
                 index.resetTries();
                 immutable n = index.unsentCount();
@@ -1130,7 +1188,7 @@ final class LocalBridge : Bridge
             return;
         closing = true;   // first: a cancelled caller that asks again is refused, not admitted
         supersedePaging("shutting_down", "the phone core is shutting down");
-        foreach (t; [rescan, prepPoll, hashPoll, syncDeadline, pageDeadline, facesRetryTimer])
+        foreach (t; [rescan, prepPoll, hashPoll, syncDeadline, pageDeadline, facesRetryTimer, meteredPoll])
             if (t !is null)
                 t.stop();
         onPageDeadline = null;
@@ -1846,6 +1904,57 @@ final class LocalBridge : Bridge
 
     // ---- sync engine ------------------------------------------------------------------
 
+    /// Whether sending is held back now: paused, or data saver on a metered network.
+    private bool held() const
+    {
+        return syncPaused || (dataSaver && metered);
+    }
+
+    private bool readMetered()
+    {
+        try
+            return meteredFile.length && meteredFile.exists && readText(meteredFile).length && readText(meteredFile)[0] == '1';
+        catch (Exception)
+            return false;
+    }
+
+    private static void setFlagFile(string path, bool on)
+    {
+        if (!path.length)
+            return;
+        try
+        {
+            import photowagon.mobile.atomicfile : writeAtomic;
+            import std.file : remove;
+
+            if (on)
+                writeAtomic(path, "1");
+            else if (path.exists)
+                remove(path);
+        }
+        catch (Exception e)
+            plog("sync: cannot save setting: ", e.msg);
+    }
+
+    /// Stop taking new photos (the one in flight finishes): the queue is dropped and the
+    /// run's counters closed, so resuming starts a clean run from the next unsent photo.
+    /// A "Send all now" run keeps its intent (manualRun): resuming continues it, and the
+    /// service keeps holding it meanwhile.
+    private void holdRun()
+    {
+        // the dropped photos leave the run's total (a pause + resume must not count them twice)
+        sendTotal -= cast(long) sendQueue.length;
+        if (sendTotal < 0)
+            sendTotal = 0;
+        sendQueue.length = 0;
+        if (!sending)
+        {
+            sent = sendTotal = sendFailed = skipped = declined = 0;
+            index.saveNow();
+        }
+        publishSync();
+    }
+
     private void setAutoSync(bool on)
     {
         autoSync = on;
@@ -1880,6 +1989,11 @@ final class LocalBridge : Bridge
             "failedPhotos": JSONValue(index.failedPhotoCount()),
             // a "Send all now" run is going: CoreService keeps it alive like auto-sync would
             "manual": JSONValue(manualRun),
+            "paused": JSONValue(syncPaused),
+            "dataSaver": JSONValue(dataSaver),
+            "metered": JSONValue(metered),
+            // held back right now, and why: "paused" | "metered" | null
+            "held": syncPaused ? JSONValue("paused") : dataSaver && metered ? JSONValue("metered") : JSONValue(null),
             "error": lastSyncError.length ? JSONValue(lastSyncError) : JSONValue(null),
         ]);
     }
@@ -1907,7 +2021,7 @@ final class LocalBridge : Bridge
     /// Queue what is missing on the computer and start, if allowed and connected.
     private void startSync()
     {
-        if ((!autoSync && !manualRun) || !computer.connected)
+        if ((!autoSync && !manualRun) || !computer.connected || held())
         {
             publishSync();
             return;
@@ -1933,6 +2047,11 @@ final class LocalBridge : Bridge
     {
         if (sending || negotiating || !computer.connected)
             return;
+        if (held())
+        {
+            holdRun();
+            return;
+        }
         auto ids = index.unsentIds();
         if (ids.length == 0)
         {
@@ -2117,7 +2236,8 @@ final class LocalBridge : Bridge
             }
             index.saveNow();   // the last marks must not wait for the timer: Android may kill us next
             sent = sendTotal = sendFailed = skipped = declined = 0;
-            manualRun = false;   // a "Send all now" run is over; new photos wait for auto-sync
+            if (!held())   // a held run keeps its intent: Resume (or Wi-Fi) carries it on
+                manualRun = false;   // a "Send all now" run is over; new photos wait for auto-sync
             publishSync();
             pumpFaces();   // the run is over (even one that found everything already there)
             return;
@@ -2126,6 +2246,11 @@ final class LocalBridge : Bridge
         {
             sendQueue.length = 0;   // resumes on the next connection (startSync)
             publishSync();
+            return;
+        }
+        if (held())   // paused, or data saver on a metered network: the next one waits
+        {
+            holdRun();
             return;
         }
         immutable id = sendQueue[0];
@@ -2310,7 +2435,9 @@ final class LocalBridge : Bridge
 
     private void pumpFaces()
     {
-        if (facesInFlight || facesApiMissing || sending || negotiating || !computer.connected)
+        // held (paused, or data saver on a metered network): faces wait with the photos —
+        // resume / Wi-Fi calls startSync, whose run ends in pumpFaces again
+        if (facesInFlight || facesApiMissing || sending || negotiating || !computer.connected || held())
             return;
         immutable now = MonoTime.currTime;
         long id = -1;

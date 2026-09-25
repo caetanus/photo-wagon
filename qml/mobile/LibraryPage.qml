@@ -25,6 +25,8 @@ Item {
     signal changeEndpoint()
     signal sendAll()
     signal autoSync(bool on)
+    signal pauseSync(bool paused)
+    signal dataSaver(bool on)
     signal rescan()
     signal openKind(string kind)
     signal openFavorites()
@@ -140,6 +142,8 @@ Item {
                 onChangeEndpoint: view.changeEndpoint()
                 onSendAll: view.sendAll()
                 onAutoSync: (on) => view.autoSync(on)
+                onPauseSync: (paused) => view.pauseSync(paused)
+                onDataSaver: (on) => view.dataSaver(on)
                 onRescan: view.rescan()
             }
         }

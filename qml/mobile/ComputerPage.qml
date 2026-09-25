@@ -22,6 +22,8 @@ Item {
     signal changeEndpoint()
     signal sendAll()
     signal autoSync(bool on)
+    signal pauseSync(bool paused)
+    signal dataSaver(bool on)
     signal rescan()
 
     Rectangle { anchors.fill: parent; color: theme.bg }
@@ -102,6 +104,11 @@ Item {
                         color: theme.text; font.pixelSize: 14
                         text: page.sync.active
                             ? "Sending " + (page.sync.done + 1) + " of " + page.sync.total + "…"
+                              + (page.sync.held === "paused" ? " Pausing after this one." : page.sync.held === "metered" ? " Stopping after this one (data saver)." : "")
+                            : page.sync.held === "paused"
+                              ? "Sending is paused" + (page.sync.pending > 0 ? " — " + page.sync.pending + (page.sync.pending === 1 ? " photo waits." : " photos wait.") : ".")
+                            : page.sync.held === "metered"
+                              ? "Waiting for Wi-Fi — data saver keeps photos off mobile data" + (page.sync.pending > 0 ? " (" + page.sync.pending + " waiting)." : ".")
                             : page.connected
                                 ? (page.sync.pending > 0
                                     ? page.sync.pending + (page.sync.pending === 1 ? " photo" : " photos")
@@ -129,13 +136,27 @@ Item {
                         from: 0; to: page.sync.total; value: page.sync.done
                         Material.accent: theme.accent
                     }
-                    Button {
+                    RowLayout {
                         Layout.fillWidth: true
-                        text: "Send all now"
-                        enabled: page.connected && !page.sync.active && (page.sync.pending > 0 || page.failures > 0)
-                        Material.background: theme.accent
-                        Material.foreground: "#ffffff"
-                        onClicked: page.sendAll()
+                        spacing: 8
+                        Button {
+                            Layout.fillWidth: true
+                            text: "Send all now"
+                            enabled: page.connected && !page.sync.active && page.sync.held !== "metered"
+                                     && (page.sync.pending > 0 || page.failures > 0)
+                            Material.background: theme.accent
+                            Material.foreground: "#ffffff"
+                            onClicked: page.sendAll()
+                        }
+                        // hold / go on; remembered, and the background service honours it
+                        Button {
+                            Layout.fillWidth: true
+                            text: page.sync.paused ? "Resume" : "Pause"
+                            flat: !page.sync.paused
+                            Material.background: page.sync.paused ? theme.accent : "transparent"
+                            Material.foreground: page.sync.paused ? "#ffffff" : theme.accent
+                            onClicked: page.pauseSync(!page.sync.paused)
+                        }
                     }
                     RowLayout {
                         Layout.fillWidth: true
@@ -147,6 +168,22 @@ Item {
                         Switch {
                             checked: page.sync.enabled === true
                             onToggled: page.autoSync(checked)
+                            Material.accent: theme.accent
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 1
+                            Label { text: "Data saver"; color: theme.text; font.pixelSize: 14; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                            Label {
+                                text: "Send only on Wi-Fi — nothing goes over mobile data" + (page.sync.metered ? " (you're on mobile data now)" : "")
+                                color: theme.muted; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap
+                            }
+                        }
+                        Switch {
+                            checked: page.sync.dataSaver === true
+                            onToggled: page.dataSaver(checked)
                             Material.accent: theme.accent
                         }
                     }

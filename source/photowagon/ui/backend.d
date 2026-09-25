@@ -11,6 +11,8 @@ module photowagon.ui.backend;
 
 import qtmoc;
 import qt.quick.qcoreapplication;
+import qt.quick.qtimer : QTimer;
+import cppq = qt.quick.qobject;
 
 import std.json;
 import std.stdio : writeln, stdout;
@@ -1913,6 +1915,20 @@ version (WithUi)
         setStatus(up, indexing, up ? (progressText.length ? progressText : "connected") : "daemon unreachable, retrying…");
     }
 
+    private QTimer timelineLater;   // a library.changed inside the 3 s window, deferred to its end
+
+    private void refreshTimeline()
+    {
+        if (timelineLater !is null)
+            timelineLater.stop();
+        lastTimelineHns = Clock.currStdTime;
+        loadDates();
+        loadStats();
+        loadMemories();
+        loadMoments();
+        reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));   // keep what was scrolled to
+    }
+
     private void onEvent(string ev, JSONValue data)
     {
         switch (ev)
@@ -1986,18 +2002,27 @@ version (WithUi)
             // While a scan runs this fires for every batch of files; refreshing the whole
             // timeline (page string + date tree + stats) each time re-published a huge page and
             // reset the grid model every few seconds — "atualizar a biblioteca deixa o app
-            // instável". Coalesce to at most one refresh every 3 s; index.done / upload.done do a
-            // final, unthrottled reload so nothing is left stale at the end.
+            // instável". Coalesce to at most one refresh every 3 s — and one inside the window is
+            // not dropped but deferred to its end (the phone's "the computer's page came late"
+            // arrives ~2.5 s after the refresh it follows: dropping it left those photos out).
             {
                 immutable nowHns = Clock.currStdTime;
-                if (nowHns - lastTimelineHns >= 30_000_000)   // 3 s, in 100 ns ticks
+                immutable waitHns = lastTimelineHns + 30_000_000 - nowHns;   // 3 s, in 100 ns ticks
+                if (waitHns <= 0)
+                    refreshTimeline();
+                else
                 {
-                    lastTimelineHns = nowHns;
-                    loadDates();
-                    loadStats();
-                    loadMemories();
-                    loadMoments();
-                    reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));   // keep what was scrolled to
+                    if (timelineLater is null)
+                    {
+                        timelineLater = new QTimer(cast(cppq.QObject) null);
+                        timelineLater.setSingleShot(true);
+                        timelineLater.connectTimeout(&refreshTimeline);
+                    }
+                    if (!timelineLater.isActive())
+                    {
+                        timelineLater.setInterval(cast(int) (waitHns / 10_000) + 1);
+                        timelineLater.start();
+                    }
                 }
             }
             break;

@@ -28,29 +28,91 @@ Item {
 
     /// Mouse wheel: a notch moves about a row and a half of photos; a touchpad's
     /// pixel deltas are taken as they come, tripled.
+    // (bounds from originY: items inserted above the viewport shift the content's origin)
     function wheel(view, ev) {
-        const max = Math.max(0, view.contentHeight - view.height)
+        const min = view.originY
+        const max = view.originY + Math.max(0, view.contentHeight - view.height)
         const dy = ev.pixelDelta.y !== 0 ? ev.pixelDelta.y * 3 : ev.angleDelta.y / 120 * (grid.cell + grid.gap) * 1.5
-        view.contentY = Math.max(0, Math.min(max, view.contentY - dy))
+        view.contentY = Math.max(min, Math.min(max, view.contentY - dy))
         ev.accepted = true
-        if (view.contentY > view.contentHeight - view.height * 3) grid.requestMore()
+        if (view.contentY - view.originY > view.contentHeight - view.height * 3) grid.requestMore()
     }
 
-    // A new page object resets the views' model; put the scroll back where it was.
-    property real keptY: 0
-    property bool restoring: false
+    // A new page never replaces the views' models: it is RECONCILED into them — a photo
+    // whose data changed (a thumbnail arrived, a heart, a tag) is updated in place, new
+    // ones are inserted where they belong, gone ones removed. Replacing the model threw
+    // every delegate away on each refresh (every 3 s while indexing or syncing): the
+    // thumbnails decoded again and the scroll jumped. Keys are photo ids (sections: days).
     onPageChanged: {
         requesting = false
-        const y = keptY
-        restoring = true
-        Qt.callLater(function () {
-            const v = grid.mode === "days" ? daysView : allView
-            v.contentY = Math.max(0, Math.min(y, Math.max(0, v.contentHeight - v.height)))
-            grid.restoring = false
-        })
+        syncModels()
     }
-    function remember(view) { if (!restoring) keptY = view.contentY }
-    Rectangle { anchors.fill: parent; color: theme.content }
+    onModeChanged: syncModels()
+
+    ListModel { id: allModel; dynamicRoles: true }
+    ListModel { id: daysModel; dynamicRoles: true }
+
+    // Keyed reconcile: in place when the signature changed, MOVED when it sits later in
+    // the model (its delegate survives), inserted when new, removed when gone.
+    function reconcile(model, next) {
+        const keys = new Set()
+        for (const e of next) keys.add(e._k)
+        let i = 0
+        while (i < next.length) {
+            const e = next[i]
+            if (i < model.count) {
+                const cur = model.get(i)
+                if (cur._k === e._k) {
+                    if (cur._s !== e._s) model.set(i, e)
+                    i++
+                    continue
+                }
+                if (!keys.has(cur._k)) { model.remove(i); continue }   // gone
+                let j = i + 1
+                while (j < model.count && model.get(j)._k !== e._k) j++
+                if (j < model.count) {   // further down: move it up, keeping its delegate
+                    model.move(j, i, 1)
+                    if (model.get(i)._s !== e._s) model.set(i, e)
+                    i++
+                    continue
+                }
+            }
+            model.insert(i, e)   // new
+            i++
+        }
+        if (model.count > next.length) model.remove(next.length, model.count - next.length)
+    }
+
+    // photo id → its index in the page (selection, cursor and range use page indexes)
+    readonly property var indexOfId: {
+        const m = {}
+        const items = (page && page.items) ? page.items : []
+        for (let i = 0; i < items.length; i++) m[items[i].id] = i
+        return m
+    }
+    property var lastItems: []
+
+    function syncModels() {
+        const items = (page && page.items) ? page.items : []
+        // the keyboard cursor and the range anchor follow their PHOTOS, not their positions
+        const cid = cursor >= 0 && cursor < lastItems.length ? lastItems[cursor].id : null
+        const aid = anchor >= 0 && anchor < lastItems.length ? lastItems[anchor].id : null
+        if (mode === "days") {
+            reconcile(daysModel, daysOf(items).map(d => {
+                const js = JSON.stringify(d.items)
+                return { _k: d.key, _s: d.title + js, title: d.title, n: d.items.length, itemsJson: js }
+            }))
+            if (allModel.count) allModel.clear()
+        } else {
+            reconcile(allModel, items.map(it => ({ _k: String(it.id), _s: JSON.stringify(it), photo: it })))
+            if (daysModel.count) daysModel.clear()
+        }
+        lastItems = items
+        // (from `items` itself: the indexOfId binding has not caught up with the page yet)
+        const at = id => { for (let i = 0; i < items.length; i++) if (items[i].id === id) return i; return -1 }
+        if (cid !== null) cursor = at(cid)
+        if (aid !== null) anchor = at(aid)
+    }
 
     readonly property int gap: 2
     readonly property int columns: Math.max(1, Math.floor((width - 16) / (cellSize + gap)))
@@ -109,14 +171,15 @@ Item {
         const extend = event.modifiers & Qt.ShiftModifier
         const step = (d) => { if (extend) { if (anchor < 0) anchor = Math.max(0, cursor); selectRange(Math.max(0, Math.min(page.items.length - 1, (cursor < 0 ? 0 : cursor) + d))) } else { moveCursor(d); anchor = cursor } }
         const view = mode === "days" ? daysView : allView
-        const maxY = Math.max(0, view.contentHeight - view.height)
+        const minY = view.originY
+        const maxY = view.originY + Math.max(0, view.contentHeight - view.height)
         switch (event.key) {
         case Qt.Key_Delete:   // Backspace deletes only on a Mac; here it is a text key
             if (selectedIds().length) remove(selectedIds(), (event.modifiers & Qt.ShiftModifier) !== 0); break
-        case Qt.Key_Home: view.contentY = 0; if (page.items.length) { cursor = 0; selectOnly(page.items[0].id) } break
+        case Qt.Key_Home: view.contentY = minY; if (page.items.length) { cursor = 0; selectOnly(page.items[0].id) } break
         case Qt.Key_End: view.contentY = maxY; if (page.items.length) { cursor = page.items.length - 1; selectOnly(page.items[cursor].id) } requestMore(); break
-        case Qt.Key_PageDown: view.contentY = Math.min(maxY, view.contentY + view.height * 0.9); if (view.contentY > view.contentHeight - view.height * 3) requestMore(); break
-        case Qt.Key_PageUp: view.contentY = Math.max(0, view.contentY - view.height * 0.9); break
+        case Qt.Key_PageDown: view.contentY = Math.min(maxY, view.contentY + view.height * 0.9); if (view.contentY - view.originY > view.contentHeight - view.height * 3) requestMore(); break
+        case Qt.Key_PageUp: view.contentY = Math.max(minY, view.contentY - view.height * 0.9); break
         case Qt.Key_A: if (event.modifiers & Qt.ControlModifier) { anchor = 0; selectRange(page.items.length - 1); break } return
         case Qt.Key_Left: step(-1); break
         case Qt.Key_Right: step(1); break
@@ -134,7 +197,7 @@ Item {
     component Cell: Item {
         id: cell
         required property var photo
-        property int cellIndex: -1
+        readonly property int cellIndex: grid.indexOfId[photo.id] !== undefined ? grid.indexOfId[photo.id] : -1
         width: grid.cell
         height: grid.cell
         readonly property bool isSelected: grid.selected[photo.id] === true
@@ -259,30 +322,29 @@ Item {
         clip: true
         cellWidth: grid.cell + grid.gap
         cellHeight: grid.cell + grid.gap
-        model: grid.page.items
+        model: allModel
         cacheBuffer: cellHeight * 6
         ScrollBar.vertical: ScrollBar { }
-        delegate: Cell { required property var modelData; required property int index; photo: modelData; cellIndex: index }
+        delegate: Cell { }
         onAtYEndChanged: if (atYEnd && count > 0) grid.requestMore()
-        onContentYChanged: { grid.remember(allView); if (count > 0 && contentY > contentHeight - height * 3) grid.requestMore() }
+        onContentYChanged: if (count > 0 && contentY - originY > contentHeight - height * 3) grid.requestMore()
         footer: Item { width: 1; height: 24 }
         WheelHandler { acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad; onWheel: (ev) => grid.wheel(allView, ev) }
     }
 
     // ---- "days": sections with a date header ---------------------------------------
-    readonly property var days: {
-        if (mode !== "days") return []
+    function daysOf(items) {
         const out = []
         let cur = null
-        for (let i = 0; i < page.items.length; i++) {
-            const it = page.items[i]
+        for (let i = 0; i < items.length; i++) {
+            const it = items[i]
             const d = new Date(it.takenAt)
             const key = isNaN(d.getTime()) ? "" : d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate()
             if (!cur || cur.key !== key) {
                 cur = { key: key, title: grid.dayTitle(d), items: [] }
                 out.push(cur)
             }
-            cur.items.push(Object.assign({ _index: i }, it))
+            cur.items.push(it)
         }
         return out
     }
@@ -304,13 +366,15 @@ Item {
         anchors.rightMargin: 8
         visible: grid.mode === "days"
         clip: true
-        model: grid.days
+        model: daysModel
         spacing: 0
         cacheBuffer: 2000
         ScrollBar.vertical: ScrollBar { }
         delegate: Column {
             id: section
-            required property var modelData
+            required property string title
+            required property int n
+            required property string itemsJson
             width: daysView.width
             Item {
                 width: parent.width
@@ -320,7 +384,7 @@ Item {
                     anchors.leftMargin: 4
                     anchors.bottom: parent.bottom
                     anchors.bottomMargin: 8
-                    text: section.modelData.title
+                    text: section.title
                     color: theme.text
                     font.pixelSize: 15
                     font.bold: true
@@ -330,7 +394,7 @@ Item {
                     anchors.rightMargin: 12
                     anchors.bottom: parent.bottom
                     anchors.bottomMargin: 9
-                    text: section.modelData.items.length + (section.modelData.items.length === 1 ? " photo" : " photos")
+                    text: section.n + (section.n === 1 ? " photo" : " photos")
                     color: theme.muted
                     font.pixelSize: 12
                 }
@@ -339,14 +403,14 @@ Item {
                 width: parent.width
                 spacing: grid.gap
                 Repeater {
-                    model: section.modelData.items
-                    delegate: Cell { required property var modelData; photo: modelData; cellIndex: modelData._index }
+                    model: JSON.parse(section.itemsJson)
+                    delegate: Cell { required property var modelData; photo: modelData }
                 }
             }
             Item { width: 1; height: 12 }
         }
         onAtYEndChanged: if (atYEnd && count > 0) grid.requestMore()
-        onContentYChanged: { grid.remember(daysView); if (count > 0 && contentY > contentHeight - height * 3) grid.requestMore() }
+        onContentYChanged: if (count > 0 && contentY - originY > contentHeight - height * 3) grid.requestMore()
         footer: Item { width: 1; height: 24 }
         WheelHandler { acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad; onWheel: (ev) => grid.wheel(daysView, ev) }
     }

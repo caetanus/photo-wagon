@@ -20,7 +20,7 @@ import std.conv : to;
 import std.file : read, exists, readText, write, mkdirRecurse;
 import std.json;
 import core.thread : Thread;
-import core.time : MonoTime, minutes;
+import core.time : MonoTime, minutes, msecs, seconds;
 import std.path : baseName, buildPath, dirName;
 import std.stdio : writeln, stdout;
 
@@ -146,6 +146,12 @@ final class LocalBridge : Bridge
     private QTimer pageDeadline;       // a computer that does not answer a page in time is skipped
     private void delegate() onPageDeadline;
     private enum pageDeadlineMs = 20_000;
+    private enum firstPageWaitMs = 2_500;   // the grid's first page: the phone's photos show by then
+    private MonoTime lastLateRefresh;
+// the computer's first page came after firstPageWaitMs: the next first pages give it the
+// long wait (a slow computer's answer would otherwise be cut off every time); cleared when a
+// first page answers in time
+private bool slowComputer;
     private enum neighboursMaxServed = 100_000;  // how far photo.neighbours pages to find a photo
     private bool[string] localKeys;    // "name|size" of local photos, for dedupe
     private bool[string] localHashes;  // a known content hash survives metadata size changes
@@ -849,26 +855,52 @@ final class LocalBridge : Bridge
             JSONValue params = pageParams;
             params["offset"] = remoteOff;
             params["limit"] = limit;
-            bool settled;
+            bool settled, timedOut;
+            // The FIRST page does not wait long for the computer: the phone's own photos show
+            // at once (2.5 s at most) and, when the computer's page turns up late, the listing
+            // is refreshed — the grid reconciles it in place. Later pages keep the long wait
+            // (the user is scrolling into them; skipping the computer there loses them).
+            immutable firstPage = remoteOff == 0 && served.length == 0;
+            immutable waitMs = firstPage && !slowComputer ? firstPageWaitMs : pageDeadlineMs;
+            immutable asked = MonoTime.currTime;
             void merge()
             {
+                if (firstPage && !timedOut && MonoTime.currTime - asked < firstPageWaitMs.msecs)
+                    slowComputer = false;
+                if (firstPage)
+                    plog("paging: first page after ", (MonoTime.currTime - asked).total!"msecs", " ms",
+                        remoteDone && remoteBuf.length == 0 ? " (the phone's photos only)" : "");
                 then(mergeServed(limit));
             }
-            // The computer gets pageDeadlineMs to answer; after that this listing goes on
-            // without it (remoteDone) and a late reply is dropped.
+            // After waitMs this listing goes on without the computer (remoteDone).
             armPageDeadline(() {
                 if (settled || op.done || curOp !is op)
                     return;
                 settled = true;
-                plog("paging: the computer did not answer library.page in ", pageDeadlineMs / 1000, " s — listing without it");
+                timedOut = true;
+                plog("paging: the computer did not answer library.page in ", waitMs, " ms — listing without it");
                 abandonRemote();
                 try
                     merge();
                 catch (Exception ex)
                     finishOp(op, JSONValue(null), error("internal", ex.msg));
-            });
+            }, waitMs);
             testDelayed(() {
                 computer.request("library.page", params, (r, e) {
+                    // the first page went without the computer and its answer came after all:
+                    // refresh the listing so its photos join — that refresh (and the next first
+                    // pages) wait the long deadline, so it is not cut off again; at most every
+                    // 20 s, so a computer slower than even that cannot keep the listing reloading
+                    if (timedOut && firstPage && e.type == JSONType.null_)
+                        slowComputer = true;
+                    if (timedOut && firstPage && e.type == JSONType.null_ && r.type == JSONType.object
+                        && "items" in r && r["items"].array.length && MonoTime.currTime - lastLateRefresh > 20.seconds)
+                    {
+                        lastLateRefresh = MonoTime.currTime;
+                        plog("paging: the computer's first page came late — refreshing the listing");
+                        emit("library.changed", JSONValue.emptyObject);
+                        return;
+                    }
                     // superseded (a new listing or session), timed out, or already answered:
                     // this reply belongs to state that is gone
                     if (settled || op.done || curOp !is op)
@@ -915,7 +947,7 @@ final class LocalBridge : Bridge
 
     /// Run `dg` if the computer has not answered the current operation within
     /// pageDeadlineMs (finishOp and a new listing disarm it).
-    private void armPageDeadline(void delegate() dg)
+    private void armPageDeadline(void delegate() dg, int ms = pageDeadlineMs)
     {
         if (pageDeadline is null)
         {
@@ -930,7 +962,7 @@ final class LocalBridge : Bridge
             });
         }
         onPageDeadline = dg;
-        pageDeadline.setInterval(pageDeadlineMs);
+        pageDeadline.setInterval(ms);
         pageDeadline.start();
     }
 
@@ -1641,8 +1673,6 @@ final class LocalBridge : Bridge
 
     private void later(int ms, void delegate() dg)
     {
-        import core.time : msecs;
-
         if (laterTimer is null)
         {
             laterTimer = new QTimer(cast(cppq.QObject) null);

@@ -1,4 +1,4 @@
-// PW_TEST_PAGING=full|deadline — a scripted check of LocalBridge's paging (stage 3 of
+// PW_TEST_PAGING=full|deadline|deadline2|slow — a scripted check of LocalBridge's paging (stage 3 of
 // docs/phone-core-service.md), run by the desktop build of the phone app against a real
 // computer link. Pair it with PW_TEST_PAGE_DELAY=<ms> so the computer's replies arrive late
 // and out of order. Logs "paging-test: PASS" or "paging-test: FAIL <why>" and exits.
@@ -54,6 +54,8 @@ final class PagingTest
             deadline();
         else if (mode == "deadline2")
             laterDeadline();
+        else if (mode == "slow")
+            slowComputer();
         else
             overlap();
     }
@@ -190,6 +192,12 @@ final class PagingTest
     {
         core.request("library.page", pg(0, 30), (r, e) {
             check(e.type == JSONType.null_, "fresh listing answered");
+            if (all.length < 231)   // the walk came up short (already failed): nothing to probe
+            {
+                check(false, "the walk has the 231 photos the neighbour checks need");
+                finish();
+                return;
+            }
             immutable last = all[$ - 1]["id"].integer;
             immutable before = all[$ - 2]["id"].integer;
             // 30 served + one 200-photo search page = 230: photo 229 ends up LAST served, and
@@ -236,8 +244,9 @@ final class PagingTest
         });
     }
 
-    // PW_TEST_PAGE_DELAY beyond the 20 s deadline: the page is answered from the phone's own
-    // photos after the deadline, and the late computer reply changes nothing.
+    // PW_TEST_PAGE_DELAY beyond the first page's 2.5 s wait: the page is answered from the
+    // phone's own photos, and the late computer reply changes nothing in THIS listing (it
+    // asks the UI to refresh, which starts a new one).
     private void deadline()
     {
         import core.time : MonoTime, seconds;
@@ -246,7 +255,8 @@ final class PagingTest
         core.request("library.page", pg(0, 60), (r, e) {
             immutable took = MonoTime.currTime - t0;
             check(e.type == JSONType.null_, "deadline page answered (" ~ e.toString() ~ ")");
-            check(took >= 19.seconds && took < 24.seconds, "answered at the deadline (" ~ took.toString() ~ ")");
+            // the FIRST page waits 2.5 s for the computer, not 20 (localbridge firstPageWaitMs)
+            check(took >= 2.seconds && took < 5.seconds, "answered at the first-page deadline (" ~ took.toString() ~ ")");
             long remotes;
             foreach (it; r["items"].array)
                 if (isRemote(it))
@@ -272,6 +282,38 @@ final class PagingTest
             });
             wait.start();
         });
+    }
+
+    // PW_TEST_PAGE_DELAY=4000 (fixed): a computer slower than the first page's 2.5 s but well
+    // inside the 20 s deadline. The first listing goes without it; once its late page is in,
+    // the NEXT first page waits for it and has the computer's photos (it is not cut off at
+    // 2.5 s every time, which would leave them out for good).
+    private void slowComputer()
+    {
+        core.request("library.page", pg(0, 60), (r, e) {
+            check(e.type == JSONType.null_ && remotesIn(r) == 0, "slow computer: the first listing is the phone's alone");
+            wait = new QTimer(cast(cppq.QObject) null);
+            wait.setSingleShot(true);
+            wait.setInterval(3_000);   // the late page (4 s) lands meanwhile
+            wait.connectTimeout({
+                core.request("library.page", pg(0, 60), (r2, e2) {
+                    check(e2.type == JSONType.null_, "slow computer: the next listing answered");
+                    check(remotesIn(r2) > 0, "slow computer: the next listing has the computer's photos");
+                    plog("paging-test: slow computer: next listing has ", remotesIn(r2), " computer photos");
+                    finish();
+                });
+            });
+            wait.start();
+        });
+    }
+
+    private long remotesIn(JSONValue r)
+    {
+        long n;
+        foreach (it; r["items"].array)
+            if (isRemote(it))
+                n++;
+        return n;
     }
 
     // PW_TEST_PAGE_DELAY==25000@2: the first computer page answers, the second never does in

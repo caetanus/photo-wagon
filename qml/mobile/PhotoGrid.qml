@@ -157,23 +157,46 @@ Item {
         return false
     }
 
-    // Reconcile `rows` with the freshly computed rows, touching as few as possible.
+    // Reconcile `rows` with the freshly computed rows, touching as few as possible — BY KEY
+    // (a day header, or a day's row "day#n"), not by position: the listing is newest first,
+    // so a new photo or a new day arrives at the TOP, and a positional prefix match threw
+    // every row below it away and rebuilt them (the scroll jumped, every thumbnail decoded
+    // again). A row whose tiles changed (a thumbnail arrived, a photo joined its day) is
+    // patched in place; new rows are inserted, gone ones removed.
+    // A row's content signature, stored WITH the row (role "sig"): a row read back from the
+    // ListModel holds its tiles as a nested model, which cannot be walked like the array.
+    function rowSig(r) {
+        if (r.kind !== "r") return r.label
+        return JSON.stringify(r.tiles)   // every field a tile shows (thumb, sent, video, duration, remote…)
+    }
     function syncRows() {
         const nr = buildRows()
+        const keys = new Set()
+        for (const r of nr) { r.sig = rowSig(r); keys.add(r.key) }
         let i = 0
-        // shared prefix: same header/row structure stays; a row whose tiles only changed
-        // thumbUrl/sent is patched in place (one row's ≤cols tiles re-decode, not the grid).
-        while (i < rows.count && i < nr.length) {
-            const cur = rows.get(i)
-            if (cur.kind !== nr[i].kind || cur.key !== nr[i].key) break
-            if (cur.kind === "r") {
-                if (!sameTiles(cur.tiles, nr[i].tiles)) break
-                if (tilesContentDiffer(cur.tiles, nr[i].tiles)) rows.setProperty(i, "tiles", nr[i].tiles)
+        while (i < nr.length) {
+            const r = nr[i]
+            if (i < rows.count) {
+                const cur = rows.get(i)
+                if (cur.key === r.key && cur.kind === r.kind) {
+                    if (cur.sig !== r.sig) rows.set(i, r)
+                    i++
+                    continue
+                }
+                if (!keys.has(cur.key)) { rows.remove(i); continue }   // gone
+                let j = i + 1
+                while (j < rows.count && rows.get(j).key !== r.key) j++
+                if (j < rows.count && rows.get(j).kind === r.kind) {   // further down: move it up
+                    rows.move(j, i, 1)
+                    if (rows.get(i).sig !== r.sig) rows.set(i, r)
+                    i++
+                    continue
+                }
             }
+            rows.insert(i, r)   // new here
             i++
         }
-        while (rows.count > i) rows.remove(rows.count - 1)
-        for (; i < nr.length; i++) rows.append(nr[i])
+        if (rows.count > nr.length) rows.remove(nr.length, rows.count - nr.length)
     }
     function rebuildRows() { rows.clear(); syncRows() }
 

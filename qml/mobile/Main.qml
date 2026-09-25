@@ -122,6 +122,40 @@ ApplicationWindow {
         library.showAll()
     }
     readonly property bool paired: library.computerPaired
+    function showToast(text) {
+        toast.text = text
+        toast.opacity = 1
+        toastTimer.restart()
+    }
+    // "your photos live at home": the computer link and how many photos are still on their
+    // way — shown as the computer icon at the top right (its dot and count); tapping it
+    // opens the computer's page, a long press says it in words
+    QtObject {
+        id: link
+        readonly property int remaining: root.syncData.pending || 0
+        // failed in this run, or given up after their retries (waiting for Send all now)
+        readonly property int failed: root.syncData.failedPhotos || 0
+        readonly property bool active: root.syncData.active === true
+        readonly property bool auto: root.syncData.enabled === true
+        readonly property bool up: library.computerConnected
+        // unpaired is a choice, not a fault: an invitation, never the amber warning
+        readonly property bool invite: !root.paired
+        readonly property bool alarm: !up && !invite && remaining > 0 || failed > 0
+        readonly property color dot: failed > 0 ? theme.warn : up ? "#5fe0b0"
+                                   : invite ? theme.accent : alarm ? theme.warn : theme.muted
+        // the number on the icon: what still has to go (failures first)
+        readonly property int badge: failed > 0 ? failed : remaining
+        readonly property string summary: failed > 0
+              ? failed + (failed === 1 ? " photo couldn't be sent" : " photos couldn't be sent")
+              : up
+                ? (remaining === 0 ? "Connected to your computer — everything is there"
+                   : active ? remaining + (remaining === 1 ? " photo" : " photos") + " going to the computer"
+                   : auto ? remaining + " waiting to go to the computer"
+                   : remaining + (remaining === 1 ? " photo" : " photos") + " not on the computer")
+                : invite ? "Not connected to a computer yet — tap to connect"
+                : remaining > 0 ? "Computer offline · " + remaining + (auto ? " waiting" : " not sent")
+                : "Computer offline"
+    }
     function personName(id) {
         for (const p of peopleData) if (p.id === id) return p.name || "Person"
         return "Person"
@@ -245,6 +279,47 @@ ApplicationWindow {
                 icon_: icons.check
                 onClicked: grid.selectMode = true
             }
+            // the computer link, top right (nothing until the phone core has told us its state)
+            ToolButton {
+                id: computerButton
+                visible: root.status.connected
+                implicitWidth: 48; implicitHeight: 44
+                background: Rectangle {
+                    radius: 10; anchors.margins: 3; anchors.fill: parent
+                    color: computerButton.pressed ? theme.panelAlt : "transparent"
+                }
+                contentItem: Item {
+                    Image {
+                        anchors.centerIn: parent
+                        anchors.horizontalCenterOffset: -3   // room on the right for the count
+                        source: icons.tint(icons.computer, theme.text)
+                        sourceSize.width: 22; sourceSize.height: 22
+                    }
+                    // state: a dot, or the count still to go
+                    Rectangle {
+                        anchors.right: parent.right; anchors.top: parent.top
+                        // on the icon's corner, spilling outward — never over the screen
+                        anchors.rightMargin: link.badge > 0 ? -2 : 7; anchors.topMargin: link.badge > 0 ? 1 : 8
+                        height: link.badge > 0 ? 15 : 9
+                        width: link.badge > 0 ? Math.max(15, badgeText.implicitWidth + 6) : 9
+                        radius: height / 2
+                        color: link.dot
+                        border.color: theme.panel; border.width: 1.5
+                        Label {
+                            id: badgeText
+                            visible: link.badge > 0
+                            anchors.centerIn: parent
+                            text: link.badge > 99 ? "99+" : String(link.badge)
+                            // dark on the bright green / amber, white on the indigo / grey
+                            color: link.failed > 0 || link.alarm || link.up ? "#16181d" : "#ffffff"
+                            font.pixelSize: 9; font.weight: Font.Bold
+                        }
+                    }
+                }
+                Accessible.name: link.summary
+                onClicked: root.openComputer()
+                onPressAndHold: root.showToast(link.summary)
+            }
         }
     }
 
@@ -254,86 +329,9 @@ ApplicationWindow {
         anchors.fill: parent
         currentIndex: root.tab
 
-        // 0 — Photos: the desktop link chip (Wagon signature) sits above the grid
+        // 0 — Photos
         ColumnLayout {
             spacing: 0
-            // "your photos live at home" — connection + how many are still on their way
-            Rectangle {
-                id: linkChip
-                readonly property int remaining: root.syncData.pending || 0
-                // failed in this run, or given up after their retries (waiting for Send all now)
-                readonly property int failed: (root.syncData.failedPhotos || 0)
-                readonly property bool active: root.syncData.active === true
-                readonly property bool auto: root.syncData.enabled === true
-                readonly property bool up: library.computerConnected
-                // unpaired is a choice, not a fault: an invitation, never the amber warning
-                readonly property bool invite: !root.paired
-                readonly property bool alarm: !up && !invite && remaining > 0 || failed > 0
-                // Google-Photos style: when everything is home and quiet, the banner steps
-                // out of the way so the grid runs full height; it returns the moment there is
-                // something to say (offline with photos waiting, failures, or not set up yet).
-                // quiet when there is nothing to say; a dismissed invitation stays away, but only
-                // the invitation — warnings that come later still show
-                // nothing until the phone core has told us its state (no "Connect" flash at start)
-                visible: root.status.connected
-                         && !(linkChip.up && linkChip.remaining === 0 && linkChip.failed === 0)
-                         && !(linkChip.invite && linkChip.dismissedInvite)
-                property bool dismissedInvite: false
-                Layout.fillWidth: true
-                Layout.leftMargin: 10; Layout.rightMargin: 10
-                Layout.topMargin: 6; Layout.bottomMargin: 4
-                radius: height / 2
-                implicitHeight: 34
-                color: up ? theme.home : theme.panelAlt
-                border.color: up ? "transparent" : theme.border
-                border.width: up ? 0 : 1
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 14; anchors.rightMargin: 12
-                    spacing: 9
-                    Rectangle {
-                        implicitWidth: 9; implicitHeight: 9; radius: 4.5
-                        color: linkChip.failed > 0 ? theme.warn : linkChip.up ? "#5fe0b0"
-                             : linkChip.invite ? theme.accent : linkChip.alarm ? theme.warn : theme.muted
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        color: linkChip.up ? theme.homeText : theme.text
-                        font.pixelSize: 12; font.weight: Font.DemiBold
-                        elide: Text.ElideRight
-                        text: linkChip.failed > 0
-                              ? linkChip.failed + (linkChip.failed === 1 ? " photo couldn't be sent" : " photos couldn't be sent") + " · details"
-                              : linkChip.up
-                                ? (linkChip.active
-                                    ? linkChip.remaining + (linkChip.remaining === 1 ? " photo" : " photos") + " going to the computer"
-                                    : linkChip.auto
-                                      ? linkChip.remaining + " waiting to go to the computer"
-                                      : linkChip.remaining + (linkChip.remaining === 1 ? " photo" : " photos") + " not on the computer · Send")
-                                : linkChip.invite
-                                  ? "Back up to your computer · Connect"
-                                  : linkChip.remaining > 0
-                                    ? "Computer offline · " + linkChip.remaining + (linkChip.auto ? " waiting" : " not sent")
-                                    : "Computer offline"
-                    }
-                    Label {
-                        id: chipEnd
-                        text: linkChip.invite ? "×" : "›"
-                        font.pixelSize: linkChip.invite ? 18 : 16
-                        color: linkChip.up ? theme.homeText : theme.muted
-                        opacity: 0.7
-                    }
-                }
-                // one handler: the right end of the invitation (×, a 48-unit target) puts it away
-                // for this session; anywhere else opens the computer's page
-                TapHandler {
-                    onTapped: (eventPoint) => {
-                        if (linkChip.invite && eventPoint.position.x > linkChip.width - 48)
-                            linkChip.dismissedInvite = true
-                        else
-                            root.openComputer()
-                    }
-                }
-            }
             // a search says where it looked: offline, only this phone's file names
             Rectangle {
                 visible: !!root.filterData.search && (root.pageData.scope === "phone" || !!root.pageData.error)
@@ -499,12 +497,7 @@ ApplicationWindow {
         Timer { id: toastTimer; interval: 3500; onTriggered: toast.opacity = 0 }
         Connections {
             target: library
-            function onNoticeChanged() {
-                if (!library.notice.length) return
-                toast.text = library.notice
-                toast.opacity = 1
-                toastTimer.restart()
-            }
+            function onNoticeChanged() { if (library.notice.length) root.showToast(library.notice) }
         }
     }
 

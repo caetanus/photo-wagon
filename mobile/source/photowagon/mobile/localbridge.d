@@ -37,7 +37,6 @@ enum long remoteBase = 1_000_000_000L;
 version (Android)
 {
     // mobile/jni/videothumb.c — hands a file path to Android's ACTION_SEND share sheet.
-    extern (C) int pw_share_image(void* env, const char* path, const char* mime);
 }
 
 final class LocalBridge : Bridge
@@ -48,7 +47,8 @@ final class LocalBridge : Bridge
     private QTimer rescan;        // until the permission lands, keep trying
     private int rescanTries;
     private bool permissionAsked;
-    private QTimer askPermission;
+    /// The scan found the photo permission missing: the UI asks for it (see uiadapter).
+    void delegate() onPermissionNeeded;
     // ---- sync: every photo not on the computer yet goes there, in the background,
     // whenever a computer is connected. The queue is the index itself (sent / tries
     // per photo, saved after every step), so a crash or a kill loses nothing: the next
@@ -223,22 +223,14 @@ final class LocalBridge : Bridge
                 rescan.stop();
                 return;
             }
-            // nothing readable: the permission is missing. Ask once the window has had
-            // its first frames (asking during Qt's startup left the window black), then
-            // keep looking for a while.
+            // nothing readable: the permission is missing. Asking is the UI's job (it needs the
+            // Activity, which is not in the core's process once the core moves out): tell it
+            // once, and keep looking for a while.
             if (!permissionAsked)
             {
                 permissionAsked = true;
-                askPermission = new QTimer(cast(cppq.QObject) null);
-                askPermission.setSingleShot(true);
-                askPermission.setInterval(900);
-                askPermission.connectTimeout({
-                    import qt.quick.qdesktopservices : QDesktopServices;
-                    import qt.quick.qurl : QUrl;
-                    auto u = QUrl("pwperm://request", QUrl.ParsingMode.TolerantMode);
-                    QDesktopServices.openUrl(u);
-                });
-                askPermission.start();
+                if (onPermissionNeeded)
+                    onPermissionNeeded();
             }
             rescan.start();
         };
@@ -737,9 +729,10 @@ final class LocalBridge : Bridge
     /// next to the settings), resumably over the pull pipe; the reply carries a file:// URL
     /// the viewer can open, and the file stays for offline use. A local photo is already
     /// here and just answers with its own path.
-    /// Hand a photo to the OS share sheet (WhatsApp, e-mail, …). Reuses `download` to get a
-    /// real local file — the phone's own original, or the computer's original fetched into
-    /// remote-files first — then calls the Android ACTION_SEND shim.
+    /// What to hand to the OS share sheet (WhatsApp, e-mail, …): a real local file — the
+    /// phone's own original, or the computer's original fetched into remote-files first by
+    /// `download` — as {path, mime}. Opening the sheet needs the Activity, so the UI does it
+    /// (uiadapter.UiBridge).
     private void share(long id, ResultCb cb)
     {
         download(id, (r, e) {
@@ -747,14 +740,7 @@ final class LocalBridge : Bridge
             immutable path = (r.type == JSONType.object && "path" in r && r["path"].type == JSONType.string)
                 ? r["path"].str : "";
             if (!path.length) { cb(JSONValue(null), error("no_file", "no local file to share")); return; }
-            version (Android)
-            {
-                import std.string : toStringz;
-                import qt.quick.qjnienvironment : QJniEnvironment;
-                auto env = QJniEnvironment.getJniEnv();
-                pw_share_image(cast(void*) env, path.toStringz, "image/*".toStringz);
-            }
-            cb(JSONValue(["shared": JSONValue(true), "path": JSONValue(path)]), JSONValue(null));
+            cb(JSONValue(["path": JSONValue(path), "mime": JSONValue("image/*")]), JSONValue(null));
         });
     }
 

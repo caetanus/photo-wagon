@@ -25,9 +25,8 @@ import std.string : split, indexOf;
 import std.file : exists;
 
 import photowagon.ui.backend : Library;
-import photowagon.mobile.localbridge : LocalBridge;
-import photowagon.mobile.phoneindex : PhoneIndex;
-import photowagon.mobile.p2pbridge : P2pBridge;
+import photowagon.mobile.corefactory : buildPhoneCore, PhoneCore;
+import photowagon.mobile.uiadapter : UiBridge;
 // static: coremain mixes in its own createApp (QCoreApplication); keep it out of this scope
 static import photowagon.mobile.coremain;
 
@@ -40,27 +39,11 @@ enum APP_NAME    = "Photo Wagon";
 enum APP_VERSION = "0.4.0";
 
 mixin(qtdApplication!"QGuiApplication");
+
+// Kept for the life of the process (main never returns: it leaves with exit()).
+private __gshared PhoneCore phoneCore;
 // The resource tree is assembled in CTFE from qml/mobile.qrc (-J=../qml).
 mixin(qrcRegister(import("mobile.qrc"), "qt.quick"));
-
-/// DCIM/ and Pictures/ of the device (or PW_PHONE_ROOTS on a desktop test).
-string[] photoRoots()
-{
-    immutable forced = environment.get("PW_PHONE_ROOTS", "");
-    if (forced.length)
-        return forced.split(":");
-    // On Android Qt's writable PicturesLocation is the app's own
-    // Android/data/<pkg>/files/Pictures — empty, and the DCIM next to it does not
-    // exist. The camera roll is under the shared storage that folder lives in.
-    immutable pictures = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.PicturesLocation).toString();
-    string base = pictures.dirName;
-    immutable at = pictures.indexOf("/Android/data/");
-    if (at > 0)
-        base = pictures[0 .. at];
-    else if (!buildPath(base, "DCIM").exists && environment.get("EXTERNAL_STORAGE", "").length)
-        base = environment["EXTERNAL_STORAGE"];
-    return [buildPath(base, "DCIM"), buildPath(base, "Pictures")];
-}
 
 /// Under the emulator's ARM translation the environment QtLoader set (plugin and
 /// QML paths) is invisible here; MainActivity writes it to settings/qt-env and we
@@ -162,19 +145,12 @@ int main()
     // and the sync service restarts it.
     QGuiApplication.setQuitOnLastWindowClosed(false);
 
-    immutable dataDir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation).toString();
-    immutable cacheDir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation).toString();
-    auto roots = photoRoots();
-    plog("phone: roots ", roots, " data ", dataDir, " cache ", cacheDir);
-
     auto lib = newQObject!Library();
-    auto computer = new P2pBridge(buildPath(dataDir, "settings"));
-    // PW_ENDPOINT=host:port overrides the saved computer (tests, first run).
-    immutable forced = environment.get("PW_ENDPOINT", "");
-    if (forced.length)
-        computer.setEndpoint(forced, 0);
-    auto index = new PhoneIndex(roots, dataDir, cacheDir);
-    lib.start(new LocalBridge(index, computer, buildPath(dataDir, "settings")));
+    // The core (index, computer link, local bridge) — built here in the UI process for now;
+    // the UI talks to it only through UiBridge, which also does the Activity-bound parts
+    // (share sheet, permission prompt). See docs/phone-core-service.md.
+    phoneCore = buildPhoneCore();
+    lib.start(new UiBridge(phoneCore.bridge));
 
     // The binding collects unparented D-owned QObjects. Keep the engine owned by
     // the application throughout exec(), after this local's last use: collecting

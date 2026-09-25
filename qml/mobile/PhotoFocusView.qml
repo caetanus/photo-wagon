@@ -28,6 +28,7 @@ Rectangle {
     signal closed()
     signal edit()
     signal send(int id)
+    signal addToAlbum(int id)
     signal nameFace(int faceId, int personId, string name)
 
     color: "#000000"
@@ -428,6 +429,16 @@ Rectangle {
         anchors.topMargin: 10
         anchors.rightMargin: 114
         onClicked: library.sharePhoto(viewer.photo.id)
+    }
+    // Add to album (albums live on the computer; a phone photo is sent there first)
+    GlassButton {
+        icon_: icons.album
+        visible: viewer.chrome && viewer.photo && !viewer.zoomed
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.leftMargin: 114
+        anchors.topMargin: 10
+        onClicked: viewer.addToAlbum(viewer.photo.id)
     }
     // Cast to a TV — the phone drives the computer's CastService (it is on the TV's LAN).
     GlassButton {

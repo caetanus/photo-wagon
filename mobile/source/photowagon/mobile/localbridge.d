@@ -438,9 +438,13 @@ final class LocalBridge : Bridge
             case "people.delete": case "people.similar": case "people.setCover": case "people.remove":
                 forward(method, params, cb); return;
             // album writes run on the computer (it owns the library); the phone forwards them
-            case "album.create": case "album.rename": case "album.delete":
-            case "album.addPhotos": case "album.removePhotos":
+            case "album.rename": case "album.delete":
                 forward(method, params, cb); return;
+            // photo ids are the phone's: the computer's own shifted, the phone's own
+            // resolved by hash — and sent first when the computer does not have them yet
+            case "album.create": case "album.addPhotos": case "album.removePhotos":
+                albumWithPhotos(method, params, cb); return;
+            case "photo.shareMany": shareMany(params, cb); return;
             // Cast runs on the computer (it has the CastService + is on the TV's LAN); the
             // phone is a remote control. Photo ids are rewritten to the computer's own ids.
             case "cast.devices": case "cast.next": case "cast.prev":
@@ -1362,6 +1366,249 @@ final class LocalBridge : Bridge
             // the share targets filter on it: a video offered as image/* reaches the wrong apps
             cb(JSONValue(["path": JSONValue(path), "mime": JSONValue(mimeFor(path))]), JSONValue(null));
         });
+    }
+
+    /// Several photos to the share sheet at once: a local file for each (the computer's
+    /// fetched first), in order; photos that cannot be had are left out and counted.
+    private void shareMany(JSONValue p, ResultCb cb)
+    {
+        enum maxShare = 100;   // Android's share targets refuse far fewer; a clear limit instead
+        JSONValue[] ids = p.type == JSONType.object && "ids" in p && p["ids"].type == JSONType.array
+            ? p["ids"].array : null;
+        foreach (i; ids)
+            if (i.type != JSONType.integer)
+            {
+                cb(JSONValue(null), error("bad_params", "photo ids must be numbers"));
+                return;
+            }
+        if (ids.length == 0)
+        {
+            cb(JSONValue(null), error("bad_params", "no photos to share"));
+            return;
+        }
+        if (ids.length > maxShare)
+        {
+            cb(JSONValue(null), error("too_many", "share at most " ~ maxShare.to!string ~ " photos at once"));
+            return;
+        }
+        JSONValue[] paths;
+        size_t missing;
+        void step(size_t i)
+        {
+            if (i == ids.length)
+            {
+                if (paths.length == 0)
+                {
+                    cb(JSONValue(null), error("no_file", "none of these photos is available here right now"));
+                    return;
+                }
+                // one type the targets can filter on: image/*, video/*, or anything
+                string kind;
+                foreach (pth; paths)
+                {
+                    import std.algorithm : startsWith;
+                    immutable m = mimeFor(pth.str);
+                    immutable k = m.startsWith("video/") ? "video/*" : m.startsWith("image/") ? "image/*" : "*/*";
+                    kind = kind.length == 0 || kind == k ? k : "*/*";
+                }
+                cb(JSONValue(["paths": JSONValue(paths), "mime": JSONValue(paths.length == 1 ? mimeFor(paths[0].str) : kind),
+                    "missing": JSONValue(missing)]), JSONValue(null));
+                return;
+            }
+            download(ids[i].integer, (r, e) {
+                if (e.type == JSONType.null_ && r.type == JSONType.object && "path" in r
+                    && r["path"].type == JSONType.string && r["path"].str.length)
+                    paths ~= r["path"];
+                else
+                    missing++;
+                step(i + 1);
+            });
+        }
+        step(0);
+    }
+
+    /// album.create / addPhotos / removePhotos with the phone's photo ids: each becomes the
+    /// computer's id. The computer's photos are shifted back; the phone's are looked up by
+    /// their hash (the import probe) and, for create/add, sent first when the computer does
+    /// not have them. The answer says how many were sent and how many could not be added.
+    private void albumWithPhotos(string method, JSONValue params, ResultCb cb)
+    {
+        if (!computer.connected)
+        {
+            cb(JSONValue(null), error("no_computer", "albums live on the computer — connect it first"));
+            return;
+        }
+        if (params.type != JSONType.object || "photoIds" !in params || params["photoIds"].type != JSONType.array)
+        {
+            forward(method, params, cb);
+            return;
+        }
+        foreach (i; params["photoIds"].array)
+            if (i.type != JSONType.integer)
+            {
+                cb(JSONValue(null), error("bad_params", "photo ids must be numbers"));
+                return;
+            }
+        immutable sendMissing = method != "album.removePhotos";
+        computerIds(params["photoIds"].array, sendMissing, (long[] got, size_t sent, size_t failed) {
+            if (got.length == 0 && failed > 0)
+            {
+                cb(JSONValue(null), error("no_photos", failed == 1 ? "the photo could not be put on the computer"
+                    : "none of the photos could be put on the computer"));
+                return;
+            }
+            auto q = params;
+            JSONValue[] arr;
+            foreach (g; got)
+                arr ~= JSONValue(g);
+            q["photoIds"] = JSONValue(arr);
+            forward(method, q, (r, e) {
+                if (e.type == JSONType.null_)
+                {
+                    if (r.type != JSONType.object)
+                        r = JSONValue.emptyObject;
+                    r["sent"] = sent;
+                    r["failed"] = failed;
+                    r["added"] = got.length;
+                }
+                cb(r, e);
+            });
+        });
+    }
+
+    /// The computer's ids for the phone's photo ids, in order (see albumWithPhotos).
+    private void computerIds(JSONValue[] ids, bool sendMissing, void delegate(long[], size_t, size_t) done)
+    {
+        long[] got;
+        size_t sent, failed;
+        void step(size_t i)
+        {
+            if (i == ids.length)
+                return done(got, sent, failed);
+            immutable id = ids[i].type == JSONType.integer ? ids[i].integer : 0;
+            void next(long cid)
+            {
+                if (cid > 0)
+                    got ~= cid;
+                else
+                    failed++;
+                step(i + 1);
+            }
+            if (id >= remoteBase)
+                return next(id - remoteBase);
+            auto ph = index.get(id);
+            if (ph is null || !computer.connected)
+                return next(0);
+            immutable name = ph.path.baseName;
+            string hash = ph.hash;
+            if (hash.length == 0)
+            {
+                try
+                    hash = fileSha256(ph.path);
+                catch (Exception ex)
+                    return next(0);
+            }
+            void probe(void delegate(long) then)
+            {
+                computer.request("library.import", JSONValue(["name": JSONValue(name), "sha256": JSONValue(hash),
+                    "probe": JSONValue(true)]), (r, e) {
+                    then(e.type == JSONType.null_ && r.type == JSONType.object && "existed" in r
+                        && r["existed"].type == JSONType.true_ && "id" in r && r["id"].type == JSONType.integer
+                        ? r["id"].integer : 0);
+                });
+            }
+            probe((long cid) {
+                if (cid > 0 || !sendMissing)
+                    return next(cid);
+                // not there yet: send it, then ask again (a fresh import may not name its id)
+                upload(id, (r, e) {
+                    if (e.type != JSONType.null_)
+                        return next(0);
+                    sent++;
+                    if (r.type == JSONType.object && "id" in r && r["id"].type == JSONType.integer)
+                        return next(r["id"].integer);
+                    // a fresh import is indexed in the background: ask again for a while
+                    int tries = 20;   // × 500 ms
+                    void again()
+                    {
+                        probe((long cid2) {
+                            if (cid2 > 0 || --tries <= 0 || !computer.connected)
+                                return next(cid2);
+                            later(500, &again);
+                        });
+                    }
+                    again();
+                });
+            });
+        }
+        step(0);
+    }
+
+    // Run `dg` in `ms` milliseconds, on the Qt thread. One timer for all of them: a timer
+    // per call would stay alive (DSide roots a connected delegate until its sender dies).
+    private QTimer laterTimer;
+    private struct Later
+    {
+        MonoTime due;
+        void delegate() dg;
+    }
+    private Later[] laters;
+
+    private void later(int ms, void delegate() dg)
+    {
+        import core.time : msecs;
+
+        if (laterTimer is null)
+        {
+            laterTimer = new QTimer(cast(cppq.QObject) null);
+            laterTimer.setSingleShot(true);
+            laterTimer.connectTimeout(&runLaters);
+        }
+        laters ~= Later(MonoTime.currTime + ms.msecs, dg);
+        armLater();
+    }
+
+    private void armLater()
+    {
+        if (laters.length == 0)
+            return;
+        MonoTime first = laters[0].due;
+        foreach (l; laters)
+            if (l.due < first)
+                first = l.due;
+        immutable wait = (first - MonoTime.currTime).total!"msecs";
+        laterTimer.setInterval(wait > 0 ? cast(int) wait : 0);
+        laterTimer.start();
+    }
+
+    private void runLaters()
+    {
+        immutable now = MonoTime.currTime;
+        Later[] due, rest;
+        foreach (l; laters)
+            (l.due <= now ? due : rest) ~= l;
+        laters = rest;
+        foreach (l; due)
+            if (!closing)
+            {
+                try
+                    l.dg();
+                catch (Exception ex)
+                    plog("later: a callback failed: ", ex.msg);
+            }
+        armLater();
+    }
+
+    private static string fileSha256(string path)
+    {
+        import std.digest : toHexString, LetterCase;
+        import std.digest.sha : SHA256;
+        import std.stdio : File;
+
+        SHA256 h;
+        foreach (chunk; File(path, "rb").byChunk(1 << 20))
+            h.put(chunk);
+        return toHexString!(LetterCase.lower)(h.finish()).idup;
     }
 
     private void download(long id, ResultCb cb)

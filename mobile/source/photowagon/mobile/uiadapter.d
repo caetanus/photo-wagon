@@ -258,13 +258,33 @@ final class UiBridge : Bridge
             });
             return;
         }
+        if (method == "photo.shareMany")
+        {
+            inner.request(method, params, (JSONValue r, JSONValue e) {
+                if (e.type != JSONType.null_)
+                {
+                    cb(r, e);
+                    return;
+                }
+                string joined;
+                if (r.type == JSONType.object && "paths" in r && r["paths"].type == JSONType.array)
+                    foreach (pth; r["paths"].array)
+                        if (pth.type == JSONType.string)
+                            joined ~= (joined.length ? "\n" : "") ~ pth.str;
+                immutable mime = r.type == JSONType.object && "mime" in r && r["mime"].type == JSONType.string ? r["mime"].str : "*/*";
+                // MainActivity.shareImage takes several paths one per line (ACTION_SEND_MULTIPLE)
+                shareSheet(joined, mime);
+                cb(r, e);
+            });
+            return;
+        }
         inner.request(method, params, cb);
     }
 
     override void requestRaw(string method, string paramsJson, ResultCb cb)
     {
         // the share sheet is ours whichever way it is asked for (and the paging test's guard)
-        if (method == "photo.share" || method == "library.page" || method == "photo.neighbours")
+        if (method == "photo.share" || method == "photo.shareMany" || method == "library.page" || method == "photo.neighbours")
         {
             request(method, parseJSON(paramsJson), cb);
             return;

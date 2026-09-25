@@ -30,6 +30,7 @@ version (WithUi)
 @QObject class Library
 {
     Signal!() pageChanged;
+    Signal!() noticeChanged;
     Signal!() placesChanged;
     Signal!() tagsChanged;
     Signal!() keywordsChanged;
@@ -80,6 +81,9 @@ version (WithUi)
     /// {"connected":bool,"indexing":bool,"text":"…"}
     @Property("statusChanged")  string status = `{"connected":false,"indexing":false,"text":"starting…"}`;
     @Property("helloChanged")   string hello  = `{}`;
+    /// A short line the phone shows as a toast (the outcome of an action on a selection);
+    /// noticeChanged fires for every notice, even the same text twice.
+    @Property("noticeChanged")  string notice = "";
     /// Photo JSON with "prev"/"next" ids added, or "" when nothing is open.
     @Property("currentChanged") string current = "";
     /// PW_SHOT=/path.png makes Main.qml photograph itself there and quit (headless checks).
@@ -941,10 +945,92 @@ version (WithUi)
         params["id"] = albumId;
         params["photoIds"] = ids;
         client.request("album.addPhotos", params, (r, e) {
-            if (e.type != JSONType.null_) { report("album.addPhotos", e); return; }
+            if (e.type != JSONType.null_) { report("album.addPhotos", e); tell(errorText(e)); return; }
             loadAlbums();
             setStatus(true, indexing, "added to the album");
+            tell(albumOutcome(r, "Added to the album"));
         });
+    }
+
+    /// Phone: the outcome of an album action on photos (the phone core's counts, if any).
+    private static string albumOutcome(JSONValue r, string done)
+    {
+        import std.conv : to;
+
+        long num(string k) { return r.type == JSONType.object && k in r && r[k].type == JSONType.integer ? r[k].integer : 0; }
+        string s = done;
+        if (num("added") > 0)
+            s = done ~ " (" ~ num("added").to!string ~ (num("added") == 1 ? " photo)" : " photos)");
+        if (num("sent") > 0)
+            s ~= " · " ~ num("sent").to!string ~ " sent to the computer first";
+        if (num("failed") > 0)
+            s ~= " · " ~ num("failed").to!string ~ " couldn't be added";
+        return s;
+    }
+
+    private static string errorText(JSONValue e)
+    {
+        return e.type == JSONType.object && "message" in e && e["message"].type == JSONType.string
+            ? e["message"].str : "that didn't work";
+    }
+
+    private void tell(string text)
+    {
+        notice = text;
+        noticeChanged.emit();
+    }
+
+    /// Phone: several photos to the share sheet at once (a JSON array of ids).
+    @Slot void sharePhotos(string photoIdsJson)
+    {
+        JSONValue ids;
+        try
+            ids = parseJSON(photoIdsJson);
+        catch (JSONException)
+            return;
+        tell("Preparing " ~ (ids.type == JSONType.array && ids.array.length == 1 ? "the photo" : "the photos") ~ "…");
+        client.request("photo.shareMany", JSONValue(["ids": ids]), (r, e) {
+            if (e.type != JSONType.null_) { report("share", e); tell(errorText(e)); return; }
+            import std.conv : to;
+            if (r.type == JSONType.object && "missing" in r && r["missing"].type == JSONType.integer && r["missing"].integer > 0)
+                tell(r["missing"].integer.to!string ~ " of them aren't available right now and were left out");
+        });
+    }
+
+    /// Phone: send the chosen photos (a JSON array of the phone's own ids) to the computer,
+    /// one after another.
+    @Slot void sendPhotosToComputer(string photoIdsJson)
+    {
+        import std.conv : to;
+
+        JSONValue ids;
+        try
+            ids = parseJSON(photoIdsJson);
+        catch (JSONException)
+            return;
+        if (ids.type != JSONType.array || ids.array.length == 0)
+            return;
+        auto list = ids.array;
+        size_t ok, bad;
+        void step(size_t i)
+        {
+            if (i == list.length)
+            {
+                tell(bad == 0 ? (ok == 1 ? "Sent to the computer" : ok.to!string ~ " photos sent to the computer")
+                    : ok.to!string ~ " sent · " ~ bad.to!string ~ " couldn't be sent");
+                setStatus(client.connected(), indexing, "sent to the computer");
+                // the "on the computer" marks (sending does not change the listing's order)
+                reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));
+                return;
+            }
+            setStatus(true, indexing, "sending " ~ (i + 1).to!string ~ " of " ~ list.length.to!string ~ "…");
+            client.request("photo.upload", JSONValue(["id": list[i]]), (r, e) {
+                if (e.type == JSONType.null_) ok++; else bad++;
+                step(i + 1);
+            });
+        }
+        tell(list.length == 1 ? "Sending to the computer…" : "Sending " ~ list.length.to!string ~ " photos to the computer…");
+        step(0);
     }
 
     private void reload(int offset, int limit)
@@ -1387,6 +1473,12 @@ version (WithUi)
         });
     }
 
+    /// The albums again (a picker about to show them).
+    @Slot void refreshAlbums()
+    {
+        loadAlbums();
+    }
+
     @Slot void createAlbum(string name, string photoIdsJson)
     {
         JSONValue ids;
@@ -1398,8 +1490,9 @@ version (WithUi)
         params["name"] = name;
         params["photoIds"] = ids;
         client.request("album.create", params, (r, e) {
-            if (e.type != JSONType.null_) { report("album.create", e); return; }
+            if (e.type != JSONType.null_) { report("album.create", e); tell(errorText(e)); return; }
             loadAlbums();
+            tell(albumOutcome(r, "Album “" ~ name ~ "” created"));
         });
     }
 

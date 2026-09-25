@@ -19,6 +19,7 @@ Item {
     id: grid
     required property QtObject theme
     property bool ready: true   // the core (and so the listing) is up
+    Icons { id: icons }
     // what an empty listing means (a search that found nothing is not "no photos yet")
     property string emptyText: "No photos yet — allow access to your photos, or wait for the scan."
     property var page: ({ total: 0, offset: 0, items: [] })
@@ -62,6 +63,25 @@ Item {
     signal loadMore()
     signal open(int id)
 
+    // ---- selection: a long press starts it, taps then add / remove -------------------
+    // `selected` maps id → what the tile knew of it ({id, remote, sent}), kept even when a
+    // refresh moves the photo out of the loaded page; selVersion bumps on every change
+    // (bindings cannot see a JS object's keys change).
+    property var selected: ({})
+    property int selVersion: 0
+    property bool selectMode: false          // "Select" from the bar, before the first tap
+    readonly property int selectedCount: { selVersion; return Object.keys(selected).length }
+    readonly property bool selecting: selectMode || selectedCount > 0
+    function isSelected(pid) { selVersion; return selected[pid] !== undefined }
+    function toggleSelected(tile) {
+        if (selected[tile.pid] !== undefined) delete selected[tile.pid]
+        else selected[tile.pid] = { id: tile.pid, remote: tile.remote === true, sent: tile.sent === true }
+        selVersion++
+    }
+    function clearSelection() { selected = ({}); selectMode = false; selVersion++ }
+    function selectedIds() { return Object.keys(selected).map(k => Number(k)) }
+    function selectedItems() { return Object.keys(selected).map(k => selected[k]) }
+
     onPageChanged: { requesting = false; syncRows() }
     onColsChanged: rebuildRows()   // a rotation / width change re-chunks the rows
 
@@ -98,7 +118,7 @@ Item {
                 const tiles = []
                 for (let k = j; k < Math.min(j + cols, day.length); k++) {
                     const it = day[k]
-                    tiles.push({ pid: it.id, thumbUrl: it.thumbUrl || "", sent: it.sent === true,
+                    tiles.push({ pid: it.id, thumbUrl: it.thumbUrl || "", sent: it.sent === true, remote: it.remote === true,
                                  video: it.video === true, duration: it.duration || 0 })
                 }
                 out.push({ kind: "r", key: key + "#" + j, label: "", tiles: tiles })
@@ -213,7 +233,31 @@ Item {
                 color: Qt.rgba(1, 1, 1, 0.9)
                 border.color: Qt.rgba(0, 0, 0, 0.3); border.width: 1
             }
-            TapHandler { onTapped: grid.open(cell.modelData.pid) }
+            // selection: the photo steps back a little, a check sits on its corner
+            Rectangle {
+                anchors.fill: parent
+                visible: grid.isSelected(cell.modelData.pid)
+                color: Qt.rgba(0, 0, 0, 0.28)
+                border.color: theme.accent; border.width: 3
+            }
+            Rectangle {
+                visible: grid.selecting
+                anchors.left: parent.left; anchors.top: parent.top; anchors.margins: 6
+                width: 22; height: 22; radius: 11
+                readonly property bool on: grid.isSelected(cell.modelData.pid)
+                color: on ? theme.accent : Qt.rgba(0, 0, 0, 0.25)
+                border.color: "#ffffff"; border.width: 1.5
+                Image {
+                    visible: parent.on
+                    anchors.centerIn: parent
+                    source: icons.tint(icons.check, "#ffffff")
+                    sourceSize.width: 14; sourceSize.height: 14
+                }
+            }
+            TapHandler {
+                onTapped: grid.selecting ? grid.toggleSelected(cell.modelData) : grid.open(cell.modelData.pid)
+                onLongPressed: grid.toggleSelected(cell.modelData)
+            }
         }
 
         // a row: a day header, or up to `cols` tiles

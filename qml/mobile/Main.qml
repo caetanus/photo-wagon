@@ -13,6 +13,8 @@ ApplicationWindow {
     onClosing: (close) => {
         // the topmost first: the editor sits over the viewer
         if (editView.photo !== null) { close.accepted = false; editView.requestClose() }
+        else if (albumPicker.opened) { close.accepted = false; albumPicker.close() }
+        else if (root.current === null && root.tab === 0 && grid.selecting) { close.accepted = false; grid.clearSelection() }
         else if (root.current !== null) { close.accepted = false; library.closePhoto() }
         else if (dates.opened) { close.accepted = false; dates.close() }
         else if (root.tab !== 0) { close.accepted = false; root.tab = 0 }
@@ -84,6 +86,9 @@ ApplicationWindow {
     readonly property var facesData: JSON.parse(library.faces).faces
 
     property int tab: 0                 // 0 Photos · 1 Albums · 2 Computer
+    // a selection belongs to the view it was made in
+    onTabChanged: grid.clearSelection()
+    onFilterDataChanged: grid.clearSelection()
     property int filterYear: 0
     property int filterMonth: 0
     property int filterDay: 0
@@ -169,7 +174,45 @@ ApplicationWindow {
             color: theme.panel
             Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: theme.border }
         }
+        // a selection on the grid: how many, and what can be done with them
         RowLayout {
+            id: selectionBar
+            visible: root.tab === 0 && grid.selecting
+            anchors.fill: parent
+            anchors.leftMargin: 6; anchors.rightMargin: 8
+            spacing: 2
+            readonly property var items: { grid.selVersion; return grid.selectedItems() }
+            // the phone's own photos not on the computer yet
+            readonly property var unsent: items.filter(it => !it.remote && !it.sent)
+            BarButton { icon_: icons.close; onClicked: grid.clearSelection() }
+            Label {
+                text: grid.selectedCount === 0 ? "Select photos" : grid.selectedCount + " selected"
+                font.pixelSize: 19; font.weight: Font.Bold
+                color: theme.text; elide: Text.ElideRight
+                Layout.fillWidth: true
+            }
+            BarButton {
+                icon_: icons.share
+                enabled: grid.selectedCount > 0
+                onClicked: library.sharePhotos(JSON.stringify(grid.selectedIds()))
+            }
+            BarButton {
+                icon_: icons.album
+                enabled: grid.selectedCount > 0
+                onClicked: albumPicker.openFor(grid.selectedIds())
+            }
+            BarButton {
+                visible: root.paired
+                icon_: icons.upload
+                enabled: library.computerConnected && selectionBar.unsent.length > 0
+                onClicked: {
+                    library.sendPhotosToComputer(JSON.stringify(selectionBar.unsent.map(it => it.id)))
+                    grid.clearSelection()
+                }
+            }
+        }
+        RowLayout {
+            visible: !selectionBar.visible
             anchors.fill: parent
             anchors.leftMargin: 6; anchors.rightMargin: 14
             spacing: 6
@@ -195,6 +238,12 @@ ApplicationWindow {
                 running: root.status.indexing || root.syncData.active
                 visible: running; implicitWidth: 22; implicitHeight: 22
                 Material.accent: theme.accent
+            }
+            // pick several photos (a long press on one does the same)
+            BarButton {
+                visible: root.tab === 0 && (root.pageData.items || []).length > 0
+                icon_: icons.check
+                onClicked: grid.selectMode = true
             }
         }
     }
@@ -411,6 +460,54 @@ ApplicationWindow {
     }
 
     // ---- overlays ----------------------------------------------------------------
+    AlbumPickerDialog {
+        id: albumPicker
+        theme: root.theme
+        albums: root.albumsData
+        connected: library.computerConnected
+        onAboutToShow: if (library.computerConnected) library.refreshAlbums()
+        onPickAlbum: (albumId, ids) => { library.addToAlbum(albumId, JSON.stringify(ids)); grid.clearSelection() }
+        onNewAlbum: (name, ids) => { library.createAlbum(name, JSON.stringify(ids)); grid.clearSelection() }
+        onConnectComputer: { library.closePhoto(); root.openComputer() }
+    }
+
+    // the outcome of an action (added to an album, sent, shared): a short line at the bottom
+    Rectangle {
+        id: toast
+        parent: Overlay.overlay
+        z: 300
+        property string text: ""
+        visible: opacity > 0
+        opacity: 0
+        Behavior on opacity { NumberAnimation { duration: 160 } }
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 96
+        width: Math.min(toastLabel.implicitWidth + 32, parent.width - 32)
+        height: toastLabel.implicitHeight + 20
+        radius: 12
+        color: root.dark ? "#2b2d35" : "#2a2c33"
+        Label {
+            id: toastLabel
+            anchors.centerIn: parent
+            width: Math.min(implicitWidth, toast.parent ? toast.parent.width - 64 : 300)
+            text: toast.text
+            color: "#ffffff"; font.pixelSize: 13
+            wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
+        }
+        Timer { id: toastTimer; interval: 3500; onTriggered: toast.opacity = 0 }
+        Connections {
+            target: library
+            function onNoticeChanged() {
+                if (!library.notice.length) return
+                toast.text = library.notice
+                toast.opacity = 1
+                toastTimer.restart()
+            }
+        }
+    }
+
     PhotoFocusView {
         id: focusView
         parent: Overlay.overlay
@@ -423,6 +520,7 @@ ApplicationWindow {
         canSend: true
         facesOnHover: false
         sendEnabled: library.computerConnected
+        onAddToAlbum: (id) => albumPicker.openFor([id])
         faces: root.facesData
         people: root.peopleData
         onClosed: library.closePhoto()

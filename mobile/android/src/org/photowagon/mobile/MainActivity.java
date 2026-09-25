@@ -118,13 +118,24 @@ public class MainActivity extends QtActivity
         a.runOnUiThread(new Runnable() {
             public void run() {
                 try {
-                    File f = new File(path);
-                    Uri uri = FileProvider.getUriForFile(a, a.getPackageName() + ".qtprovider", f);
-                    Intent send = new Intent(Intent.ACTION_SEND);
+                    // one path, or several one per line (a selection): ACTION_SEND_MULTIPLE
+                    String[] paths = path.split("\n");
+                    java.util.ArrayList<Uri> uris = new java.util.ArrayList<Uri>();
+                    for (String p : paths)
+                        if (!p.isEmpty())
+                            uris.add(FileProvider.getUriForFile(a, a.getPackageName() + ".qtprovider", new File(p)));
+                    if (uris.isEmpty()) return;
+                    Intent send;
+                    if (uris.size() == 1) {
+                        send = new Intent(Intent.ACTION_SEND);
+                        send.putExtra(Intent.EXTRA_STREAM, uris.get(0));
+                    } else {
+                        send = new Intent(Intent.ACTION_SEND_MULTIPLE);
+                        send.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
+                    }
                     send.setType((mime == null || mime.isEmpty()) ? "image/*" : mime);
-                    send.putExtra(Intent.EXTRA_STREAM, uri);
                     send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    Intent chooser = Intent.createChooser(send, "Share photo");
+                    Intent chooser = Intent.createChooser(send, uris.size() == 1 ? "Share photo" : "Share " + uris.size() + " photos");
                     chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                     a.startActivity(chooser);
                 } catch (Exception e) {

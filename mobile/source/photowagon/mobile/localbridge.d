@@ -138,6 +138,9 @@ final class LocalBridge : Bridge
     private string[long] thumbCache;   // remote id → thumb URL (a file:// on disk, or a data: URL fallback)
     private string remoteThumbDir;     // desktop thumbs cached as JPEG files (EGL file→texture, low RAM, survive drops)
     private string remoteFileDir;      // originals downloaded from the computer (photo.download)
+    private string previewDir;         // the viewer's 2048 px previews of computer photos (a few, recent)
+    private enum keepPreviews = 24;
+    private bool closing;              // shutdown(): no new work, no more events
     private bool testDownloadDone;     // PW_TEST_DOWNLOAD fired once
 
     private Thread owner;   // the Qt thread: paging state and events live here
@@ -157,10 +160,25 @@ final class LocalBridge : Bridge
             // they survive the p2p link dropping.
             remoteThumbDir = buildPath(dirName(settingsDir), "remote-thumbs");
             remoteFileDir = buildPath(dirName(settingsDir), "remote-files");   // downloaded originals
+            previewDir = buildPath(dirName(settingsDir), "previews");         // the viewer's computer photos
             try
+            {
+                import photowagon.mobile.atomicfile : sweepTemporaries;
+
                 mkdirRecurse(remoteThumbDir);
+                sweepTemporaries(remoteThumbDir);
+            }
             catch (Exception)
                 remoteThumbDir = null;
+            try
+            {
+                import photowagon.mobile.atomicfile : sweepTemporaries;
+
+                mkdirRecurse(previewDir);
+                sweepTemporaries(previewDir);
+            }
+            catch (Exception)
+                previewDir = null;
         }
         prepPoll = new QTimer(cast(cppq.QObject) null);
         prepPoll.setInterval(50);
@@ -283,6 +301,8 @@ final class LocalBridge : Bridge
 
     private void emit(string ev, JSONValue data)
     {
+        if (closing)
+            return;
         remember(ev, data);
         if (onEvent)
             onEvent(ev, data);
@@ -377,6 +397,11 @@ final class LocalBridge : Bridge
 
     override void request(string method, JSONValue params, ResultCb cb)
     {
+        if (closing)
+        {
+            cb(JSONValue(null), error("shutting_down", "the phone core is shutting down"));
+            return;
+        }
         try
         {
             switch (method)
@@ -881,6 +906,95 @@ final class LocalBridge : Bridge
         return total;
     }
 
+    /// The viewer's preview of a computer photo as a file:// URL: decoded once, published
+    /// atomically under previews/ — the bytes never ride the UI's socket as a multi-megabyte
+    /// data: URL. The name carries a digest of the bytes, so a photo changed on the computer
+    /// (or another computer's photo with the same id) gets a new URL, never an image Qt
+    /// cached for the old one. "" when it cannot be written (the caller shows the thumbnail).
+    private string previewUrl(long rid, JSONValue f)
+    {
+        if (previewDir.length == 0)
+            return "";
+        try
+        {
+            import photowagon.mobile.atomicfile : writeAtomic;
+            import std.digest : toHexString, LetterCase;
+            import std.digest.sha : sha1Of;
+            import std.string : startsWith;
+
+            immutable mime = f["mime"].str;
+            auto bytes = Base64.decode(f["base64"].str);
+            immutable ext = mime.startsWith("image/png") ? ".png" : mime.startsWith("image/webp") ? ".webp" : ".jpg";
+            immutable tag = toHexString!(LetterCase.lower)(sha1Of(bytes))[0 .. 12].idup;
+            immutable fp = buildPath(previewDir, rid.to!string ~ "-" ~ tag ~ ext);
+            if (!fp.exists)
+                writeAtomic(fp, bytes);
+            else
+            {
+                import std.datetime.systime : Clock;
+                import std.file : setTimes;
+
+                try
+                    setTimes(fp, Clock.currTime, Clock.currTime);   // in use again: not old
+                catch (Exception)
+                {
+                }
+            }
+            prunePreviews();
+            return fileUrl(fp);
+        }
+        catch (Exception e)
+        {
+            plog("viewer: cannot write the preview: ", e.msg);
+            return "";
+        }
+    }
+
+    // By age, not count: a burst of late replies (photos opened and left quickly) must not
+    // delete the one the viewer is about to show. Old ones go; a hard cap bounds the disk.
+    private enum previewMaxAgeMinutes = 30;
+    private enum previewHardCap = 200;
+
+    private void prunePreviews()
+    {
+        import std.algorithm : sort;
+        import std.datetime.systime : Clock;
+        import std.file : dirEntries, SpanMode, remove, DirEntry;
+        import core.time : minutes;
+        import photowagon.mobile.atomicfile : isTemporary;
+
+        try
+        {
+            DirEntry[] files;
+            foreach (e; dirEntries(previewDir, SpanMode.shallow))
+                if (e.isFile && !isTemporary(e.name))
+                    files ~= e;
+            files.sort!((a, b) => a.timeLastModified > b.timeLastModified);
+            immutable cutoff = Clock.currTime - previewMaxAgeMinutes.minutes;
+            foreach (i, e; files)
+                if (i >= previewHardCap || (i >= keepPreviews && e.timeLastModified < cutoff))
+                    remove(e.name);
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    /// Stop taking work and stop talking (the first step of the core's shutdown): requests
+    /// are refused, events dropped, pending paging answered, the timers that start new work
+    /// (rescans, sync deadlines, face retries) stopped. Idempotent.
+    void shutdown()
+    {
+        if (closing)
+            return;
+        closing = true;   // first: a cancelled caller that asks again is refused, not admitted
+        supersedePaging("shutting_down", "the phone core is shutting down");
+        foreach (t; [rescan, prepPoll, hashPoll, syncDeadline, pageDeadline, facesRetryTimer])
+            if (t !is null)
+                t.stop();
+        onPageDeadline = null;
+    }
+
     /// Fills thumbUrl of remote items in `items` (data: URLs), then calls `done`.
     private void withRemoteThumbs(JSONValue[] items, void delegate() done)
     {
@@ -945,8 +1059,10 @@ final class LocalBridge : Bridge
                 return;
             try
             {
+                import photowagon.mobile.atomicfile : writeAtomic;
+
                 immutable fp = buildPath(remoteThumbDir, rid.to!string ~ ".jpg");
-                write(fp, jpeg);
+                writeAtomic(fp, jpeg);   // the grid may already be loading this file
                 thumbCache[rid] = fileUrl(fp);
                 got = true;
                 received++;
@@ -1075,8 +1191,11 @@ final class LocalBridge : Bridge
                 item["thumbUrl"] = *t;
             JSONValue fp = ["id": JSONValue(rid), "maxEdge": JSONValue(2048)];
             computer.request("photo.file", fp, (f, e2) {
+                string url;
                 if (e2.type == JSONType.null_)
-                    item["fileUrl"] = "data:" ~ f["mime"].str ~ ";base64," ~ f["base64"].str;
+                    url = previewUrl(rid, f);
+                if (url.length)
+                    item["fileUrl"] = url;
                 else if (item["thumbUrl"].type == JSONType.string)
                     item["fileUrl"] = item["thumbUrl"];
                 cb(item, JSONValue(null));
@@ -1290,7 +1409,7 @@ final class LocalBridge : Bridge
         {
             try
             {
-                if (on) write(autoSyncFile, "1");
+                if (on) { import photowagon.mobile.atomicfile : writeAtomic; writeAtomic(autoSyncFile, "1"); }
                 else if (autoSyncFile.exists) { import std.file : remove; remove(autoSyncFile); }
             }
             catch (Exception e)
@@ -1324,8 +1443,11 @@ final class LocalBridge : Bridge
         {
             try
             {
+                import photowagon.mobile.atomicfile : writeAtomic;
+
+                // MainActivity / SyncService parse this from Java, possibly mid-write
                 mkdirRecurse(syncStatusFile.dirName);
-                write(syncStatusFile, st.toString());
+                writeAtomic(syncStatusFile, st.toString());
             }
             catch (Exception e)
                 plog("sync: cannot write status: ", e.msg);

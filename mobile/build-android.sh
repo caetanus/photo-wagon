@@ -172,7 +172,7 @@ link() {
     "$LDC" -conf="$LDC_CONF" -mtriple=$TRIPLE -shared -relocation-model=pic -O -g -lowmem \
         -d-version=PhotoWagonMobile \
         -of="$OUT/lib${APP}_${ABI}.so" \
-        source/photowagon/mobile/main.d source/photowagon/mobile/coremain.d source/photowagon/mobile/corefactory.d source/photowagon/mobile/uiadapter.d source/photowagon/mobile/plog.d source/photowagon/mobile/tcpbridge.d \
+        source/photowagon/mobile/main.d source/photowagon/mobile/coremain.d source/photowagon/mobile/corefactory.d source/photowagon/mobile/corelock.d source/photowagon/mobile/atomicfile.d source/photowagon/mobile/uiadapter.d source/photowagon/mobile/plog.d source/photowagon/mobile/tcpbridge.d \
         source/photowagon/mobile/p2pbridge.d \
         source/photowagon/mobile/localbridge.d source/photowagon/mobile/phoneindex.d \
         ../source/photowagon/ui/backend.d ../source/photowagon/ui/transport.d ../source/photowagon/ui/bridge.d \

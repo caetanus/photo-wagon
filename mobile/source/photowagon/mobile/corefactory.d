@@ -37,13 +37,53 @@ string[] photoRoots()
     return [buildPath(base, "DCIM"), buildPath(base, "Pictures")];
 }
 
+/// Another process holds this data directory's core lock (see corelock.d).
+final class CoreLockedException : Exception
+{
+    string holder;   // its pid, as it wrote it (diagnostics)
+
+    this(string dataDir, string holder)
+    {
+        this.holder = holder;
+        super("another phone core (pid " ~ (holder.length ? holder : "?") ~ ") holds " ~ dataDir);
+    }
+}
+
 /// The core's parts. Whoever builds it keeps this alive for the life of the process.
 final class PhoneCore
 {
+    import core.time : Duration, MonoTime;
+
     string dataDir, cacheDir;
     P2pBridge computer;   // the link to the computer (libp2p or hyperswarm flavor)
     PhoneIndex index;     // the phone's own photos
     LocalBridge bridge;   // the line protocol the UI talks, served from the two above
+
+    private bool shutDown;
+    private bool flushed;
+
+    /// The one orderly shutdown (docs/phone-core-service.md, "Shutdown contract"): stop
+    /// taking work and talking, stop the index's producers, write the latest index and wait
+    /// for it — all within `budget`. Idempotent: a second call returns the first one's
+    /// result. True when the index is on disk. What a cut-short (or skipped) shutdown loses
+    /// is at most what changed since the last checkpoint: every save is atomic.
+    /// The data directory's lock is NOT given up here: other writers (the save worker after
+    /// a cut-short flush, the p2p thread's downloads and piece store) may still be running;
+    /// the process exit releases it, after the last of them.
+    bool shutdown(Duration budget)
+    {
+        if (shutDown)
+            return flushed;
+        shutDown = true;
+        immutable deadline = MonoTime.currTime + budget;
+        immutable t0 = MonoTime.currTime;
+        bridge.shutdown();
+        index.stopProducers();
+        flushed = index.flush(deadline);
+        plog("core: shutdown ", flushed ? "complete" : "cut short at the deadline", " in ",
+            (MonoTime.currTime - t0).total!"msecs", " ms");
+        return flushed;
+    }
 }
 
 /// Build the core. Needs the Qt application object (QStandardPaths) and runs on the Qt thread,
@@ -58,6 +98,13 @@ PhoneCore buildPhoneCore()
     auto roots = photoRoots();
     plog("phone: roots ", roots, " data ", core.dataDir, " cache ", core.cacheDir);
 
+    {
+        import photowagon.mobile.corelock : acquireCoreLock, coreLockHolder;
+
+        // one writer per data directory, before anything is read or written
+        if (!acquireCoreLock(core.dataDir))
+            throw new CoreLockedException(core.dataDir, coreLockHolder(core.dataDir));
+    }
     immutable settings = buildPath(core.dataDir, "settings");
     core.computer = new P2pBridge(settings);
     // PW_ENDPOINT=host:port overrides the saved computer (tests, first run).

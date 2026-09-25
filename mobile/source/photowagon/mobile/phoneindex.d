@@ -27,7 +27,7 @@ import std.file : exists, mkdirRecurse, readText, write, isDir;
 import std.json;
 import std.path : buildPath, baseName;
 import core.sync.mutex : Mutex;
-import core.time : MonoTime, seconds;
+import core.time : Duration, MonoTime, seconds;
 
 import photowagon.core.indexer.scan : Candidate, scanImages;
 import photowagon.core.library.calendar : dateRange, fileUrl, isoTime, localDate;
@@ -320,7 +320,15 @@ final class PhoneIndex
         cast(void) cacheDir;
         mkdirRecurse(dataDir);
         mkdirRecurse(thumbDir);
+        {
+            import photowagon.mobile.atomicfile : sweepTemporaries;
+
+            // what a killed process left half-written
+            if (immutable n = sweepTemporaries(thumbDir) + sweepTemporaries(dataDir))
+                plog("phone: removed ", n, " unfinished temporary file(s)");
+        }
         lock = new Mutex;
+        saver = new IndexSaver;
         load();
         version (Android)
             facesInit(dataDir);
@@ -850,6 +858,9 @@ final class PhoneIndex
         p.thumb = d.p.thumb;
         p.isVideo = d.p.isVideo;
         p.durationMs = d.p.durationMs;
+        // Without this the kind was never kept: afterWalk re-decodes every photo whose kind is
+        // empty, so EVERY start decoded the whole library again.
+        p.kind = d.p.kind;
         if (d.c.path !in byPath)
         {
             photos ~= p;
@@ -889,7 +900,15 @@ final class PhoneIndex
                 immutable vthumb = buildPath(thumbDir,
                     toHexString!(LetterCase.lower)(sha1Of(c.path ~ "@" ~ c.mtimeMs.to!string)).idup ~ ".jpg");
                 auto env = QJniEnvironment.getJniEnv();
-                immutable dur = pw_video_thumb(cast(void*) env, c.path.toStringz, vthumb.toStringz, 512);
+                long dur = -1;
+                {
+                    import photowagon.mobile.atomicfile : publishAtomic;
+
+                    cast(void) publishAtomic(vthumb, (string tmp) {
+                        dur = pw_video_thumb(cast(void*) env, c.path.toStringz, tmp.toStringz, 512);
+                        return dur >= 0;
+                    });
+                }
                 if (dur >= 0 && vthumb.exists)
                 {
                     p.thumb = vthumb;
@@ -967,8 +986,13 @@ final class PhoneIndex
         if (!reader.read(cast(QImage*) img.ptr()) || img.isNull())
             throw new Exception("decode failed");
         stats = statsFromQImage(img);
-        if (!img.save(dst, "JPEG".ptr, 84))
-            throw new Exception("cannot write thumbnail");
+        {
+            import photowagon.mobile.atomicfile : publishAtomic;
+
+            // atomically: the grid may be loading this very file (a re-decode after a change)
+            if (!publishAtomic(dst, (string tmp) => img.save(tmp, "JPEG".ptr, 84)))
+                throw new Exception("cannot write thumbnail");
+        }
     }
 
     /// The kind classifier's pixel statistics, from the decoded thumbnail. The colour
@@ -1091,6 +1115,8 @@ final class PhoneIndex
         int curY = -1, curM = -1, curD = -1;
         foreach (ref p; photos) // newest first, so groups are contiguous
         {
+            if (p.kind == "meme")
+                continue;   // the grid hides these (matches()): the date tree must agree
             auto d = localDate(p.takenTs);
             if (d[0] != curY)
             {
@@ -1271,7 +1297,9 @@ final class PhoneIndex
         saveTimer.start();
     }
 
-    /// Writes the index right away (the end of a scan; the app going away).
+    /// Writes the index right away (the end of a scan; a sync mark Android must not lose).
+    /// Hands a snapshot to the save worker and returns: every change made before this call
+    /// is on disk once the worker is done — see flush().
     void saveNow()
     {
         if (saveTimer !is null)
@@ -1279,52 +1307,167 @@ final class PhoneIndex
         timed("index.save", 30, { saveTimed(); });
     }
 
-    private shared bool saving;   // a background save is writing (skip overlapping saves)
+    private IndexSaver saver;
 
     private void saveTimed()
     {
-        if (!dirty || saving)
+        if (!dirty)
             return;
         // Serialising 3,000+ photos to a 1.3 MB JSON string on the Qt thread blocked it for
         // 70–200 ms per save. On this device that stall during startup made Android release the
         // window surface — the app went black while still alive. Snapshot the photos here (cheap:
-        // value types with immutable strings) and serialise + write on a worker thread, so the
-        // Qt thread stays responsive and the surface survives.
-        auto snapshot = photos.dup;
-        immutable nId = nextId;
-        immutable file = indexFile;
+        // value types with immutable strings) and serialise + write on the save worker, so the
+        // Qt thread stays responsive and the surface survives. A save already running does not
+        // skip this one (it used to, and a change made during a save then waited for the next
+        // change): the worker writes the latest snapshot after it.
         dirty = false;
-        saving = true;
-        import core.thread : Thread;
-        auto t = new Thread({
-            useCrashStack();
-            JSONValue[] arr;
-            arr.reserve(snapshot.length);
-            foreach (ref p; snapshot)
-                arr ~= JSONValue([
-                    "id": JSONValue(p.id), "path": JSONValue(p.path), "size": JSONValue(p.size),
-                    "mtime": JSONValue(p.mtimeMs), "takenTs": JSONValue(p.takenTs), "w": JSONValue(p.width),
-                    "h": JSONValue(p.height), "o": JSONValue(p.orientation),
-                    "thumb": p.thumb is null ? JSONValue(null) : JSONValue(p.thumb), "sent": JSONValue(p.sent),
-                    "declined": JSONValue(p.declined), "hash": p.hash.length ? JSONValue(p.hash) : JSONValue(null),
-                    "tries": JSONValue(p.tries), "video": JSONValue(p.isVideo), "duration": JSONValue(p.durationMs),
-                    "kind": p.kind.length ? JSONValue(p.kind) : JSONValue(null),
-                    "faces": facesToJson(p.faces), "facesScanned": JSONValue(p.facesScanned),
-                    "facesSent": JSONValue(p.facesSent), "facesGaveUp": JSONValue(p.facesGaveUp),
-                ]);
-            JSONValue j = ["nextId": JSONValue(nId), "photos": JSONValue(arr)];
-            try
+        saver.submit(IndexSnapshot(photos.dup, nextId, indexFile));
+    }
+
+    /// Stop producing changes: the decode pump, the face pump and pending timed saves (the
+    /// face worker finishes or drops the one photo it holds). Part of the core's shutdown.
+    void stopProducers()
+    {
+        if (pump !is null)
+            pump.stop();
+        if (facesPump !is null)
+            facesPump.stop();
+        if (saveTimer !is null)
+            saveTimer.stop();
+    }
+
+    /// Put the latest state on disk: write what is dirty and wait for the save worker, until
+    /// `deadline`. True when everything changed so far is written.
+    bool flush(MonoTime deadline)
+    {
+        if (dirty)
+            saveTimed();
+        return saver.flush(deadline);
+    }
+}
+
+private struct IndexSnapshot
+{
+    PhonePhoto[] photos;
+    long nextId;
+    string file;
+}
+
+/// The index's one writer: a thread of its own that writes the LATEST snapshot handed to it
+/// (older pending ones are superseded, never written), atomically. flush() waits for what
+/// was submitted so far, with a deadline.
+private final class IndexSaver
+{
+    import core.sync.condition : Condition;
+    import core.sync.mutex : Mutex;
+    import core.thread : Thread;
+
+    private Mutex m;
+    private Condition cv;
+    private IndexSnapshot pending;
+    private bool hasPending;
+    private ulong submitted, written;   // under m: submission counter, the last one on disk
+    private Thread thread;
+
+    this()
+    {
+        m = new Mutex;
+        cv = new Condition(m);
+        thread = new Thread(&run);
+        thread.name = "index-save";
+        thread.isDaemon = true;   // a hard exit need not wait for it; shutdown() flushes first
+        thread.start();
+    }
+
+    void submit(IndexSnapshot s)
+    {
+        synchronized (m)
+        {
+            pending = s;
+            hasPending = true;
+            ++submitted;
+            cv.notifyAll();
+        }
+    }
+
+    bool flush(MonoTime deadline)
+    {
+        synchronized (m)
+        {
+            immutable target = submitted;
+            while (written < target)
             {
-                write(file ~ ".tmp", j.toString());
-                import std.file : rename;
-                rename(file ~ ".tmp", file);
+                immutable left = deadline - MonoTime.currTime;
+                if (left <= Duration.zero)
+                    return false;
+                cv.wait(left);
             }
-            catch (Exception e)
-                plog("phone: cannot save index: ", e.msg);
-            saving = false;
-        });
-        t.name = "index-save";
-        t.isDaemon = true;
-        t.start();
+            return true;
+        }
+    }
+
+    private void run()
+    {
+        useCrashStack();
+        for (;;)
+        {
+            IndexSnapshot s;
+            ulong seq;
+            synchronized (m)
+            {
+                while (!hasPending)
+                    cv.wait();
+                s = pending;
+                pending = IndexSnapshot.init;
+                hasPending = false;
+                seq = submitted;
+            }
+            immutable ok = writeSnapshot(s);
+            synchronized (m)
+            {
+                if (ok)
+                    written = seq;
+                else if (!hasPending)
+                {
+                    // not on disk (full, I/O error): keep it and try again shortly, unless a
+                    // newer snapshot arrived meanwhile; flush() keeps reporting false until then
+                    pending = s;
+                    hasPending = true;
+                    cv.wait(2.seconds);
+                }
+                cv.notifyAll();
+            }
+        }
+    }
+
+    private static bool writeSnapshot(ref IndexSnapshot s)
+    {
+        import photowagon.mobile.atomicfile : writeAtomic;
+
+        JSONValue[] arr;
+        arr.reserve(s.photos.length);
+        foreach (ref p; s.photos)
+            arr ~= JSONValue([
+                "id": JSONValue(p.id), "path": JSONValue(p.path), "size": JSONValue(p.size),
+                "mtime": JSONValue(p.mtimeMs), "takenTs": JSONValue(p.takenTs), "w": JSONValue(p.width),
+                "h": JSONValue(p.height), "o": JSONValue(p.orientation),
+                "thumb": p.thumb is null ? JSONValue(null) : JSONValue(p.thumb), "sent": JSONValue(p.sent),
+                "declined": JSONValue(p.declined), "hash": p.hash.length ? JSONValue(p.hash) : JSONValue(null),
+                "tries": JSONValue(p.tries), "video": JSONValue(p.isVideo), "duration": JSONValue(p.durationMs),
+                "kind": p.kind.length ? JSONValue(p.kind) : JSONValue(null),
+                "faces": facesToJson(p.faces), "facesScanned": JSONValue(p.facesScanned),
+                "facesSent": JSONValue(p.facesSent), "facesGaveUp": JSONValue(p.facesGaveUp),
+            ]);
+        JSONValue j = ["nextId": JSONValue(s.nextId), "photos": JSONValue(arr)];
+        try
+        {
+            writeAtomic(s.file, j.toString());
+            return true;
+        }
+        catch (Exception e)
+        {
+            plog("phone: cannot save index: ", e.msg);
+            return false;
+        }
     }
 }

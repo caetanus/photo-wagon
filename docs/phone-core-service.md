@@ -205,7 +205,10 @@ mode, so removing them from `LocalBridge` does not break it.
   (whichever comes first sets an absolute deadline ~2 s out; the second call just waits
   on the first). In order: stop admitting RPCs, stop sync/network callbacks and the index
   producers (scan/decode/face pumps — the face worker finishes or abandons its one photo),
-  then join the running save and write the latest dirty snapshot, release the lock, exit.
+  then join the running save and write the latest dirty snapshot, exit. The data
+  directory's lock is held until the process exits (the kernel drops it after the last
+  writer — a save cut short by the deadline, the p2p thread — is gone), never released
+  early.
   The deadline bounds the NATIVE work, not only Java's wait: every step checks it, and on
   expiry the core skips straight to exit — the periodic atomic checkpoints (written
   temp-then-rename) are what a cut-short shutdown or a hard kill falls back to, so at most
@@ -232,6 +235,8 @@ mode, so removing them from `LocalBridge` does not break it.
    thumbnail completions also moved onto the Qt thread (they ran on the libp2p thread).
 4. **Process-safe persistence and files.** Single-writer lock, stale-socket rule, atomic
    thumbnail/preview publication, preview files, owned save worker + synchronous flush.
+   Done (`corelock.d`, `atomicfile.d`, `IndexSaver`, `PhoneCore.shutdown`); the
+   stale-socket rule lands with the socket (stage 5).
 5. **Framing and transport.** `CoreServer`/`CoreClient` over QLocalServer/QLocalSocket with
    the limits above; tests for fragmented/coalesced frames, malformed envelopes, duplicate
    ids, limits, backpressure, reentrancy.

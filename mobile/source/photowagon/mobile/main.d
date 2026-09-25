@@ -25,7 +25,7 @@ import std.string : split, indexOf;
 import std.file : exists;
 
 import photowagon.ui.backend : Library;
-import photowagon.mobile.corefactory : buildPhoneCore, PhoneCore;
+import photowagon.mobile.corefactory : buildPhoneCore, PhoneCore, CoreLockedException;
 import photowagon.mobile.uiadapter : UiBridge;
 // static: coremain mixes in its own createApp (QCoreApplication); keep it out of this scope
 static import photowagon.mobile.coremain;
@@ -149,10 +149,30 @@ int main()
     // The core (index, computer link, local bridge) — built here in the UI process for now;
     // the UI talks to it only through UiBridge, which also does the Activity-bound parts
     // (share sheet, permission prompt). See docs/phone-core-service.md.
-    phoneCore = buildPhoneCore();
+    try
+        phoneCore = buildPhoneCore();
+    catch (CoreLockedException e)
+    {
+        // Two cores on one data directory would interleave their writes. Stage 7 turns
+        // this into "connect to the running one"; until then, say so and leave.
+        import core.stdc.stdlib : exit;
+
+        plog("phone: ", e.msg, " — not starting a second one");
+        exit(3);
+    }
     lib.start(new UiBridge(phoneCore.bridge));
+    // an orderly quit (the desktop window closed, QCoreApplication.quit) flushes the index;
+    // SIGTERM/SIGINT keep their immediate exit (the atomic checkpoints are the fallback)
+    QCoreApplication.instance().connectAboutToQuit({
+        import core.time : seconds;
+
+        phoneCore.shutdown(2.seconds);
+    });
     version (Android) {} else
+    {
         testViewer(lib);
+        testQuit();
+    }
 
     // The binding collects unparented D-owned QObjects. Keep the engine owned by
     // the application throughout exec(), after this local's last use: collecting
@@ -188,7 +208,26 @@ version (Android) {} else
 {
     import qt.quick.qtimer : QTimer;
 
-    private __gshared QTimer viewerOpen, viewerReport, viewerRelist;
+    private __gshared QTimer viewerOpen, viewerReport, viewerRelist, quitTimer;
+
+    // PW_TEST_QUIT=<seconds>: quit through the orderly path after that long (the shutdown
+    // test: the index on disk must hold what was indexed until then).
+    private void testQuit()
+    {
+        import std.conv : to;
+
+        immutable s = environment.get("PW_TEST_QUIT", "");
+        if (s.length == 0)
+            return;
+        quitTimer = new QTimer(cast(cppq.QObject) null);
+        quitTimer.setSingleShot(true);
+        quitTimer.setInterval(s.to!int * 1000);
+        quitTimer.connectTimeout({
+            plog("ui: [test] quitting: ", phoneCore.index.length, " photos indexed");
+            QCoreApplication.quit();
+        });
+        quitTimer.start();
+    }
 
     // PW_TEST_VIEWER=<photo id>:<seconds>[:<ms>]: open that photo in the viewer after
     // <seconds>, and log what the viewer shows 20 s later (its prev/next) — with
@@ -231,7 +270,9 @@ version (Android) {} else
             auto cur = lib.current.length ? parseJSON(lib.current) : parseJSON("{}");
             plog("ui: [test] viewer shows ", "id" in cur ? cur["id"].toString() : "nothing",
                 " prev ", "prev" in cur ? cur["prev"].toString() : "-",
-                " next ", "next" in cur ? cur["next"].toString() : "-");
+                " next ", "next" in cur ? cur["next"].toString() : "-",
+                " file ", "fileUrl" in cur && cur["fileUrl"].type == JSONType.string
+                    ? cur["fileUrl"].str[0 .. cur["fileUrl"].str.length < 48 ? $ : 48] : "-");
         });
         viewerOpen.start();
     }

@@ -179,6 +179,7 @@ version (WithUi)
     private string fKeyword;
     private long fSimilar;   // photos that look like this one (photo.similar), instead of library.page
     private string fSemantic;   // free-text search (search.combined: file/OCR + CLIP), instead of library.page
+    private bool searchIsNew;   // fSemantic was just submitted: its first reload shows "searching"
     private long lastTimelineHns;   // Clock.currStdTime of the last library.changed refresh (coalescing)
     /// Screenshots and memes stay out of the library timeline (they have their own
     /// views under Media Types); an album, a search or an explicit kind shows everything.
@@ -368,9 +369,10 @@ version (WithUi)
         import std.string : strip;
         clearFilters();
         fSemantic = q.strip();
+        searchIsNew = fSemantic.length > 0;
+        publishFilter();   // the query is the view's title (and what "back" clears)
         if (!fSemantic.length)
         {
-            publishFilter();
             reload(0, pageLimit);
             loadDates();
             return;
@@ -955,15 +957,43 @@ version (WithUi)
             sp["q"] = fSemantic;
             sp["limit"] = 200;
             immutable asked = fSemantic;
-            client.request("search.combined", sp, (r, e) {
-                if (e.type != JSONType.null_) { report("search.combined", e); return; }
-                if (fSemantic != asked) return;   // a newer query is in flight
+            // until the answer to a NEW query: an honest "searching", not the previous query's
+            // outcome (a background refresh of the same query keeps its results on screen)
+            if (searchIsNew)
+            {
+                searchIsNew = false;
                 items.length = 0;
-                foreach (it; r["items"].array)
-                    items ~= it;
+                JSONValue pending = JSONValue.emptyObject;
+                pending["total"] = 0;
+                pending["offset"] = 0;
+                pending["items"] = JSONValue.emptyArray;
+                pending["searching"] = true;
+                page = pending.toString();
+                pageChanged.emit();
+            }
+            client.request("search.combined", sp, (r, e) {
+                if (fSemantic != asked) return;   // a newer query is in flight
+                if (isSuperseded(e)) return;      // a newer listing took the phone core's place
+                items.length = 0;
                 JSONValue pg = JSONValue.emptyObject;
+                if (e.type != JSONType.null_)
+                {
+                    report("search.combined", e);
+                    pg["error"] = "message" in e ? e["message"] : JSONValue("search failed");
+                }
+                else
+                {
+                    foreach (it; r["items"].array)
+                        items ~= it;
+                    // the phone says where it searched: the computer's library, or only its
+                    // own file names (offline)
+                    if ("scope" in r)
+                        pg["scope"] = r["scope"];
+                    if ("reason" in r)
+                        pg["reason"] = r["reason"];
+                }
                 pg["total"] = items.length;
-                pg["offset"] = 0;
+                pg["offset"] = items.length;   // the whole result: nothing more to load
                 pg["items"] = JSONValue(items);
                 page = pg.toString();
                 pageChanged.emit();
@@ -986,7 +1016,7 @@ version (WithUi)
                     items ~= it;
                 JSONValue pg = JSONValue.emptyObject;
                 pg["total"] = items.length;
-                pg["offset"] = 0;
+                pg["offset"] = items.length;   // the whole result: nothing more to load
                 pg["items"] = JSONValue(items);
                 page = pg.toString();
                 pageChanged.emit();

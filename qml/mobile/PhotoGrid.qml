@@ -19,6 +19,8 @@ Item {
     id: grid
     required property QtObject theme
     property bool ready: true   // the core (and so the listing) is up
+    // what an empty listing means (a search that found nothing is not "no photos yet")
+    property string emptyText: "No photos yet — allow access to your photos, or wait for the scan."
     property var page: ({ total: 0, offset: 0, items: [] })
     readonly property bool hasMore: page.offset < page.total
     property bool requesting: false
@@ -265,7 +267,7 @@ Item {
         visible: rows.count === 0
         // before the phone core has answered, "no photos" would be a lie
         text: !grid.ready ? "Loading your photos…"
-            : grid.page.total === 0 ? "No photos yet — allow access to your photos, or wait for the scan." : "Loading…"
+            : grid.page.total === 0 ? grid.emptyText : "Loading…"
         color: theme.muted; font.pixelSize: 15
         width: parent.width - 48; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap
     }

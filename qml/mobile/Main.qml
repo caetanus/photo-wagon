@@ -285,6 +285,31 @@ ApplicationWindow {
                     }
                 }
             }
+            // a search says where it looked: offline, only this phone's file names
+            Rectangle {
+                visible: !!root.filterData.search && (root.pageData.scope === "phone" || !!root.pageData.error)
+                Layout.fillWidth: true
+                Layout.leftMargin: 10; Layout.rightMargin: 10
+                Layout.topMargin: 6; Layout.bottomMargin: 4
+                radius: 10
+                color: theme.panelAlt
+                border.color: theme.border; border.width: 1
+                implicitHeight: searchNote.implicitHeight + 16
+                Label {
+                    id: searchNote
+                    anchors.fill: parent; anchors.margins: 8; anchors.leftMargin: 12
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: 12; color: theme.muted
+                    text: root.pageData.error
+                          ? "The search didn't work: " + root.pageData.error
+                          : root.pageData.reason === "timeout" || root.pageData.reason === "failed"
+                            ? "The computer didn't answer this search" + (root.pageData.reason === "timeout" ? " in time" : "") + " — only this phone's file and folder names were searched."
+                          : root.paired
+                            ? "Computer offline — only this phone's file and folder names were searched. What's in the photos is searched on the computer."
+                            : "Only this phone's file and folder names were searched. Connect your computer to search by what's in the photos."
+                }
+                TapHandler { enabled: !root.paired; onTapped: root.openComputer() }
+            }
             PhotoGrid {
                 id: grid
                 Layout.fillWidth: true
@@ -292,6 +317,12 @@ ApplicationWindow {
                 theme: root.theme
                 page: root.pageData
                 ready: root.status.connected
+                emptyText: root.pageData.searching ? "Searching…"
+                           : root.filterData.search
+                           ? "Nothing matches “" + root.filterData.search + "”."
+                           : root.filterData.albumId || root.filterData.personId || root.filterYear !== 0
+                             ? "No photos here."
+                             : "No photos yet — allow access to your photos, or wait for the scan."
                 onLoadMore: library.loadPage(root.pageData.offset, root.pageSize, root.filterYear, root.filterMonth, root.filterDay)
                 onOpen: (id) => library.openPhoto(id)
             }
@@ -302,7 +333,7 @@ ApplicationWindow {
             theme: root.theme
             people: root.peopleData
             connected: library.computerConnected
-            onSearch: (q) => { library.filterSearch(q); root.tab = 0 }
+            onSearch: (q) => { root.filterYear = 0; root.filterMonth = 0; root.filterDay = 0; library.filterSearch(q); root.tab = 0 }
             onOpenPerson: (id) => { library.filterPerson(id); root.tab = 0 }
             onBrowseDates: dates.open()
         }
@@ -426,6 +457,9 @@ ApplicationWindow {
             selectedYear: root.filterYear
             selectedMonth: root.filterMonth
             selectedDay: root.filterDay
+            scopeName: root.filterData.albumId ? "“" + root.albumName(root.filterData.albumId) + "”"
+                     : root.filterData.personId ? root.personName(root.filterData.personId) + "'s photos" : ""
+            searching: !!root.filterData.search
             onPicked: (y, m, d) => root.applyFilter(y, m, d)
         }
     }

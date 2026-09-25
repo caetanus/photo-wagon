@@ -48,7 +48,11 @@ Item {
                         color: theme.text
                         background: null
                         font.pixelSize: 14
-                        onAccepted: if (text.trim().length) view.search(text.trim())
+                        onAccepted: if (text.trim().length) {
+                            Qt.inputMethod.hide()   // the results take the whole screen
+                            focus = false
+                            view.search(text.trim())
+                        }
                     }
                     ToolButton {
                         visible: q.text.length > 0
@@ -76,7 +80,7 @@ Item {
                         wrapMode: Text.WordWrap
                         font.pixelSize: 12
                         color: theme.muted
-                        text: "Desktop offline — connect your computer to search by meaning and text. People and dates still work here."
+                        text: "Computer offline — search looks only at this phone's file and folder names. Connect your computer to search by what's in the photos."
                     }
                 }
             }

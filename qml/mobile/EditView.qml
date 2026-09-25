@@ -551,6 +551,8 @@ Rectangle {
         modal: true
         Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.62) }
         title: "Discard your edits?"
+        // a fixed width: a wrapping label sized by the dialog sized by the label loops
+        width: Math.min(360, (parent ? parent.width : 360) - 48)
         standardButtons: Dialog.Discard | Dialog.Cancel
         Material.background: theme.panel
         onDiscarded: { discardDialog.close(); editor.cancelled() }

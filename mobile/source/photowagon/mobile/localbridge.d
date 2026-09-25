@@ -125,6 +125,7 @@ final class LocalBridge : Bridge
         JSONValue params;
         ResultCb cb;
         bool neighbours;   // photo.neighbours: may page further until it finds the photo
+        bool search;       // search.combined: a fixed result that becomes the listing
     }
     private QueuedPage[] pageQueue;
     private PageOp curOp;
@@ -418,6 +419,10 @@ final class LocalBridge : Bridge
             {
             case "library.page":    enqueuePage(params, cb, false); return;
             case "photo.neighbours": enqueuePage(params, cb, true); return;
+            case "search.combined": supersedePaging("superseded", "a new listing started",
+                    [QueuedPage(params, cb, false, true)]);
+                pumpPages();
+                return;
             case "library.dates":   timed("library.dates", 30, { dates(cb); }); return;
             case "photo.get":       get(num(params, "id"), cb); return;
             case "photo.upload":    upload(num(params, "id"), cb); return;
@@ -571,7 +576,9 @@ final class LocalBridge : Bridge
             curOp = op;
             try
             {
-                if (q.neighbours)
+                if (q.search)
+                    search(q.params, op);
+                else if (q.neighbours)
                     neighbours(q.params, op);
                 else
                     page(q.params, op);
@@ -763,19 +770,7 @@ final class LocalBridge : Bridge
             }
             // The computer gets pageDeadlineMs to answer; after that this listing goes on
             // without it (remoteDone) and a late reply is dropped.
-            if (pageDeadline is null)
-            {
-                pageDeadline = new QTimer(cast(cppq.QObject) null);
-                pageDeadline.setSingleShot(true);
-                pageDeadline.connectTimeout({
-                    if (auto dg = onPageDeadline)
-                    {
-                        onPageDeadline = null;
-                        dg();
-                    }
-                });
-            }
-            onPageDeadline = () {
+            armPageDeadline(() {
                 if (settled || op.done || curOp !is op)
                     return;
                 settled = true;
@@ -785,9 +780,7 @@ final class LocalBridge : Bridge
                     merge();
                 catch (Exception ex)
                     finishOp(op, JSONValue(null), error("internal", ex.msg));
-            };
-            pageDeadline.setInterval(pageDeadlineMs);
-            pageDeadline.start();
+            });
             testDelayed(() {
                 computer.request("library.page", params, (r, e) {
                     // superseded (a new listing or session), timed out, or already answered:
@@ -832,6 +825,122 @@ final class LocalBridge : Bridge
             return;
         }
         then(mergeServed(limit));
+    }
+
+    /// Run `dg` if the computer has not answered the current operation within
+    /// pageDeadlineMs (finishOp and a new listing disarm it).
+    private void armPageDeadline(void delegate() dg)
+    {
+        if (pageDeadline is null)
+        {
+            pageDeadline = new QTimer(cast(cppq.QObject) null);
+            pageDeadline.setSingleShot(true);
+            pageDeadline.connectTimeout({
+                if (auto d = onPageDeadline)
+                {
+                    onPageDeadline = null;
+                    d();
+                }
+            });
+        }
+        onPageDeadline = dg;
+        pageDeadline.setInterval(pageDeadlineMs);
+        pageDeadline.start();
+    }
+
+    /// search.combined on the phone. Linked: the computer's blended search (meaning, text in
+    /// the pictures, file names) — a match that is also on this phone shows as the phone's
+    /// own photo — followed by this phone's file names that match. Offline (or no answer in
+    /// time): the phone's file and folder names only, and the answer says so (`scope`). The
+    /// result becomes the current listing, so the viewer's arrows walk the results.
+    private void search(JSONValue p, PageOp op)
+    {
+        import std.path : dirName;
+        import std.string : strip, toLower, indexOf;
+
+        immutable q = p.type == JSONType.object && "q" in p && p["q"].type == JSONType.string
+            ? p["q"].str.strip : "";
+        immutable limit = cast(size_t) num(p, "limit", 200);
+        resetPaging(JSONValue.emptyObject);
+        remoteOnly = true;   // a fixed result: nothing to page further
+        remoteDone = true;
+        immutable gen = pageGen;
+
+        JSONValue[string] byKey, byHash;   // this phone's photos, for the computer's matches
+        JSONValue[] local;                 // this phone's file / folder names that match
+        immutable needle = q.toLower;
+        foreach (ref ph; index.page(PhoneFilter.init, 0, long.max))
+        {
+            auto j = ph.toJson();
+            byKey[ph.path.baseName ~ "|" ~ ph.size.to!string] = j;
+            if (ph.hash.length)
+                byHash[ph.hash] = j;
+            if (needle.length && (ph.path.dirName.baseName ~ "/" ~ ph.path.baseName).toLower.indexOf(needle) >= 0)
+                local ~= j;
+        }
+
+        plog("search: ", local.length, " of this phone's ", byKey.length, " photos match by name");
+        // scope: where it looked; reason (scope "phone" only): why the computer was not in it
+        void answer(JSONValue[] found, string scope_, string reason = "")
+        {
+            if (op.done || pageGen != gen)
+                return;
+            bool[long] seen;
+            JSONValue[] out_;
+            foreach (it; found)
+                if (out_.length < limit && it["id"].integer !in seen)
+                {
+                    seen[it["id"].integer] = true;
+                    out_ ~= it;
+                }
+            served = out_.dup;
+            withRemoteThumbs(out_, () {
+                immutable n = out_.length;
+                finishOp(op, JSONValue(["total": JSONValue(n), "offset": JSONValue(n),
+                    "items": JSONValue(out_), "scope": JSONValue(scope_), "reason": JSONValue(reason)]), JSONValue(null));
+            });
+        }
+
+        if (!computer.connected || q.length == 0)
+            return answer(local, "phone", computer.connected ? "" : "offline");
+        bool settled;
+        armPageDeadline(() {
+            if (settled || op.done || curOp !is op)
+                return;
+            settled = true;
+            plog("search: the computer did not answer in ", pageDeadlineMs / 1000, " s — this phone's file names only");
+            answer(local, "phone", "timeout");
+        });
+        computer.request("search.combined", JSONValue(["q": JSONValue(q), "limit": JSONValue(limit)]), (r, e) {
+            if (settled || op.done || curOp !is op)
+                return;
+            settled = true;
+            pageDeadline.stop();
+            onPageDeadline = null;
+            try
+            {
+                if (e.type != JSONType.null_)
+                {
+                    plog("search: the computer could not search: ", e.toString());
+                    return answer(local, "phone", "failed");
+                }
+                JSONValue[] found;
+                foreach (it; r["items"].array)
+                {
+                    immutable key = (it["path"].type == JSONType.string ? it["path"].str.baseName : "") ~ "|" ~ it["size"].integer.to!string;
+                    immutable hash = "hash" in it && it["hash"].type == JSONType.string ? it["hash"].str : "";
+                    if (hash.length && hash in byHash)
+                        found ~= byHash[hash];
+                    else if (auto l = key in byKey)
+                        found ~= *l;
+                    else
+                        found ~= toPhoneItem(it);
+                }
+                answer(found ~ local, "computer");
+            }
+            catch (Exception ex)   // a malformed reply: answer, never leave the queue stuck
+                finishOp(op, JSONValue(null), error("internal", ex.msg));
+        });
     }
 
     // PW_TEST_PAGE_DELAY=<max ms>: the computer's page requests go out after a random delay,

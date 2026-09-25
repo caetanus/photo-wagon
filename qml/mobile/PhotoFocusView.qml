@@ -206,9 +206,24 @@ Rectangle {
             onWheel: (e) => { if (image.scale < 1.02) viewer.resetZoom() }
         }
         DragHandler {
-            // pan only while zoomed; when not zoomed the outer swipe navigates
+            // pan only while zoomed; when not zoomed the swipe below navigates
             enabled: viewer.zoomed
             target: image
+        }
+        // Swipe left / right for the neighbours, on the photo itself: it gets the touch
+        // first — the one on the viewer below never saw it (the full-screen MouseArea and
+        // the photo's own handlers took the press), so swiping did nothing.
+        DragHandler {
+            target: null
+            enabled: !viewer.zoomed
+            xAxis.enabled: true
+            yAxis.enabled: false
+            // measured from where the finger went DOWN to its last position: a quick flick
+            // arrives in a few events, and activeTranslation (counted from activation, past
+            // the drag threshold) was then 0 — the swipe did nothing
+            property real lastX
+            onCentroidChanged: if (active) lastX = centroid.scenePosition.x
+            onActiveChanged: if (!active) viewer.swiped(lastX - centroid.scenePressPosition.x)
         }
         TapHandler {
             // exclusive: singleTapped waits out the double-tap interval, so a double tap is
@@ -266,6 +281,14 @@ Rectangle {
                 MouseArea {
                     anchors.fill: parent
                     onClicked: { mp.priming = false; mp.playbackState === MediaPlayer.PlayingState ? mp.pause() : mp.play() }
+                }
+                DragHandler {   // a video swipes to its neighbours like a photo
+                    target: null
+                    xAxis.enabled: true
+                    yAxis.enabled: false
+                    property real lastX
+                    onCentroidChanged: if (active) lastX = centroid.scenePosition.x
+                    onActiveChanged: if (!active) viewer.swiped(lastX - centroid.scenePressPosition.x)
                 }
                 Rectangle {   // big play/pause
                     anchors.centerIn: parent
@@ -494,15 +517,19 @@ Rectangle {
         MenuItem { text: "Stop casting"; onTriggered: library.castStop() }
     }
     // swipe left / right for the neighbours — off while zoomed, where a drag pans instead
+    // (the handlers on the photo and the video call this; this one catches the empty bands)
+    function swiped(dx) {
+        if (dx < -60 && viewer.photo && viewer.photo.next !== null) library.next()
+        else if (dx > 60 && viewer.photo && viewer.photo.prev !== null) library.prev()
+    }
     DragHandler {
         target: null
         enabled: !viewer.zoomed
         xAxis.enabled: true
         yAxis.enabled: false
-        onActiveChanged: if (!active) {
-            if (translation.x < -60 && viewer.photo && viewer.photo.next !== null) library.next()
-            else if (translation.x > 60 && viewer.photo && viewer.photo.prev !== null) library.prev()
-        }
+        property real lastX
+        onCentroidChanged: if (active) lastX = centroid.scenePosition.x
+        onActiveChanged: if (!active) viewer.swiped(lastX - centroid.scenePressPosition.x)
     }
 
     // Bottom filmstrip: scrub the surrounding photos, the current one ringed; tap to jump.

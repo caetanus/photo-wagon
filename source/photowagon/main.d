@@ -25,6 +25,7 @@ int main(string[] args)
 		return 2;
 	}
 	setLogLevel(cfg.verbose ? LogLevel.diagnostic : LogLevel.info);
+	logToFile(cfg);
 	if (cfg.exitWithParent)
 	{
 		// a core started by a test or a script must not outlive it: a dozen forgotten
@@ -91,6 +92,38 @@ int main(string[] args)
 		}
 	}
 	return runCore(cfg);
+}
+
+/// The log also goes to <dataDir>/photo-wagon.log: started from a launcher (or from a
+/// terminal that is gone) the desktop's p2p story — relay reservations, the DHT
+/// rendezvous it published, who connected — was otherwise unreadable after the fact. The
+/// file is rotated to .1 when it passes 8 MiB at start.
+private void logToFile(ref Config cfg) nothrow
+{
+	try
+	{
+		import std.file : exists, getSize, rename, mkdirRecurse;
+		import std.path : buildPath;
+		import vibe.core.log : FileLogger, registerLogger;
+
+		if (cfg.dataDir.length == 0)
+			return;
+		mkdirRecurse(cfg.dataDir);
+		immutable path = buildPath(cfg.dataDir, "photo-wagon.log");
+		if (path.exists && getSize(path) > 8 * 1024 * 1024)
+			rename(path, path ~ ".1");
+		auto fl = new FileLogger(path);
+		fl.minLevel = cfg.verbose ? LogLevel.diagnostic : LogLevel.info;
+		registerLogger(cast(shared) fl);
+	}
+	catch (Exception e)
+	{
+		try
+			stderr.writeln("log: cannot write the log file: ", e.msg);
+		catch (Exception)
+		{
+		}
+	}
 }
 
 /// SIGTERM / SIGINT end the process. vibe-core installs handlers for both on the

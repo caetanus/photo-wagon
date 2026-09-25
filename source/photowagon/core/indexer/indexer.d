@@ -97,12 +97,19 @@ final class Indexer
 	/// Index a SINGLE file (a photo the phone just sent), without re-scanning its whole
 	/// folder — so an import no longer logs "skipped N" for everything already there and
 	/// does not walk the growing imports/ directory on every photo.
-	void indexOne(long rootId, string path)
+	/// `then` runs once the file is in the library (or the import failed), on the core thread —
+	/// indexing is asynchronous, so a caller that needs the new row (faces a device sent with
+	/// the photo) must wait for it there.
+	void indexOne(long rootId, string path, void delegate() then = null)
 	{
 		import std.file : exists, getSize, timeLastModified;
 
 		if (!path.exists)
+		{
+			if (then)
+				then();
 			return;
+		}
 		import photowagon.core.indexer.scan : isVideoPath;
 
 		Candidate c;
@@ -114,7 +121,11 @@ final class Indexer
 			c.mtimeMs = timeLastModified(path).toUnixTime!long * 1000;
 		}
 		catch (Exception)
+		{
+			if (then)
+				then();
 			return;
+		}
 		lastStart = MonoTime.currTime;
 		fibers.spawn(() {
 			jobs.pass(Priority.indexer, "importing " ~ path, {
@@ -126,6 +137,11 @@ final class Indexer
 				catch (Exception e)
 					logWarn("indexer: import %s: %s", path, e.msg);
 			});
+			if (then)
+				try
+					then();
+				catch (Exception e)
+					logWarn("indexer: after import %s: %s", path, e.msg);
 			if (onDone)
 				onDone();
 		});

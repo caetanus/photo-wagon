@@ -56,6 +56,22 @@ final class FaceRepo
 		return [s.isNull(0) ? 0 : s.getLong(0), s.getLong(1)];
 	}
 
+	/// Whether this photo is one the face pass looks at at all (a photo — not a screenshot or
+	/// a meme — with a file): the same rule as unscannedPhotos().
+	bool isFaceEligible(long photoId)
+	{
+		auto s = db.prepare("SELECT 1 FROM photos WHERE id = ? AND path IS NOT NULL AND coalesce(kind, 'photo') = 'photo'");
+		s.bind(1, photoId);
+		return s.step();
+	}
+
+	bool isScanned(long photoId)
+	{
+		auto s = db.prepare("SELECT faces_scanned FROM photos WHERE id = ?");
+		s.bind(1, photoId);
+		return s.step() && !s.isNull(0) && s.getLong(0) != 0;
+	}
+
 	void markScanned(long photoId)
 	{
 		auto s = db.prepare("UPDATE photos SET faces_scanned = 1 WHERE id = ?");

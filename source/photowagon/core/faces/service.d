@@ -358,6 +358,24 @@ final class FaceService
 		releaseVision();
 	}
 
+	// Photos being scanned or ingested right now. Both paths run as fibers on the core thread
+	// and both yield (detection, crops): without a claim a device's faces and the local scan
+	// could store detections for the same photo twice.
+	private bool[long] claimed;
+
+	private bool claim(long id)
+	{
+		if (id in claimed || faces.isScanned(id))
+			return false;
+		claimed[id] = true;
+		return true;
+	}
+
+	private void release(long id)
+	{
+		claimed.remove(id);
+	}
+
 	private void runPass()
 	{
 		auto ids = faces.unscannedPhotos();
@@ -369,6 +387,13 @@ final class FaceService
 		long done, found;
 		foreach (id; ids)
 		{
+			if (!claim(id))
+			{
+				done++;   // a device's faces arrived (or are arriving) for it
+				continue;
+			}
+			scope (exit)
+				release(id);
 			try
 				found += scanPhoto(id);
 			catch (InterruptException)
@@ -401,6 +426,17 @@ final class FaceService
 		import std.algorithm : max;
 		immutable edgeHint = max(photo.width, photo.height);
 		auto hits = jobs.background({ return async(&detectFaces, photo.path, edgeHint).getResult(); });
+		return ingestHits(id, hits);
+	}
+
+	/// Store + cluster a photo's face hits — from local detection, or handed over by a paired
+	/// device that already ran the SAME r100 model on it. Each crop is rendered from the photo
+	/// file; the clustering into named/automatic people is identical either way.
+	private long ingestHits(long id, const(FaceHit)[] hits)
+	{
+		auto photo = photos.get(id);
+		if (photo.path is null)
+			return 0;
 		long[] inThisPhoto; // nobody appears twice in one picture
 		foreach (ref hit; hits)
 		{
@@ -441,6 +477,55 @@ final class FaceService
 				cluster.addFace(faceId, hit.embedding); // this face can now vote for later ones
 		}
 		return hits.length;
+	}
+
+	/// A paired device (the phone) already detected + embedded this photo's faces with the same
+	/// r100 model and sent them with the upload: store + cluster them instead of re-detecting,
+	/// and mark the photo scanned so the local pass skips it. An EMPTY array is a completed
+	/// scan that found nobody. A batch that fails validation is refused whole and the photo is
+	/// left unscanned, so the local pass does it — a buggy or hostile device cannot poison the
+	/// clusters. Returns whether the batch was taken. Runs on a core-thread fiber.
+	/// Accept a device's faces for `photoId`: validated NOW (the answer says whether the batch
+	/// was taken), stored on a fiber of this service — owned, so close() waits for it before
+	/// the database goes away — never inside the request or the indexer's pass.
+	/// Returns null when taken, else why not: "invalid" (the batch failed validation — the
+	/// photo is scanned here instead) or "not_a_photo" (a screenshot/meme here: the face pass
+	/// deliberately skips those, and a device must not add People to them either).
+	string acceptFromDevice(long photoId, JSONValue facesJson)
+	{
+		if (!faces.isFaceEligible(photoId))
+			return "not_a_photo";
+		bool valid;
+		cast(void) parseFaceHits(facesJson, valid);
+		if (!valid)
+		{
+			logWarn("faces: photo %s: device faces refused (invalid batch); scanning here instead", photoId);
+			return "invalid";
+		}
+		fibers.spawn(() { cast(void) ingestFromDevice(photoId, facesJson); });
+		return null;
+	}
+
+	bool ingestFromDevice(long photoId, JSONValue facesJson)
+	{
+		bool valid;
+		auto hits = parseFaceHits(facesJson, valid);
+		if (!valid)
+		{
+			logWarn("faces: photo %s: device faces refused (invalid batch); scanning here instead", photoId);
+			return false;
+		}
+		if (!faces.isFaceEligible(photoId) || !claim(photoId))
+			return false;   // not a photo here, already scanned, or the local pass is on it
+		scope (exit)
+			release(photoId);
+		long stored;
+		if (hits.length)
+			stored = ingestHits(photoId, hits);
+		faces.markScanned(photoId);
+		if (stored)
+			events.emit("people.changed", JSONValue.emptyObject);
+		return true;
 	}
 
 	// ---- edits from the UI --------------------------------------------------------------------
@@ -687,4 +772,78 @@ final class FaceService
 	{
 		fibers.stopAll();
 	}
+}
+
+/// Parse the faces a paired device (the phone) sent with an upload — library.import's "faces":
+/// an array of {x,y,w,h,score, emb: base64 of `faceDim` raw little-endian floats}. Malformed
+/// entries are skipped. The embeddings are already L2-normalised in the SAME r100 space as the
+/// desktop, so ingestExternal can cluster them directly.
+FaceHit[] parseFaceHits(JSONValue arr, out bool valid)
+{
+    import std.math : isFinite, sqrt;
+
+    import std.base64 : Base64;
+    import std.json : JSONType;
+
+    static double numOf(JSONValue o, string k)
+    {
+        if (k !in o)
+            return 0;
+        auto v = o[k];
+        return v.type == JSONType.integer ? cast(double) v.integer
+             : v.type == JSONType.float_ ? v.floating : 0;
+    }
+
+    // Everything is checked and ONE bad entry refuses the whole batch (valid = false): this
+    // comes from another device, and partial acceptance would mark the photo scanned with
+    // some of its faces missing.
+    enum maxFaces = 64;
+    FaceHit[] hits;
+    valid = false;
+    if (arr.type != JSONType.array || arr.array.length > maxFaces)
+        return null;
+    static bool unit(double v) { return isFinite(v) && v >= 0 && v <= 1; }
+    foreach (fe; arr.array)
+    {
+        if (fe.type != JSONType.object || "emb" !in fe || fe["emb"].type != JSONType.string)
+            return null;
+        foreach (k; ["x", "y", "w", "h", "score"])
+            if (k !in fe || (fe[k].type != JSONType.integer && fe[k].type != JSONType.float_)
+                || !unit(numOf(fe, k)))
+                return null;
+        if (numOf(fe, "x") + numOf(fe, "w") > 1.01 || numOf(fe, "y") + numOf(fe, "h") > 1.01)
+            return null;
+        FaceHit h;
+        h.x = cast(float) numOf(fe, "x");
+        h.y = cast(float) numOf(fe, "y");
+        h.w = cast(float) numOf(fe, "w");
+        h.h = cast(float) numOf(fe, "h");
+        h.score = cast(float) numOf(fe, "score");
+        if (fe["emb"].str.length != (faceDim * float.sizeof + 2) / 3 * 4)
+            return null;   // base64 of exactly 512 floats, nothing bigger decoded
+        try
+        {
+            auto bytes = Base64.decode(fe["emb"].str);
+            if (bytes.length != faceDim * float.sizeof)
+                return null;
+            (cast(ubyte*) h.embedding.ptr)[0 .. bytes.length] = bytes[];
+        }
+        catch (Exception)
+            return null;
+        double sq = 0;
+        foreach (v; h.embedding)
+        {
+            if (!isFinite(v))
+                return null;
+            sq += cast(double) v * v;
+        }
+        immutable norm = sqrt(sq);
+        if (!(norm > 0.9 && norm < 1.1))
+            return null;   // r100 output is L2-normalised; a zero or wild vector is not a face
+        foreach (ref v; h.embedding)
+            v = cast(float)(v / norm);
+        hits ~= h;
+    }
+    valid = true;
+    return hits;
 }

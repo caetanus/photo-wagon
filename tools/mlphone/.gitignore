@@ -1,0 +1,8 @@
+# Generated validation data and the test photos (a personal photo — never committed).
+# Regenerate: proto_full.py / proto_decode.py write dump/ and the _ref_* files from a test image.
+dump/
+*.npy
+*.f32
+*.rgb
+*.dim
+testface*.jpg

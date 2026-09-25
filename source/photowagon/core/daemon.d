@@ -33,6 +33,7 @@ import photowagon.core.api.peernames_api : registerPeerNamesApi;
 import photowagon.core.api.pairing_api : registerPairingApi, ServerControl;
 import photowagon.core.api.places_api : registerPlacesApi;
 version (PW_NoVision) {} else import photowagon.core.api.tags_api : registerTagsApi;
+import std.json : JSONValue;
 import photowagon.core.config : Config;
 import photowagon.core.db.schema : migrate;
 import photowagon.core.db.sqlite : Database;
@@ -209,7 +210,11 @@ final class Daemon : ServerControl
 		// resumable pushes spool here by sha256 until the phone says the file is complete
 		auto partials = new PartialStore(cfg.dataDir);
 		auto pieces = new PieceStore(buildPath(cfg.dataDir, "imports", ".pieces"));
-		registerImportApi(registry, cfg, roots, photos, indexer, blobStash, partials, pieces);
+		version (PW_NoVision)
+			registerImportApi(registry, cfg, roots, photos, indexer, blobStash, partials, pieces);
+		else
+			registerImportApi(registry, cfg, roots, photos, indexer, blobStash, partials, pieces,
+				(long photoId, JSONValue fj) => facesService.acceptFromDevice(photoId, fj));
 		version (PW_NoVision) {} else registerFaceApi(registry, faceRepo, facesService, store, events);
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerMemoriesApi(registry, memories, photos);

@@ -167,6 +167,8 @@ link() {
     # Compiled with the NDK clang for this ABI/API and linked into the .so below.
     CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/${TRIPLE}35-clang"
     "$CC" -c -fPIC -O2 "$HERE/jni/videothumb.c" -o "$OUT/videothumb_$ABI.o"
+    # facelite.c: on-device face detection + ArcFace-r100 embeddings via LiteRT (classic TFLite C API).
+    "$CC" -c -fPIC -O2 -I"$HERE/jni" "$HERE/jni/facelite.c" -o "$OUT/facelite_$ABI.o"
     "$LDC" -conf="$LDC_CONF" -mtriple=$TRIPLE -shared -relocation-model=pic -O -g -lowmem \
         -d-version=PhotoWagonMobile \
         -of="$OUT/lib${APP}_${ABI}.so" \
@@ -185,11 +187,13 @@ link() {
         -L--gc-sections -L--as-needed \
         -L--start-group -L="$BUILD/libbinding_ldc2.a" -L="$BUILD/libshims.a" -L--end-group \
         -L="$OUT/videothumb_$ABI.o" \
+        -L="$OUT/facelite_$ABI.o" \
         -L--start-group $UDX_LIBS -L="$HERE/toolchain/android-libs/$ABI_DIR/libsodium.a" -L--end-group \
         $TLS_LIBS $QUIC_LIBS \
         -L-L"$QT_ANDROID/lib" \
         -L-lQt6Quick_${ABI} -L-lQt6QmlModels_${ABI} -L-lQt6Qml_${ABI} -L-lQt6Network_${ABI} \
         -L-lQt6Gui_${ABI} -L-lQt6Core_${ABI} \
+        -L-L"$HERE/android/libs/$ABI" -L-lLiteRt \
         -L-lc++_shared -L-llog -L-landroid
     NM_BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
     "$NM_BIN" -D "$OUT/lib${APP}_${ABI}.so" | grep -q ' T main$'
@@ -260,6 +264,12 @@ EOF
 
 package() {
     settings
+    # bundle the on-device face models into the APK assets (gitignored; regenerate via tools/mlphone).
+    mkdir -p "$HERE/android/assets/models"
+    cp "$HERE/../models/tflite/yunet/face_detection_yunet_2023mar_float16.tflite" "$HERE/android/assets/models/yunet.tflite" \
+        || echo "WARN: yunet tflite missing — run the tools/mlphone conversion" >&2
+    cp "$HERE/../models/tflite/r100/r100_float16.tflite" "$HERE/android/assets/models/r100.tflite" \
+        || echo "WARN: r100 tflite missing — run the tools/mlphone conversion" >&2
     mkdir -p "$OUT/pkg/libs/$ABI"
     cp "$OUT/lib${APP}_${ABI}.so" "$OUT/pkg/libs/$ABI/"
     # android-36: the androidx.core the Qt template pulls in requires compileSdk >= 36.

@@ -22,6 +22,7 @@ import cxxrt : make;
 import std.algorithm : sort, remove, SwapStrategy, startsWith;
 import std.conv : to;
 import std.digest.sha : sha1Of, toHexString, LetterCase;
+import std.base64 : Base64;
 import std.file : exists, mkdirRecurse, readText, write, isDir;
 import std.json;
 import std.path : buildPath, baseName;
@@ -38,6 +39,196 @@ import photowagon.core.thumbs.imagestats : ImageStats, statsOf;
 // maxSize, via the Android MediaMetadataRetriever. Returns the duration in ms
 // (>= 0) or -1 on failure. `env` is a JNIEnv* from QJniEnvironment.getJniEnv().
 private extern(C) long pw_video_thumb(void* env, const(char)* videoPath, const(char)* outPath, int maxSize);
+
+// facelite.c: on-device face detection + ArcFace-r100 512-d embeddings via LiteRT, so the
+// phone enriches its own photos offline in the SAME embedding space as the desktop (they
+// cluster together). Android only — the desktop test build has no libLiteRt, so every call
+// is version(Android)-guarded and the desktop simply carries no phone-side faces.
+enum faceEmbDim = 512;
+struct DetectedFace
+{
+    float x, y, w, h;                 // box as fractions of the (rotated) image
+    float score;
+    float[faceEmbDim] embedding;      // r100 feature, L2-normalised
+}
+version (Android)
+{
+    // struct layout must match facelite.c's PwFace {float x,y,w,h,score; float embedding[512];}
+    private extern(C) int pw_facelite_init(const(char)* yunetTflite, const(char)* r100Tflite);
+    private extern(C) int pw_facelite_detect(const(ubyte)* rgb, int w, int h, int stride, DetectedFace* outFaces, int maxFaces);
+}
+
+// Faces persist in the phone index (base64 of the raw embedding floats) until the sync hands
+// them to the computer, which stores them in its faces table instead of re-detecting.
+JSONValue facesToJson(const DetectedFace[] faces)
+{
+    // Always an array: an EMPTY one is a completed scan that found nobody — the computer
+    // records the photo as scanned instead of re-detecting it. Senders include the key only
+    // for photos the pass has scanned (facesScanned).
+    JSONValue[] arr;
+    foreach (ref fc; faces)
+        arr ~= JSONValue([
+            "x": JSONValue(fc.x), "y": JSONValue(fc.y), "w": JSONValue(fc.w), "h": JSONValue(fc.h),
+            "score": JSONValue(fc.score),
+            "emb": JSONValue(cast(string) Base64.encode(cast(const(ubyte)[]) fc.embedding[])),
+        ]);
+    return JSONValue(arr);
+}
+
+private DetectedFace[] facesFromJson(JSONValue arr)
+{
+    // a whole number is written without a fraction ("0"), which parses back as an integer
+    static float num(JSONValue v)
+    {
+        return v.type == JSONType.integer ? cast(float) v.integer : cast(float) v.floating;
+    }
+    DetectedFace[] faces;
+    foreach (fe; arr.array)
+    {
+        DetectedFace fc;
+        fc.x = num(fe["x"]); fc.y = num(fe["y"]);
+        fc.w = num(fe["w"]); fc.h = num(fe["h"]);
+        fc.score = num(fe["score"]);
+        auto bytes = Base64.decode(fe["emb"].str);
+        if (bytes.length == faceEmbDim * float.sizeof)
+            (cast(ubyte*) fc.embedding.ptr)[0 .. bytes.length] = bytes[];
+        faces ~= fc;
+    }
+    return faces;
+}
+
+/// Faces per photo the phone hands over: the computer's per-photo batch limit (parseFaceHits).
+enum maxDeviceFaces = 64;
+
+version (Android)
+{
+    /// The one thread that owns facelite: it initialises the models and runs every detection,
+    /// one photo at a time (the model state is not shared with any other thread). The Qt
+    /// thread submits a packed RGB image and later takes the result; neither side ever waits
+    /// on the other except for the handful of instructions under the mutex.
+    private final class FaceWorker
+    {
+        import core.sync.condition : Condition;
+        import core.sync.mutex : Mutex;
+        import core.thread : Thread;
+
+        private Mutex m;
+        private Condition cv;
+        private Thread t;
+        private string yunet, r100;
+        private bool initDone, initOk;
+        private bool busy;                 // a job submitted and not yet taken back
+        private bool hasJob, hasResult;
+        private long jobId, resId;
+        private ubyte[] rgb;
+        private int jw, jh;
+        private DetectedFace[] resFaces;
+        private bool resOk, resOverflow;
+
+        this(string yunet, string r100)
+        {
+            this.yunet = yunet;
+            this.r100 = r100;
+            m = new Mutex;
+            cv = new Condition(m);
+            t = new Thread(&run);
+            t.isDaemon = true;
+            t.start();
+        }
+
+        /// Init finished and failed: the pass must stop.
+        bool initFailed()
+        {
+            synchronized (m)
+                return initDone && !initOk;
+        }
+
+        /// Ready for a new photo (initialised, nothing in flight).
+        bool idle()
+        {
+            synchronized (m)
+                return initDone && initOk && !busy;
+        }
+
+        void submit(long id, ubyte[] pixels, int w, int h)
+        {
+            synchronized (m)
+            {
+                if (busy || !initOk)
+                    return;
+                busy = true;
+                hasJob = true;
+                jobId = id;
+                rgb = pixels;
+                jw = w;
+                jh = h;
+                cv.notify();
+            }
+        }
+
+        /// A finished photo, if there is one: its id, faces and whether detection succeeded.
+        bool take(out long id, out DetectedFace[] faces, out bool ok, out bool overflow)
+        {
+            synchronized (m)
+            {
+                if (!hasResult)
+                    return false;
+                hasResult = false;
+                busy = false;
+                id = resId;
+                faces = resFaces;
+                ok = resOk;
+                overflow = resOverflow;
+                resFaces = null;
+                return true;
+            }
+        }
+
+        private void run()
+        {
+            import std.string : toStringz;
+
+            immutable ok = pw_facelite_init(yunet.toStringz, r100.toStringz) == 0;
+            synchronized (m)
+            {
+                initDone = true;
+                initOk = ok;
+            }
+            if (!ok)
+                return;
+            plog("phone: on-device faces ready (YuNet + r100)");
+            for (;;)
+            {
+                long id;
+                ubyte[] px;
+                int w, h;
+                synchronized (m)
+                {
+                    while (!hasJob)
+                        cv.wait();
+                    hasJob = false;
+                    id = jobId;
+                    px = rgb;
+                    rgb = null;
+                    w = jw;
+                    h = jh;
+                }
+                // As many as the computer accepts in one batch; a photo that FILLS the buffer
+                // may hold more — that is not a complete scan (see applyFaces).
+                auto buf = new DetectedFace[maxDeviceFaces];
+                immutable n = pw_facelite_detect(px.ptr, w, h, w * 3, buf.ptr, cast(int) buf.length);
+                synchronized (m)
+                {
+                    hasResult = true;
+                    resId = id;
+                    resOverflow = n >= cast(int) buf.length;
+                    resOk = n >= 0 && !resOverflow;
+                    resFaces = resOk && n > 0 ? buf[0 .. n] : null;
+                }
+            }
+        }
+    }
+}
 
 struct PhonePhoto
 {
@@ -57,6 +248,10 @@ struct PhonePhoto
     bool isVideo;   // a camera video: no frame thumbnail here (the computer makes one on sync)
     long durationMs;
     string kind;    // photo | screenshot | meme (kind.d); "" = not classified yet
+    DetectedFace[] faces;   // on-device faces (bbox + r100 embedding), until synced to the computer
+    bool facesScanned;      // the on-device face pass has run on this photo (even if 0 faces)
+    bool facesSent;         // the computer has them: the embeddings are dropped here (index size)
+    bool facesGaveUp;       // the pass could not finish this photo: send NO faces, the computer detects
 
     JSONValue toJson() const
     {
@@ -94,6 +289,7 @@ enum thumbEdge = 512;
 final class PhoneIndex
 {
     void delegate() onChanged;                          /// pages/dates are stale
+    void delegate() onFacesReady;                       /// a photo's face pass finished: sync can hand them over
     void delegate(long done, long total) onProgress;   /// decoding progress
     void delegate(long added, long removed) onDone;
     void delegate(size_t found) onScanned;             /// a walk finished
@@ -126,11 +322,273 @@ final class PhoneIndex
         mkdirRecurse(thumbDir);
         lock = new Mutex;
         load();
+        version (Android)
+            facesInit(dataDir);
+        if (facesReady)
+        {
+            facesPump = new QTimer(cast(cppq.QObject) null);
+            facesPump.setInterval(1200);   // r100 is heavy; a relaxed cadence keeps it gentle
+            facesPump.connectTimeout(&stepFaces);
+            facesPump.start();
+        }
         pump = new QTimer(cast(cppq.QObject) null);
         pump.setInterval(50);   // more breathing room between decode slices so scrolling/rendering
                                 // stays smooth (a single big-image decode can blow a frame; a wider
                                 // gap between ticks keeps the UI fluid). Indexing is a touch slower.
         pump.connectTimeout(&step);
+    }
+
+    private bool facesReady;              // on-device face models loaded (Android only)
+    private string faceYunet, faceR100;   // extracted model paths
+
+    // Extract the bundled YuNet + r100 tflite models from the APK assets to the data dir
+    // (once) and initialise facelite. Android only — no libLiteRt on the desktop test build.
+    version (Android)
+    private void facesInit(string dataDir)
+    {
+        import std.string : toStringz;
+        import qt.quick.qfile : QFile;
+
+        immutable mdir = buildPath(dataDir, "models");
+        mkdirRecurse(mdir);
+        faceYunet = buildPath(mdir, "yunet.tflite");
+        faceR100 = buildPath(mdir, "r100.tflite");
+        if (!faceYunet.exists) cast(void) QFile.copy("assets:/models/yunet.tflite", faceYunet);
+        if (!faceR100.exists) cast(void) QFile.copy("assets:/models/r100.tflite", faceR100);
+        if (faceYunet.exists && faceR100.exists)
+        {
+            // The worker initialises facelite on ITS thread and runs every detect there: the
+            // model state is touched by exactly one thread. An init failure is reported by
+            // faceWorker.initFailed and stops the pass (stepFaces).
+            faceWorker = new FaceWorker(faceYunet, faceR100);
+            facesReady = true;
+            plog("phone: on-device faces starting (YuNet + r100 on the face worker)");
+        }
+        else
+            plog("phone: on-device faces unavailable (models missing?) — computer detects on sync");
+    }
+
+    version (Android) private FaceWorker faceWorker;
+
+    // The decoded (EXIF-rotated) thumbnail as tightly packed RGB888 bytes the worker can own.
+    // On the Qt thread (touching QImage off it loses the Adreno surface — same rule as decoding).
+    version (Android)
+    private static ubyte[] rgbOf(QImage img, out int w, out int h)
+    {
+        if (img.isNull())
+            return null;
+        // This is the face pass's private scratch image. Convert in place:
+        // DSide's QImage-by-value return from convertToFormat is mis-bound (sret).
+        if (img.format() != QImage.Format.Format_RGB888)
+            img.convertTo(QImage.Format.Format_RGB888, 0);
+        if (img.isNull())
+            return null;
+        w = img.width();
+        h = img.height();
+        if (w <= 0 || h <= 0)
+            return null;
+        immutable stride = cast(size_t) img.bytesPerLine();
+        immutable row = cast(size_t) w * 3;
+        auto src = img.constBits();
+        auto rgb = new ubyte[row * h];
+        foreach (y; 0 .. h)
+            rgb[y * row .. (y + 1) * row] = src[y * stride .. y * stride + row];
+        return rgb;
+    }
+
+    private QTimer facesPump;
+    private QImageReader facesReader;
+    private QImage facesImg;
+    private bool facesDecodeReady;
+
+    // Charging / plugged in? Reads /sys/class/power_supply. Anything we cannot read — no
+    // status file, a denied directory — counts as NOT charging: on a phone the CPU r100 must
+    // never run on battery because the status was unknown. (Faces only run on Android.)
+    private static bool deviceCharging()
+    {
+        import std.file : dirEntries, SpanMode, exists, readText;
+        import std.string : strip, toLower;
+
+        bool sawBattery = false;
+        try
+            foreach (e; dirEntries("/sys/class/power_supply", SpanMode.shallow))
+            {
+                immutable sp = buildPath(e.name, "status");
+                if (!sp.exists)
+                    continue;
+                immutable st = readText(sp).strip.toLower;
+                if (st.length == 0)
+                    continue;
+                sawBattery = true;
+                if (st == "charging" || st == "full")
+                    return true;
+            }
+        catch (Exception)
+        {
+        }
+        cast(void) sawBattery;
+        return false;
+    }
+
+    // The on-device face pass — the lowest priority. It never starts a photo while thumbnails
+    // are still decoding, while a sync push is in flight (shouldYield), or on battery. The
+    // thumbnail is decoded HERE, on the Qt thread (QImage off it loses the Adreno surface);
+    // YuNet + r100 run on the face worker's own thread — r100's CPU fallback takes ~1 s per
+    // face, which on the Qt thread froze input and rendering. One photo in flight at a time.
+    private void stepFaces()
+    {
+        if (!facesReady)
+            return;
+        version (Android)
+        {
+            long rid;
+            DetectedFace[] rfaces;
+            bool rok, roverflow;
+            if (faceWorker.take(rid, rfaces, rok, roverflow))
+                applyFaces(rid, rfaces, rok, roverflow);
+            if (faceWorker.initFailed)
+            {
+                facesReady = false;
+                if (facesPump !is null)
+                    facesPump.stop();
+                plog("phone: on-device faces unavailable (model init failed) — computer detects on sync");
+                return;
+            }
+            if (!faceWorker.idle)
+                return;   // a photo is being detected
+        }
+        if (pump.isActive() || (shouldYield !is null && shouldYield()) || !deviceCharging())
+            return;
+        PhonePhoto* target;
+        foreach (ref p; photos)
+            if (!p.facesScanned && !p.isVideo && (p.kind is null || p.kind == "photo")
+                && p.thumb !is null && p.thumb.exists)
+            {
+                target = &p;
+                break;
+            }
+        if (target is null)
+        {
+            if (facesPump !is null)
+                facesPump.stop();
+            return;
+        }
+        version (Android)
+        {
+            if (!facesDecodeReady)
+            {
+                facesReader = make!QImageReader();
+                facesImg = new QImage();
+                facesDecodeReady = true;
+            }
+            facesReader.setFileName(target.thumb);
+            facesReader.setAutoTransform(true);
+            auto natural = QSize.__make(-1, -1);
+            facesReader.setScaledSize(natural);
+            int w, h;
+            ubyte[] rgb;
+            if (facesReader.read(cast(QImage*) facesImg.ptr()) && !facesImg.isNull())
+                rgb = rgbOf(facesImg, w, h);
+            if (rgb is null)
+            {
+                applyFaces(target.id, null, false, false);   // an unreadable thumbnail: a failed try
+                return;
+            }
+            faceWorker.submit(target.id, rgb, w, h);
+        }
+    }
+
+    enum maxFaceTries = 3;
+    private int[long] faceTries;   // failed face passes per photo (this run)
+
+    /// A face pass finished for photo `id` (on the Qt thread). A failure (model error, an
+    /// unreadable thumbnail) is NOT a completed scan: the photo is retried, and only after
+    /// maxFaceTries is it recorded as scanned (with no faces) so it cannot block the pass.
+    private void applyFaces(long id, DetectedFace[] found, bool ok, bool overflow)
+    {
+        foreach (ref p; photos)
+            if (p.id == id)
+            {
+                if (!ok)
+                {
+                    immutable n = overflow ? maxFaceTries : ++faceTries[id];
+                    if (n < maxFaceTries)
+                        return;
+                    plog("phone: face pass ", overflow ? "found too many faces" : "failed", " on ",
+                        p.path.baseName, " — leaving it to the computer");
+                    // Done from our side, with nothing to hand over: no "faces" key goes with the
+                    // upload (an empty array would tell the computer "nobody here"), so the
+                    // computer runs its own detection on it.
+                    p.faces = null;
+                    p.facesScanned = true;
+                    p.facesGaveUp = true;
+                    p.facesSent = true;
+                }
+                else
+                {
+                    p.faces = found;
+                    p.facesScanned = true;
+                    p.facesGaveUp = false;
+                    p.facesSent = false;
+                    plog("phone: faces on ", p.path.baseName, ": ", found.length);
+                }
+                faceTries.remove(id);
+                byPath[p.path] = p;
+                dirty = true;
+                save();
+                if (ok && onFacesReady)
+                    onFacesReady();   // the sync hands them over (with the photo, or on their own)
+                return;
+            }
+    }
+
+    /// The computer took this photo's faces (with the upload, or a library.faces update): drop
+    /// the embeddings here — 512 floats a face would otherwise grow the index forever.
+    void markFacesSent(long id)
+    {
+        foreach (ref p; photos)
+            if (p.id == id && p.facesScanned)
+            {
+                p.facesSent = true;
+                p.faces = null;
+                byPath[p.path] = p;
+            }
+        dirty = true;
+        save();
+    }
+
+    /// The computer will never take this photo's faces (it is not a photo there, or the batch
+    /// was refused): stop offering them; the computer's own pass decides.
+    void markFacesGaveUp(long id)
+    {
+        foreach (ref p; photos)
+            if (p.id == id)
+            {
+                p.facesGaveUp = true;
+                p.facesSent = true;
+                p.faces = null;
+                byPath[p.path] = p;
+            }
+        dirty = true;
+        save();
+    }
+
+    /// Photos already on the computer whose faces the computer does not have yet (the face pass
+    /// ran after the photo was sent): the sync sends those faces on their own.
+    long[] facesUnsentIds() const
+    {
+        long[] out_;
+        foreach (ref p; photos)
+            if (p.sent && p.facesScanned && !p.facesGaveUp && !p.facesSent && p.hash.length)
+                out_ ~= p.id;
+        return out_;
+    }
+
+    // (Re)start the face pass if there is anything to do — after a decode batch and at startup.
+    private void kickFaces()
+    {
+        if (facesReady && facesPump !is null && !facesPump.isActive())
+            facesPump.start();
     }
 
     string[] rootPaths() const { return roots.dup; }
@@ -359,6 +817,7 @@ final class PhoneIndex
             saveNow();
             if (onChanged) onChanged();
             if (onDone) onDone(added, 0);
+            kickFaces();
             return;
         }
         // Tell the UI at most every 3 s: each library.changed rebuilds the whole page.
@@ -777,6 +1236,11 @@ final class PhoneIndex
                 p.isVideo = "video" in e ? e["video"].boolean : false;
                 p.durationMs = "duration" in e ? e["duration"].integer : 0;
                 p.kind = "kind" in e && e["kind"].type == JSONType.string ? e["kind"].str : null;
+                if ("faces" in e && e["faces"].type == JSONType.array)
+                    p.faces = facesFromJson(e["faces"]);
+                p.facesScanned = "facesScanned" in e ? e["facesScanned"].boolean : false;
+                p.facesSent = "facesSent" in e ? e["facesSent"].boolean : false;
+                p.facesGaveUp = "facesGaveUp" in e ? e["facesGaveUp"].boolean : false;
                 photos ~= p;
                 byPath[p.path] = p;
             }
@@ -845,6 +1309,8 @@ final class PhoneIndex
                     "declined": JSONValue(p.declined), "hash": p.hash.length ? JSONValue(p.hash) : JSONValue(null),
                     "tries": JSONValue(p.tries), "video": JSONValue(p.isVideo), "duration": JSONValue(p.durationMs),
                     "kind": p.kind.length ? JSONValue(p.kind) : JSONValue(null),
+                    "faces": facesToJson(p.faces), "facesScanned": JSONValue(p.facesScanned),
+                    "facesSent": JSONValue(p.facesSent), "facesGaveUp": JSONValue(p.facesGaveUp),
                 ]);
             JSONValue j = ["nextId": JSONValue(nId), "photos": JSONValue(arr)];
             try

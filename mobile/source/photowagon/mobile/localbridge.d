@@ -19,6 +19,7 @@ import std.base64 : Base64;
 import std.conv : to;
 import std.file : read, exists, readText, write, mkdirRecurse;
 import std.json;
+import core.time : MonoTime, minutes;
 import std.path : baseName, buildPath, dirName;
 import std.stdio : writeln, stdout;
 
@@ -26,7 +27,7 @@ import qt.quick.qtimer;
 import cppq = qt.quick.qobject;
 
 import photowagon.core.library.calendar : isoTime, localDate;
-import photowagon.mobile.phoneindex : PhoneIndex, PhoneFilter, PhonePhoto;
+import photowagon.mobile.phoneindex : PhoneIndex, PhoneFilter, PhonePhoto, DetectedFace, facesToJson;
 import photowagon.mobile.tcpbridge : TcpBridge;
 import photowagon.ui.transport : Bridge, ResultCb;
 
@@ -87,6 +88,7 @@ final class LocalBridge : Bridge
         long mtimeMs;
         string hash;
         string paramsJson;   // the whole library.import params, serialised on the worker
+        string facesJson;    // pre-serialised "faces" array (on the Qt thread), spliced in below
         string error;
         bool done;
     }
@@ -108,6 +110,7 @@ final class LocalBridge : Bridge
     private JSONValue[] localBuf, remoteBuf;
     private JSONValue[] served;        // everything handed out so far, merged order
     private bool[string] localKeys;    // "name|size" of local photos, for dedupe
+    private bool[string] localHashes;  // a known content hash survives metadata size changes
     private long dupes;
     private string[long] thumbCache;   // remote id → thumb URL (a file:// on disk, or a data: URL fallback)
     private string remoteThumbDir;     // desktop thumbs cached as JPEG files (EGL file→texture, low RAM, survive drops)
@@ -143,6 +146,7 @@ final class LocalBridge : Bridge
         syncDeadline.setSingleShot(true);
         syncDeadline.connectTimeout(&onSyncTimeout);
         index.onChanged = () { emit("library.changed", JSONValue.emptyObject); };
+        index.onFacesReady = &pumpFaces;   // a face pass finished: hand over what the computer lacks
         // Background never hurts foreground: while a photo is being pushed to the computer,
         // the indexer's decode slice yields so it can't starve the socket (the video-push
         // drops) or jank the UI. It resumes the instant the push ends.
@@ -167,6 +171,8 @@ final class LocalBridge : Bridge
             {
                 emit("people.changed", JSONValue.emptyObject);   // the open photo's faces, now reachable
                 startSync();
+                facesApiMissing = false;   // a (re)connection may be another computer, or one with vision now
+                pumpFaces();
                 // PW_TEST_DOWNLOAD=<computer photo id>: the desktop test build downloads that
                 // original once the link is up and logs the result (the resume-test hook,
                 // like PW_SHOT_SEND for uploads); no UI needed.
@@ -249,7 +255,12 @@ final class LocalBridge : Bridge
     override bool connected() const { return up; }
     override bool remote() const { return false; }
     override string endpoint() const { return computer.endpoint(); }
-    override void setEndpoint(string host, ushort port) { computer.setEndpoint(host, port); }
+    override void setEndpoint(string host, ushort port)
+    {
+        facesApiMissing = false;   // another computer: ask it afresh
+        facesRetryAt = null;
+        computer.setEndpoint(host, port);
+    }
 
     private void emit(string ev, JSONValue data)
     {
@@ -423,8 +434,13 @@ final class LocalBridge : Bridge
         served.length = 0;
         dupes = 0;
         localKeys = null;
+        localHashes = null;
         foreach (ref ph; index.page(PhoneFilter.init, 0, long.max))
+        {
             localKeys[ph.path.baseName ~ "|" ~ ph.size.to!string] = true;
+            if (ph.hash.length)
+                localHashes[ph.hash] = true;
+        }
     }
 
     private void fillPage(size_t limit, ResultCb cb)
@@ -457,7 +473,8 @@ final class LocalBridge : Bridge
                     foreach (it; items)
                     {
                         immutable key = (it["path"].type == JSONType.string ? it["path"].str.baseName : "") ~ "|" ~ it["size"].integer.to!string;
-                        if (key in localKeys)
+                        immutable hash = "hash" in it && it["hash"].type == JSONType.string ? it["hash"].str : "";
+                        if (!remoteOnly && ((hash.length && hash in localHashes) || key in localKeys))
                         {
                             dupes++;
                             continue; // the local copy stands for it
@@ -828,9 +845,21 @@ final class LocalBridge : Bridge
             "mtimeMs": JSONValue(ph.mtimeMs),
             "base64": JSONValue(cast(string) Base64.encode(bytes)),
         ];
+        immutable withFaces = ph.facesScanned && !ph.facesGaveUp && !ph.facesSent;
+        if (withFaces)
+            params["faces"] = facesToJson(ph.faces);   // on-device faces (or [] = none) → the computer stores them
+        // keep the hash: faces computed later go on their own (library.faces) by sha256
+        import std.digest : toHexString, LetterCase;
+        import std.digest.sha : sha256Of;
+        immutable sentHash = toHexString!(LetterCase.lower)(sha256Of(bytes)).idup;
         computer.request("library.import", params, (r, e) {
             if (e.type == JSONType.null_)
-                index.markSent(id);
+            {
+                index.markSent(id, sentHash);
+                if (withFaces && imported(r))
+                    index.markFacesSent(id);   // a deduplicated upload ("existed") never read them
+                pumpFaces();   // faces that finished meanwhile, or that the dedup left behind
+            }
             else
                 index.markFailed(id);
             cb(r, e);
@@ -1171,6 +1200,7 @@ final class LocalBridge : Bridge
             index.saveNow();   // the last marks must not wait for the timer: Android may kill us next
             sent = sendTotal = sendFailed = skipped = declined = 0;
             publishSync();
+            pumpFaces();   // the run is over (even one that found everything already there)
             return;
         }
         if (!computer.connected)
@@ -1204,9 +1234,14 @@ final class LocalBridge : Bridge
                 "mtimeMs": JSONValue(ph.mtimeMs),
                 "sha256": JSONValue(phash),
             ];
+            if (ph.facesScanned && !ph.facesGaveUp && !ph.facesSent)
+            {
+                meta["faces"] = facesToJson(ph.faces);
+                facesInPayload[id] = true;
+            }
             plog("sync: photo ", id, " pushing ", ph.path.baseName);
             syncRequest(uploadTimeoutMs, (cb) { computer.uploadFile(ticket, ppath, meta, cb); }, (r2, e2) {
-                finish(id, e2.type == JSONType.null_, e2.type == JSONType.null_ ? null : e2.toString(), phash);
+                finish(id, e2.type == JSONType.null_, e2.type == JSONType.null_ ? null : e2.toString(), phash, imported(r2));
             });
             return;
         }
@@ -1216,6 +1251,10 @@ final class LocalBridge : Bridge
         pr.name = ph.path.baseName;
         pr.takenAt = isoTime(ph.takenTs);
         pr.mtimeMs = ph.mtimeMs;
+        immutable withFaces = ph.facesScanned && !ph.facesGaveUp && !ph.facesSent;
+        pr.facesJson = withFaces ? facesToJson(ph.faces).toString() : null;
+        if (withFaces)
+            facesInPayload[id] = true;
         inflight = pr;
         immutable path = ph.path;
         immutable knownHash = ph.hash;
@@ -1244,7 +1283,8 @@ final class LocalBridge : Bridge
                 "sha256": JSONValue(h),
             ];
             auto text = head.toString();
-            pr.paramsJson = text[0 .. $ - 1] ~ `,"base64":"` ~ cast(string) Base64.encode(bytes) ~ `"}`;
+            immutable facesPart = (cast(string) pr.facesJson).length ? `,"faces":` ~ cast(string) pr.facesJson : "";
+            pr.paramsJson = text[0 .. $ - 1] ~ facesPart ~ `,"base64":"` ~ cast(string) Base64.encode(bytes) ~ `"}`;
         }
         catch (Exception e)
             pr.error = e.msg;
@@ -1272,7 +1312,7 @@ final class LocalBridge : Bridge
         syncRequestSeq++;   // the pending callback is now a stranger
         plog("sync: no answer from the computer in time — reconnecting");
         if (sending)
-            finish(inflightId, false, "timeout", null);
+            finish(inflightId, false, "timeout", null, false);
         negotiating = false;   // a stalled offer must not wedge the queue; startSync retries the batch
         computer.reconnect();
     }
@@ -1290,7 +1330,7 @@ final class LocalBridge : Bridge
         immutable id = pr.id;
         if (pr.error.length)
         {
-            finish(id, false, pr.error, null);
+            finish(id, false, pr.error, null, false);
             return;
         }
         immutable hash = cast(string) pr.hash;
@@ -1300,18 +1340,151 @@ final class LocalBridge : Bridge
         immutable paramsJson = cast(string) pr.paramsJson;
         plog("sync: photo ", id, " sending");
         syncRequest(uploadTimeoutMs, (cb) { computer.requestRaw("library.import", paramsJson, cb); }, (r2, e2) {
-            finish(id, e2.type == JSONType.null_, e2.type == JSONType.null_ ? null : e2.toString(), hash);
+            finish(id, e2.type == JSONType.null_, e2.type == JSONType.null_ ? null : e2.toString(), hash, imported(r2));
         });
     }
 
-    private void finish(long id, bool ok, string error, string hash)
+    // Photos whose faces went (or are going) with their upload, so a successful send also
+    // marks the faces delivered.
+    private bool[long] facesInPayload;
+    private bool facesInFlight;
+    private bool facesApiMissing;   // an older computer without library.faces: stop asking
+    private MonoTime[long] facesRetryAt;   // a photo whose faces were not taken: skipped until then
+
+    /// Faces computed AFTER their photo was sent (the face pass yields to the sync, so this is
+    /// the usual order) go on their own: library.faces {sha256, faces}, one photo at a time,
+    /// between uploads. Kicked when a face pass finishes, when the link comes up, and after
+    /// each send.
+    // Wakes pumpFaces when the earliest backed-off photo is due again: nothing else is
+    // guaranteed to kick it on an otherwise idle, healthy link.
+    private QTimer facesRetryTimer;
+
+    private void armFacesRetry()
+    {
+        // forget photos no longer waiting (delivered, given up, deleted from the phone)
+        bool[long] still;
+        foreach (id; index.facesUnsentIds())
+            still[id] = true;
+        foreach (id; facesRetryAt.keys)
+            if (id !in still)
+                facesRetryAt.remove(id);
+        if (facesRetryAt.length == 0)
+            return;
+        immutable now = MonoTime.currTime;
+        auto earliest = MonoTime.max;
+        foreach (at; facesRetryAt.byValue)
+            if (at < earliest)
+                earliest = at;
+        // a floor: an overdue entry pumpFaces could not take yet (busy, offline) is retried
+        // every 2 s, not re-armed at 0 ms in a spin
+        enum long floorMs = 2000;
+        immutable due = earliest <= now ? 0 : (earliest - now).total!"msecs";
+        immutable ms = due < floorMs ? floorMs : due;
+        if (facesRetryTimer is null)
+        {
+            facesRetryTimer = new QTimer(cast(cppq.QObject) null);
+            facesRetryTimer.setSingleShot(true);
+            facesRetryTimer.connectTimeout(() { pumpFaces(); armFacesRetry(); });
+        }
+        facesRetryTimer.start(cast(int)(ms < int.max ? ms : int.max));
+    }
+
+    private void pumpFaces()
+    {
+        if (facesInFlight || facesApiMissing || sending || negotiating || !computer.connected)
+            return;
+        immutable now = MonoTime.currTime;
+        long id = -1;
+        foreach (candidate; index.facesUnsentIds())   // the first one not backing off
+            if (auto at = candidate in facesRetryAt)
+            {
+                if (now >= *at)
+                {
+                    facesRetryAt.remove(candidate);   // due: out of the backoff (a new failure puts it back)
+                    id = candidate;
+                    break;
+                }
+            }
+            else
+            {
+                id = candidate;
+                break;
+            }
+        if (id < 0)
+            return;
+        auto p = index.get(id);
+        if (p is null)
+            return;
+        facesInFlight = true;
+        JSONValue params = ["sha256": JSONValue(p.hash), "faces": facesToJson(p.faces)];
+        computer.request("library.faces", params, (r, e) {
+            facesInFlight = false;
+            // a successful RPC is not a delivery: `taken` says whether the faces were stored
+            immutable taken = e.type == JSONType.null_ && r.type == JSONType.object && "taken" in r
+                && r["taken"].type == JSONType.true_;
+            if (taken)
+            {
+                facesRetryAt.remove(id);
+                index.markFacesSent(id);
+                pumpFaces();
+                return;
+            }
+            if (e.type == JSONType.null_)
+            {
+                immutable reason = r.type == JSONType.object && "reason" in r && r["reason"].type == JSONType.string ? r["reason"].str : "";
+                if (reason == "no_vision")
+                {
+                    facesApiMissing = true;   // this computer stores no faces: stop asking it
+                    plog("sync: the computer keeps no faces (no vision); not sending them");
+                }
+                else
+                {
+                    // "invalid" / "not_a_photo": retrying cannot change the answer
+                    plog("sync: faces for photo ", id, " refused (", reason, "); the computer decides");
+                    facesRetryAt.remove(id);
+                    index.markFacesGaveUp(id);
+                    pumpFaces();
+                }
+                return;
+            }
+            immutable code = e.type == JSONType.object && "code" in e && e["code"].type == JSONType.string ? e["code"].str : "";
+            if (code == "unknown_method")
+            {
+                facesApiMissing = true;   // the computer will detect them itself
+                plog("sync: the computer has no library.faces; it detects faces itself");
+            }
+            else
+            {
+                // not there (yet, or deleted on the computer), busy, refused: back off THIS
+                // photo so it cannot block the others, and try it again later
+                facesRetryAt[id] = MonoTime.currTime + 10.minutes;
+                plog("sync: faces for photo ", id, " not taken (retry in 10 min): ", e.toString());
+                armFacesRetry();
+                pumpFaces();
+            }
+        });
+    }
+
+    /// Whether an import reply means the computer actually took THESE bytes (and with them the
+    /// faces in the request) — not a deduplicated "existed", which reads nothing but the hash.
+    private static bool imported(JSONValue r)
+    {
+        return !(r.type == JSONType.object && "existed" in r && r["existed"].type == JSONType.true_);
+    }
+
+    private void finish(long id, bool ok, string error, string hash, bool importedHere)
     {
         sending = false;
         plog("sync: photo ", id, ok ? " sent" : " failed");
+        immutable facesWent = (id in facesInPayload) !is null;
+        facesInPayload.remove(id);
         if (ok)
         {
             sent++;
             index.markSent(id, hash);
+            if (facesWent && importedHere)
+                index.markFacesSent(id);   // the upload carried them: drop the embeddings here
+            // deduplicated: the faces were not read — pumpFaces sends them on their own
         }
         else
         {
@@ -1321,6 +1494,7 @@ final class LocalBridge : Bridge
             plog("sync: photo ", id, " failed: ", error);
         }
         pumpSend();
+        pumpFaces();
     }
 }
 

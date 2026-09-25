@@ -21,14 +21,15 @@ import photowagon.core.sync.pieces : PieceStore;
 import photowagon.core.store.store : sha256Hex;
 
 void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos, Indexer indexer,
-	BlobStash blobs = null, PartialStore partials = null, PieceStore pieces = null)
+	BlobStash blobs = null, PartialStore partials = null, PieceStore pieces = null,
+	string delegate(long photoId, JSONValue facesJson) ingestFaces = null)
 {
 	immutable importsRoot = buildPath(cfg.dataDir, "imports");
 
 	// Writes `bytes` into imports/<yyyy-mm>/ and indexes just that file; deduped by hash, so
 	// a photo already here is returned as `existed` without a second copy. Shared by the base64
 	// path and the blob-pipe (ticket) path.
-	JSONValue landBytes(string name, string takenAt, const(ubyte)[] bytes)
+	JSONValue landBytes(string name, string takenAt, const(ubyte)[] bytes, JSONValue facesJson = JSONValue(null))
 	{
 		immutable base = name.baseName;
 		if (base.length == 0 || base[0] == '.')
@@ -46,7 +47,19 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 		write(path, bytes);
 		logInfo("import: %s (%s bytes)", path, bytes.length);
 		immutable rootId = roots.add(importsRoot);
-		indexer.indexOne(rootId, path);   // just this file — no re-scan of the whole imports/ folder
+		// The phone sent faces it detected + embedded (same r100 model; an empty array = it
+		// looked and found nobody): store + cluster them instead of re-detecting here — once
+		// the photo is actually in the library. Indexing is asynchronous, so a lookup right
+		// after indexOne() found nothing and the faces were dropped. `ingestFaces` is null on
+		// a no-vision (node) build.
+		void delegate() then;
+		if (ingestFaces !is null && facesJson.type == JSONType.array)
+			then = () {
+				auto landed = photos.byHash(hash);
+				if (!landed.isNull)
+					cast(void) ingestFaces(landed.get.id, facesJson);
+			};
+		indexer.indexOne(rootId, path, then);   // just this file — no re-scan of the whole imports/ folder
 		return JSONValue(["existed": JSONValue(false), "path": JSONValue(path)]);
 	}
 
@@ -71,9 +84,28 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 	});
 
 	// {name, base64, takenAt?} → {id?, existed, path}
+	// {sha256, faces} → {taken, reason?}: faces a device detected for a photo that is ALREADY here — its
+	// face pass finished after the photo was sent (it yields to the sync, so that is the usual
+	// order). Same contract as faces arriving with an upload: validated now (a refused batch
+	// answers taken:false and the photo is scanned here instead), stored off this request.
+	r.add("library.faces", (JSONValue p) {
+		immutable sha = requireString(p, "sha256");
+		if (ingestFaces is null)   // no vision here (the node hub): nothing to store, ever
+			return JSONValue(["taken": JSONValue(false), "reason": JSONValue("no_vision")]);
+		if (p.type != JSONType.object || "faces" !in p || p["faces"].type != JSONType.array)
+			throw new ApiError("bad_params", "faces must be an array");
+		auto ph = photos.byHash(sha);
+		if (ph.isNull)
+			throw new ApiError("not_found", "no photo with that sha256 here");
+		immutable why = ingestFaces(ph.get.id, p["faces"]);
+		return why is null ? JSONValue(["taken": JSONValue(true)])
+			: JSONValue(["taken": JSONValue(false), "reason": JSONValue(why)]);
+	});
+
 	// {name, sha256, probe: true} → {existed, id?, path?}: is this file here already? (no bytes)
 	r.add("library.import", (JSONValue p) {
 		immutable name = requireString(p, "name").baseName;
+		JSONValue facesJson = (p.type == JSONType.object && "faces" in p) ? p["faces"] : JSONValue(null);
 		if (name.length == 0 || name[0] == '.')
 			throw new ApiError("bad_params", "bad file name");
 		if (p.type == JSONType.object && "probe" in p && p["probe"].type == JSONType.true_)
@@ -118,7 +150,7 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 				throw e;
 			catch (Exception e)
 				throw new ApiError("bad_blob", e.msg);
-			return landBytes(name, getString(p, "takenAt"), bytes);
+			return landBytes(name, getString(p, "takenAt"), bytes, facesJson);
 		}
 		// Ticket path: the whole blob came over the pipe in one go (pre-resume wire).
 		if (p.type == JSONType.object && "ticket" in p && p["ticket"].type == JSONType.integer)
@@ -128,7 +160,7 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 			auto bytes = blobs.take(p["ticket"].integer);
 			if (bytes is null)
 				throw new ApiError("no_blob", "no bytes arrived for this ticket");
-			return landBytes(name, getString(p, "takenAt"), bytes);
+			return landBytes(name, getString(p, "takenAt"), bytes, facesJson);
 		}
 		// Fallback: base64 in the JSON (a client with no blob pipe, e.g. the LAN TCP link).
 		ubyte[] bytes;
@@ -136,7 +168,7 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 			bytes = Base64.decode(requireString(p, "base64"));
 		catch (Exception e)
 			throw new ApiError("bad_params", "base64: " ~ e.msg);
-		return landBytes(name, getString(p, "takenAt"), bytes);
+		return landBytes(name, getString(p, "takenAt"), bytes, facesJson);
 	});
 }
 

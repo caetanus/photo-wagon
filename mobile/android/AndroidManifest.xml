@@ -47,6 +47,7 @@
                 <data android:scheme="pwscan" />
                 <data android:scheme="pwperm" />
                 <data android:scheme="pwcore" />
+                <data android:scheme="pwback" />
                 <data android:scheme="pw" />
             </intent-filter>
             <meta-data

@@ -256,13 +256,15 @@ public class CoreService extends QtService
     }
 
     /**
-     * Foreground exactly while auto-sync is on. The settings/autosync flag is the one source
-     * of truth — read now, on every tick and every start request, so no stale request or
-     * status can leave the service on the wrong side.
+     * Foreground exactly while auto-sync is on — or while a one-time "Send all now" run the
+     * core reports (status "manual") is going. The settings/autosync flag is read now, on
+     * every tick and every start request, so no stale request can leave the service on the
+     * wrong side.
      */
     private void reconcileForeground()
     {
-        boolean want = autosync(this);
+        // auto-sync on, or a one-time "Send all now" run still going
+        boolean want = autosync(this) || (lastStatus != null && lastStatus.optBoolean("manual", false));
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (want && !foreground)
         {

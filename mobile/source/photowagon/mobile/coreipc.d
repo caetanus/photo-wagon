@@ -540,18 +540,11 @@ final class CoreClient : Bridge
         if (started)
             return;
         started = true;
-        sock = new QLocalSocket(cast(cppq.QObject) null);
-        sock.setReadBufferSize(maxFrame + 64 * 1024);
-        sock.connectReadyRead(&drain);
-        sock.connectConnected(&sayHello);
-        sock.connectDisconnected(&lost);
-        sock.connectErrorOccurred((QLocalSocket.LocalSocketError) {
-            // a failed connect (no core yet) also lands here, without a disconnected()
-            if (!ready)
-                scheduleRetry();
-            else
-                lost();
-        });
+        socketsOwner = new cppq.QObject(cast(cppq.QObject) null);
+        attemptWatch = new QTimer(cast(cppq.QObject) null);
+        attemptWatch.setSingleShot(true);
+        attemptWatch.setInterval(3000);
+        cast(void) attemptWatch.connectTimeout(&attemptTimedOut);
         retry = new QTimer(cast(cppq.QObject) null);
         retry.setSingleShot(true);
         retry.connectTimeout(&dial);
@@ -566,13 +559,64 @@ final class CoreClient : Bridge
         dial();
     }
 
+    private int dials;
+
+    // A fresh QLocalSocket for every attempt: after a refused connect (a dead core's socket
+    // file still there) Android's QLocalSocket stayed "connecting", and connectToServer on the
+    // same object then never finished — no error, no connected(), the UI waited forever.
+    // The old one is cut loose (its signal handles severed) and deleted by Qt (it has a parent).
+    private cppq.QObject socketsOwner;
+    private QtdConnection cRead, cConn, cDisc, cErr;
+
+    private void freshSocket()
+    {
+        if (sock !is null)
+        {
+            cRead.disconnect();
+            cConn.disconnect();
+            cDisc.disconnect();
+            cErr.disconnect();
+            sock.abort();
+            sock.deleteLater();
+        }
+        sock = new QLocalSocket(socketsOwner);
+        sock.setReadBufferSize(maxFrame + 64 * 1024);
+        cRead = sock.connectReadyRead(&drain);
+        cConn = sock.connectConnected(&sayHello);
+        cDisc = sock.connectDisconnected(&lost);
+        cErr = sock.connectErrorOccurred((QLocalSocket.LocalSocketError err) {
+            if (!ready && (dials < 3 || dials % 20 == 0))
+                plog("ui: core socket error ", cast(int) err, " (attempt ", dials, ")");
+            // a failed connect (no core yet) also lands here, without a disconnected()
+            if (!ready)
+                scheduleRetry();
+            else
+                lost();
+        });
+    }
+
     private void dial()
     {
         if (superseded)
             return;
-        sock.abort();   // a previous attempt's state, if any
+        dials++;
+        freshSocket();
         framer = LineFramer.init;
         sock.connectToServer(path, 3 /* QIODevice::ReadWrite */);
+        // An attempt must end in a ready session, an error, or this: on Android a connect
+        // after a refused one could stay "connecting" with no signal at all.
+        attemptWatch.start();
+    }
+
+    private QTimer attemptWatch;
+
+    private void attemptTimedOut()
+    {
+        if (ready || superseded)
+            return;
+        if (dials < 5 || dials % 20 == 0)
+            plog("ui: core attempt ", dials, " did not complete (socket state ", cast(int) sock.state(), ") — trying again");
+        scheduleRetry();
     }
 
     private void scheduleRetry()
@@ -734,6 +778,7 @@ final class CoreClient : Bridge
             {
                 ready = true;
                 retry.stop();
+                attemptWatch.stop();
                 plog("ui: core ready (", path, ")");
                 // what waited goes out FIRST, in order; only then is the UI told the core is
                 // up (Library.onLink refreshes at once — after the queued requests, not before)

@@ -11,7 +11,14 @@ Item {
     required property QtObject icons
     property string endpoint: ""
     property bool connected: false
+    property bool paired: false
     property var sync: ({ active: false, done: 0, total: 0, pending: 0, enabled: false })
+    readonly property int failures: (page.sync.failedPhotos || 0)
+    // "libp2p 12D3KooW…" says nothing to a person: the computer, and a short id for support
+    readonly property string computerId: {
+        const i = page.endpoint.indexOf("12D3Koo")
+        return i >= 0 ? "…" + page.endpoint.substring(page.endpoint.length - 6) : page.endpoint
+    }
     signal changeEndpoint()
     signal sendAll()
     signal autoSync(bool on)
@@ -52,22 +59,28 @@ Item {
                         spacing: 12
                         Rectangle {
                             width: 12; height: 12; radius: 6
-                            color: page.connected ? theme.ok : (page.endpoint.length ? theme.warn : theme.border)
+                            color: page.connected ? theme.ok : (page.paired ? theme.warn : theme.border)
                         }
                         ColumnLayout {
                             spacing: 1
                             Layout.fillWidth: true
                             Label {
-                                text: page.connected ? "Connected" : (page.endpoint.length ? "Offline" : "Not paired")
+                                text: page.connected ? "Connected to your computer"
+                                    : page.paired ? "Your computer is offline" : "No computer connected"
                                 color: theme.text; font.pixelSize: 17; font.weight: Font.DemiBold
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
                             }
                             Label {
-                                text: page.endpoint.length ? page.endpoint : "No computer set"
+                                text: page.paired
+                                    ? (page.connected ? "Paired" : "Paired — it connects again on its own when it's on")
+                                      + (page.computerId.length ? " · " + page.computerId : "")
+                                    : "Connect it to back up this phone's photos"
                                 color: theme.muted; font.pixelSize: 13
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
                             }
                         }
                         Button {
-                            text: page.endpoint.length ? "Change" : "Pair"
+                            text: page.paired ? "Change" : "Connect"
                             flat: true; Material.foreground: theme.accent
                             onClicked: page.changeEndpoint()
                         }
@@ -91,9 +104,24 @@ Item {
                             ? "Sending " + (page.sync.done + 1) + " of " + page.sync.total + "…"
                             : page.connected
                                 ? (page.sync.pending > 0
-                                    ? page.sync.pending + (page.sync.pending === 1 ? " photo to send" : " photos to send")
+                                    ? page.sync.pending + (page.sync.pending === 1 ? " photo" : " photos")
+                                      + (page.sync.enabled ? " waiting to go." : " not on the computer yet — Send all now, or turn on automatic sending.")
                                     : "The computer has all your photos.")
-                                : "Connect to the computer to send your photos."
+                                : page.paired
+                                    ? (page.sync.pending > 0
+                                        ? page.sync.pending + (page.sync.enabled ? " waiting — they go when the computer is back." : " not sent yet.")
+                                        : "Nothing waiting.")
+                                    : "Connect your computer to send your photos."
+                    }
+                    // what went wrong, in words, with the way to try again
+                    Label {
+                        Layout.fillWidth: true; wrapMode: Text.WordWrap
+                        visible: page.failures > 0 || !!page.sync.error
+                        color: theme.warn; font.pixelSize: 13
+                        text: (page.failures > 0
+                                ? page.failures + (page.failures === 1 ? " photo couldn't be sent" : " photos couldn't be sent") : "Sending stopped")
+                              + (page.sync.error ? ": " + page.sync.error : ".")
+                              + " Send all now tries again."
                     }
                     ProgressBar {
                         Layout.fillWidth: true
@@ -104,14 +132,18 @@ Item {
                     Button {
                         Layout.fillWidth: true
                         text: "Send all now"
-                        enabled: page.connected && !page.sync.active && page.sync.pending > 0
+                        enabled: page.connected && !page.sync.active && (page.sync.pending > 0 || page.failures > 0)
                         Material.background: theme.accent
                         Material.foreground: "#ffffff"
                         onClicked: page.sendAll()
                     }
                     RowLayout {
                         Layout.fillWidth: true
-                        Label { text: "Send new photos automatically"; color: theme.text; font.pixelSize: 14; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 1
+                            Label { text: "Send new photos automatically"; color: theme.text; font.pixelSize: 14; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                            Label { text: "Keeps working in the background, with a notification"; color: theme.muted; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                        }
                         Switch {
                             checked: page.sync.enabled === true
                             onToggled: page.autoSync(checked)

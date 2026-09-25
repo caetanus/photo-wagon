@@ -11,9 +11,14 @@ ApplicationWindow {
     // Android's Back: close what is open (viewer, dialog, drawer), then step back
     // through the tabs, before the app.
     onClosing: (close) => {
-        if (root.current !== null) { close.accepted = false; library.closePhoto() }
+        // the topmost first: the editor sits over the viewer
+        if (editView.photo !== null) { close.accepted = false; editView.requestClose() }
+        else if (root.current !== null) { close.accepted = false; library.closePhoto() }
         else if (dates.opened) { close.accepted = false; dates.close() }
         else if (root.tab !== 0) { close.accepted = false; root.tab = 0 }
+        // the top of the app: to the background, like any Android app — closing the Qt window
+        // here left a blank screen when the app was opened again (the process lives on)
+        else if (Qt.platform.os === "android") { close.accepted = false; Qt.openUrlExternally("pwback://") }
     }
     width: 412
     height: 915
@@ -101,6 +106,21 @@ ApplicationWindow {
         dates.close()
         tab = 0
     }
+    // every "connect" action lands on the computer's page itself, not on Library's first tab
+    function openComputer() {
+        tab = 2
+        libraryPage.showComputer()
+    }
+    // a true reset: date, album, person and search filters all go
+    function showAllPhotos() {
+        filterYear = 0; filterMonth = 0; filterDay = 0
+        library.showAll()
+    }
+    readonly property bool paired: library.computerPaired
+    function personName(id) {
+        for (const p of peopleData) if (p.id === id) return p.name || "Person"
+        return "Person"
+    }
     function openAlbum(id) {
         filterYear = 0; filterMonth = 0; filterDay = 0
         library.filterAlbum(id)
@@ -111,13 +131,15 @@ ApplicationWindow {
         return "Album"
     }
     function photosTitle() {
+        if (filterData.search) return "“" + filterData.search + "”"
+        if (filterData.personId) return personName(filterData.personId)
         if (filterData.albumId) return albumName(filterData.albumId)
-        if (filterYear === 0) return "Wagon"
+        if (filterYear === 0) return "Photos"
         if (filterDay) return new Date(filterYear, filterMonth - 1, filterDay).toLocaleDateString(Qt.locale(), "d MMMM yyyy")
         if (filterMonth) return new Date(filterYear, filterMonth - 1, 1).toLocaleDateString(Qt.locale(), "MMMM yyyy")
         return String(filterYear)
     }
-    readonly property bool filtered: filterData.albumId || filterYear !== 0
+    readonly property bool filtered: filterData.albumId || filterData.personId || !!filterData.search || filterYear !== 0
 
     // An icon button of the app bar: our SVG icons, tinted (Android has no glyph fonts).
     component BarButton: ToolButton {
@@ -161,12 +183,12 @@ ApplicationWindow {
             BarButton {
                 visible: root.tab === 0 && root.filtered
                 icon_: icons.chevronLeft
-                onClicked: { root.filterYear = 0; root.filterMonth = 0; root.filterDay = 0; library.loadPage(0, root.pageSize, 0, 0, 0) }
+                onClicked: root.showAllPhotos()
             }
             Label {
                 text: root.tab === 0 ? root.photosTitle() : root.tab === 1 ? "Search" : "Library"
                 font.pixelSize: 21; font.weight: Font.Bold; font.letterSpacing: -0.3
-                color: theme.accent; elide: Text.ElideRight
+                color: theme.text; elide: Text.ElideRight
                 Layout.fillWidth: true
             }
             BusyIndicator {
@@ -190,11 +212,24 @@ ApplicationWindow {
             Rectangle {
                 id: linkChip
                 readonly property int remaining: root.syncData.pending || 0
+                // failed in this run, or given up after their retries (waiting for Send all now)
+                readonly property int failed: (root.syncData.failedPhotos || 0)
+                readonly property bool active: root.syncData.active === true
+                readonly property bool auto: root.syncData.enabled === true
                 readonly property bool up: library.computerConnected
+                // unpaired is a choice, not a fault: an invitation, never the amber warning
+                readonly property bool invite: !root.paired
+                readonly property bool alarm: !up && !invite && remaining > 0 || failed > 0
                 // Google-Photos style: when everything is home and quiet, the banner steps
                 // out of the way so the grid runs full height; it returns the moment there is
-                // something to say (offline, or photos still on their way).
-                visible: !(linkChip.up && linkChip.remaining === 0)
+                // something to say (offline with photos waiting, failures, or not set up yet).
+                // quiet when there is nothing to say; a dismissed invitation stays away, but only
+                // the invitation — warnings that come later still show
+                // nothing until the phone core has told us its state (no "Connect" flash at start)
+                visible: root.status.connected
+                         && !(linkChip.up && linkChip.remaining === 0 && linkChip.failed === 0)
+                         && !(linkChip.invite && linkChip.dismissedInvite)
+                property bool dismissedInvite: false
                 Layout.fillWidth: true
                 Layout.leftMargin: 10; Layout.rightMargin: 10
                 Layout.topMargin: 6; Layout.bottomMargin: 4
@@ -209,25 +244,46 @@ ApplicationWindow {
                     spacing: 9
                     Rectangle {
                         implicitWidth: 9; implicitHeight: 9; radius: 4.5
-                        color: linkChip.up ? "#5fe0b0" : theme.warn
+                        color: linkChip.failed > 0 ? theme.warn : linkChip.up ? "#5fe0b0"
+                             : linkChip.invite ? theme.accent : linkChip.alarm ? theme.warn : theme.muted
                     }
                     Label {
                         Layout.fillWidth: true
                         color: linkChip.up ? theme.homeText : theme.text
                         font.pixelSize: 12; font.weight: Font.DemiBold
                         elide: Text.ElideRight
-                        text: linkChip.up
-                              ? (linkChip.remaining > 0 ? "Desktop reachable · " + linkChip.remaining + " left" : "Desktop reachable · all sent")
-                              : (linkChip.remaining > 0 ? "Desktop offline · " + linkChip.remaining + " will resume" : "Desktop offline · tap to connect")
+                        text: linkChip.failed > 0
+                              ? linkChip.failed + (linkChip.failed === 1 ? " photo couldn't be sent" : " photos couldn't be sent") + " · details"
+                              : linkChip.up
+                                ? (linkChip.active
+                                    ? linkChip.remaining + (linkChip.remaining === 1 ? " photo" : " photos") + " going to the computer"
+                                    : linkChip.auto
+                                      ? linkChip.remaining + " waiting to go to the computer"
+                                      : linkChip.remaining + (linkChip.remaining === 1 ? " photo" : " photos") + " not on the computer · Send")
+                                : linkChip.invite
+                                  ? "Back up to your computer · Connect"
+                                  : linkChip.remaining > 0
+                                    ? "Computer offline · " + linkChip.remaining + (linkChip.auto ? " waiting" : " not sent")
+                                    : "Computer offline"
                     }
                     Label {
-                        text: "›"
-                        font.pixelSize: 16
+                        id: chipEnd
+                        text: linkChip.invite ? "×" : "›"
+                        font.pixelSize: linkChip.invite ? 18 : 16
                         color: linkChip.up ? theme.homeText : theme.muted
                         opacity: 0.7
                     }
                 }
-                TapHandler { onTapped: root.tab = 2 }
+                // one handler: the right end of the invitation (×, a 48-unit target) puts it away
+                // for this session; anywhere else opens the computer's page
+                TapHandler {
+                    onTapped: (eventPoint) => {
+                        if (linkChip.invite && eventPoint.position.x > linkChip.width - 48)
+                            linkChip.dismissedInvite = true
+                        else
+                            root.openComputer()
+                    }
+                }
             }
             PhotoGrid {
                 id: grid
@@ -235,6 +291,7 @@ ApplicationWindow {
                 Layout.fillHeight: true
                 theme: root.theme
                 page: root.pageData
+                ready: root.status.connected
                 onLoadMore: library.loadPage(root.pageData.offset, root.pageSize, root.filterYear, root.filterMonth, root.filterDay)
                 onOpen: (id) => library.openPhoto(id)
             }
@@ -252,12 +309,14 @@ ApplicationWindow {
 
         // 2 — Library (hub: Albums + Computer/sync)
         LibraryPage {
+            id: libraryPage
             theme: root.theme
             icons: icons
             albums: root.albumsData
             connected: library.computerConnected
             sync: root.syncData
             endpoint: library.endpoint
+            paired: root.paired
             onOpenAlbum: (id) => root.openAlbum(id)
             onCreateAlbum: (name) => library.createAlbum(name, "[]")
             onRenameAlbum: (id, name) => library.renameAlbum(id, name)
@@ -311,11 +370,12 @@ ApplicationWindow {
             }
             background: Rectangle { color: "transparent" }
         }
-        NavTab { icon_: icons.photos; label: "Wagon" }
+        NavTab { icon_: icons.photos; label: "Photos" }
         NavTab { icon_: icons.search; label: "Search" }
         NavTab {
             icon_: icons.album; label: "Library"
-            alert: !library.computerConnected || root.syncData.pending > 0
+            // something to act on — not merely "no computer set up yet"
+            alert: (root.syncData.failedPhotos || 0) > 0 || (root.paired && !library.computerConnected && (root.syncData.pending || 0) > 0)
         }
     }
 
@@ -378,6 +438,7 @@ ApplicationWindow {
         parent: Overlay.overlay
         anchors.centerIn: parent
         modal: true
+        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.62) }
         closePolicy: Popup.NoAutoClose
         visible: pd.code !== undefined && pd.code !== dismissed
         padding: 24
@@ -407,6 +468,9 @@ ApplicationWindow {
         id: endpointDialog
         theme: root.theme
         current: library.endpoint
+        paired: library.computerPaired
+        connected: library.computerConnected
+        approving: pairingCodePopup.pd.code !== undefined
         parent: Overlay.overlay
         anchors.centerIn: parent
         width: Math.min(360, root.width - 32)

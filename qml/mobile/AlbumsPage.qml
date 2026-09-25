@@ -11,6 +11,8 @@ Item {
     required property QtObject theme
     property var albums: []
     property bool connected: false
+    property bool paired: false
+    signal connectComputer()
     signal openAlbum(int id)
     signal createAlbum(string name)
     signal renameAlbum(int id, string name)
@@ -24,17 +26,31 @@ Item {
         width: Math.min(300, parent.width - 48)
         spacing: 10
         visible: page.albums.length === 0
+        // three different situations, three different answers (and the way out of each)
         Label {
-            text: page.connected ? "No albums yet" : "No computer paired"
+            text: page.connected ? "No albums yet"
+                : page.paired ? "Your computer is offline"
+                : "Albums live on your computer"
             color: theme.text; font.pixelSize: 17; font.weight: Font.DemiBold
             Layout.alignment: Qt.AlignHCenter
         }
         Label {
             text: page.connected
-                ? "Tap + to make one, or add photos to an album from a photo."
-                : "Pair with the computer (Computer tab) to see its albums."
+                ? "Tap + to make your first album."
+                : page.paired
+                  ? "Its albums show up here as soon as it's reachable again."
+                  : "Connect your computer to browse and make albums from here."
             color: theme.muted; font.pixelSize: 13; wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true
+        }
+        Button {
+            visible: !page.connected
+            Layout.alignment: Qt.AlignHCenter
+            Layout.topMargin: 6
+            text: page.paired ? "Connection details" : "Connect computer"
+            Material.background: page.paired ? theme.panelAlt : theme.accent
+            Material.foreground: page.paired ? theme.text : "#ffffff"
+            onClicked: page.connectComputer()
         }
     }
 

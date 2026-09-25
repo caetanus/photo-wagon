@@ -214,6 +214,8 @@ public class MainActivity extends QtActivity
             requestPhotos();
         else if ("pwcore".equals(uri.getScheme()))
             CoreService.start(this);   // the UI lost the core and it did not come back: start it
+        else if ("pwback".equals(uri.getScheme()))
+            moveTaskToBack(true);      // Back at the top of the app: leave it, keep it alive
         else if ("pw".equals(uri.getScheme()))
             save(uri.toString());   // a pairing code opened as a link (or sent by adb): same path as the QR
     }

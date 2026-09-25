@@ -16,6 +16,7 @@ Item {
     property bool connected: false
     property var sync: ({})
     property string endpoint: ""
+    property bool paired: false
 
     signal openAlbum(int id)
     signal createAlbum(string name)
@@ -27,6 +28,7 @@ Item {
     signal rescan()
 
     property int seg: 0   // 0 Albums · 1 Computer
+    function showComputer() { seg = 1 }
 
     ColumnLayout {
         anchors.fill: parent
@@ -58,9 +60,10 @@ Item {
                             font.pixelSize: 13
                             font.weight: segBtn.on ? Font.Bold : Font.Normal
                         }
-                        // sync alert dot on the Computer segment
+                        // alert dot on the Computer segment: something to act on, not "not set up"
                         Rectangle {
-                            visible: segBtn.modelData.i === 1 && (!view.connected || (view.sync.pending || 0) > 0)
+                            visible: segBtn.modelData.i === 1 && ((view.sync.failedPhotos || 0) > 0
+                                     || (view.paired && !view.connected && (view.sync.pending || 0) > 0))
                             implicitWidth: 7; implicitHeight: 7; radius: 3.5
                             color: theme.warn
                         }
@@ -79,6 +82,8 @@ Item {
                 theme: view.theme
                 albums: view.albums
                 connected: view.connected
+                paired: view.paired
+                onConnectComputer: view.seg = 1
                 onOpenAlbum: (id) => view.openAlbum(id)
                 onCreateAlbum: (name) => view.createAlbum(name)
                 onRenameAlbum: (id, name) => view.renameAlbum(id, name)
@@ -89,6 +94,7 @@ Item {
                 icons: view.icons
                 endpoint: view.endpoint
                 connected: view.connected
+                paired: view.paired
                 sync: view.sync
                 onChangeEndpoint: view.changeEndpoint()
                 onSendAll: view.sendAll()

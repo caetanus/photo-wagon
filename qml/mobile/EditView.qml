@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
@@ -71,7 +72,7 @@ Rectangle {
         undoStack = []; undoCount = 0
         drawing = false; curPts = []
     }
-    onPhotoChanged: reset()
+    onPhotoChanged: { reset(); saveError = ""; saving = false }
 
     // A preset is just a bundle of the adjustments above (b/c/s brightness·contrast·saturation,
     // w warmth −cool..+warm, f fade, se sepia tint). MultiEffect renders them on the GPU.
@@ -499,7 +500,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.margins: 10
         z: 2
-        Button { text: "Cancel"; flat: true; palette.buttonText: "#ffffff"; onClicked: editor.cancelled() }
+        Button { text: "Cancel"; flat: true; palette.buttonText: "#ffffff"; onClicked: editor.requestClose() }
         Item { Layout.fillWidth: true }
         Button {
             text: "Undo"
@@ -509,10 +510,53 @@ Rectangle {
             onClicked: editor.undo()
         }
         Button {
-            text: "Save"
+            // the original is never touched: the result is a new photo next to it
+            text: editor.saving ? "Saving…" : "Save copy"
+            enabled: !editor.saving
             highlighted: true
             Material.accent: theme.accent
             onClicked: editor.doSave()
+        }
+    }
+
+    // a save that failed stays on screen, with the edits, to try again
+    property string saveError: ""
+    property bool saving: false
+    Rectangle {
+        visible: editor.saveError.length > 0
+        z: 3
+        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+        anchors.topMargin: 64; anchors.leftMargin: 12; anchors.rightMargin: 12
+        height: errLabel.implicitHeight + 20
+        radius: 10
+        color: Qt.rgba(0.35, 0.12, 0.08, 0.92)
+        Label {
+            id: errLabel
+            anchors.fill: parent; anchors.margins: 10
+            text: editor.saveError
+            color: "#ffffff"; font.pixelSize: 13; wrapMode: Text.WordWrap
+        }
+    }
+
+    // Back / Cancel: edits are not thrown away without asking
+    function requestClose() {
+        if (editor.canUndo) discardDialog.open()
+        else editor.cancelled()
+    }
+    Dialog {
+        id: discardDialog
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        z: 200   // over the editor, which itself sits high in the overlay (z 50)
+        modal: true
+        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.62) }
+        title: "Discard your edits?"
+        standardButtons: Dialog.Discard | Dialog.Cancel
+        Material.background: theme.panel
+        onDiscarded: { discardDialog.close(); editor.cancelled() }
+        contentItem: Label {
+            text: "The photo stays as it was."
+            color: theme.muted; wrapMode: Text.WordWrap
         }
     }
 
@@ -520,18 +564,37 @@ Rectangle {
         // grab the edited photo (effects + pen included) to a JPEG next to the original —
         // that folder is one of the phone's scanned roots, so it appears on the next scan.
         const src = editor.photo ? (editor.photo.path || "") : ""
-        if (!src.length) { editor.cancelled(); return }
+        if (!src.length) { editor.saveError = "This photo has no file on the phone to save next to."; return }
         const slash = src.lastIndexOf("/")
         const dot = src.lastIndexOf(".")
         const base = (dot > slash ? src.substring(0, dot) : src)
         const path = base + "-PW" + Date.now() + ".jpg"
-        frame.grabToImage(function (result) {
+        // at the resolution the editor actually decoded (its sourceSize, 2048 on the long
+        // side, or the photo's own when smaller) — not the phone-sized frame on screen, and
+        // never enlarged past what was decoded (that would only be bigger, not sharper)
+        const pw = editor.photo.width || 0, ph = editor.photo.height || 0
+        const k = Math.min(1, 2048 / Math.max(pw, ph, 1))
+        // grabToImage's target is in logical pixels: it gets multiplied by the screen's
+        // device-pixel ratio (2.6 on a phone), so divide it out to get these pixels exactly
+        const dpr = Screen.devicePixelRatio > 0 ? Screen.devicePixelRatio : 1
+        const target = (pw > 0 && ph > 0 && frame.width > 0 && frame.height > 0)
+            ? Qt.size(Math.round(frame.width * Math.max(pw, ph) * k / Math.max(frame.width, frame.height) / dpr),
+                      Math.round(frame.height * Math.max(pw, ph) * k / Math.max(frame.width, frame.height) / dpr))
+            : Qt.size(frame.width, frame.height)
+        editor.saving = true
+        editor.saveError = ""
+        const ok = frame.grabToImage(function (result) {
+            editor.saving = false
             if (result.saveToFile(path)) {
                 library.rescanPhotos()   // pick the new file up now, not on the next timer tick
                 editor.saved(path)
             } else {
-                editor.cancelled()
+                editor.saveError = "Couldn't save the copy (is the storage full?). Your edits are still here — try again."
             }
-        })
+        }, target)
+        if (!ok) {
+            editor.saving = false
+            editor.saveError = "Couldn't render the edited photo. Try again."
+        }
     }
 }

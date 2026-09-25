@@ -155,7 +155,11 @@ final class P2pBridge : Bridge
         tcp = new TcpBridge;
         tcp.onEvent = (string ev, JSONValue data) { if (!p2pUp && onEvent) onEvent(ev, data); };
         tcp.onConnected = (bool up) { if (!p2pUp && onConnected) onConnected(up); };
-        tcp.onScanned = (string c) { adoptCode(c); };
+        tcp.onScanned = (string c) {
+            adoptCode(c);
+            if (onPairingChanged)
+                onPairingChanged();   // the UI follows at once: "looking for your computer…"
+        };
     }
 
     override void start()
@@ -234,6 +238,14 @@ final class P2pBridge : Bridge
     override bool connected() const { return p2pUp || tcp.connected; }
     override bool remote() const { return true; }
     override string endpoint() const { return p2pUp ? "libp2p " ~ p2pWith[0 .. 12] ~ "…" : tcp.endpoint; }
+    /// Paired: a pairing code was adopted (the libp2p target), or a plain TCP endpoint set.
+    override bool paired()
+    {
+        synchronized (lock)
+            if (target.valid)
+                return true;
+        return tcp.endpoint.length > 0;
+    }
 
     override void setEndpoint(string host, ushort port)
     {

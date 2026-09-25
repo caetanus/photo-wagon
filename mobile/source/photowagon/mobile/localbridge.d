@@ -54,6 +54,7 @@ final class LocalBridge : Bridge
     // launch resumes. Reading + hashing + base64 of a file happens on a thread; the
     // computer is asked by hash first and the bytes go only when it lacks them.
     private bool autoSync;             // persisted: files/settings/autosync
+    private bool manualRun;            // "Send all now": one run to the end, auto-sync untouched
     private string autoSyncFile;
     private string syncStatusFile;     // files/settings/sync-status, read by the Java notifier
     private long[] sendQueue;         // the WANTED photos (negotiated), waiting for their bytes
@@ -208,8 +209,9 @@ final class LocalBridge : Bridge
             ]));
             startSync();       // new photos: off they go
         };
+        computer.onPairingChanged = () { emitLink(computer.connected); };
         computer.onConnected = (bool ok) {
-            emit("computer.link", JSONValue(["connected": JSONValue(ok), "endpoint": JSONValue(computer.endpoint)]));
+            emitLink(ok);
             emit("library.changed", JSONValue.emptyObject); // the merged timeline changed shape
             if (ok)
             {
@@ -297,6 +299,13 @@ final class LocalBridge : Bridge
         facesApiMissing = false;   // another computer: ask it afresh
         facesRetryAt = null;
         computer.setEndpoint(host, port);
+        emitLink(computer.connected);   // paired now (or not): the UI shows it at once
+    }
+
+    private void emitLink(bool up)
+    {
+        emit("computer.link", JSONValue(["connected": JSONValue(up), "endpoint": JSONValue(computer.endpoint),
+            "paired": JSONValue(computer.paired)]));
     }
 
     private void emit(string ev, JSONValue data)
@@ -347,7 +356,8 @@ final class LocalBridge : Bridge
                     ix[k] = lastProgress[k];
         return JSONValue([
             "endpoint": JSONValue(computer.endpoint),
-            "computer": JSONValue(["connected": JSONValue(computer.connected), "endpoint": JSONValue(computer.endpoint)]),
+            "computer": JSONValue(["connected": JSONValue(computer.connected), "endpoint": JSONValue(computer.endpoint),
+                "paired": JSONValue(computer.paired)]),
             "sync": syncStatus(),
             "indexing": ix,
             "pairingCode": pendingPairingCode.length ? JSONValue(pendingPairingCode) : JSONValue(null),
@@ -475,11 +485,12 @@ final class LocalBridge : Bridge
             return JSONValue.emptyObject;
         case "p2p.status":
             return JSONValue(["peerId": JSONValue(null), "addrs": JSONValue(cast(JSONValue[]) []), "peers": JSONValue(cast(JSONValue[]) []), "off": JSONValue(true)]);
-        case "library.sendAll":       // turns the automatic sync on and starts it now
+        case "library.sendAll":       // one run now; the automatic-sync preference stays as it is
             {
-                setAutoSync(true);
+                manualRun = true;
                 index.resetTries();
                 immutable n = index.unsentCount();
+                publishSync();   // "manual" out before hashing / negotiating: CoreService holds the run
                 startSync();
                 return JSONValue(["queued": JSONValue(n)]);
             }
@@ -1211,6 +1222,27 @@ final class LocalBridge : Bridge
     /// phone's own original, or the computer's original fetched into remote-files first by
     /// `download` — as {path, mime}. Opening the sheet needs the Activity, so the UI does it
     /// (uiadapter.UiBridge).
+    private static string mimeFor(string path)
+    {
+        import std.path : extension;
+        import std.uni : toLower;
+
+        switch (path.extension.toLower)
+        {
+        case ".mp4", ".m4v": return "video/mp4";
+        case ".mov": return "video/quicktime";
+        case ".3gp": return "video/3gpp";
+        case ".webm": return "video/webm";
+        case ".mkv": return "video/x-matroska";
+        case ".jpg", ".jpeg": return "image/jpeg";
+        case ".png": return "image/png";
+        case ".webp": return "image/webp";
+        case ".heic", ".heif": return "image/heic";
+        case ".gif": return "image/gif";
+        default: return "*/*";
+        }
+    }
+
     private void share(long id, ResultCb cb)
     {
         download(id, (r, e) {
@@ -1218,7 +1250,8 @@ final class LocalBridge : Bridge
             immutable path = (r.type == JSONType.object && "path" in r && r["path"].type == JSONType.string)
                 ? r["path"].str : "";
             if (!path.length) { cb(JSONValue(null), error("no_file", "no local file to share")); return; }
-            cb(JSONValue(["path": JSONValue(path), "mime": JSONValue("image/*")]), JSONValue(null));
+            // the share targets filter on it: a video offered as image/* reaches the wrong apps
+            cb(JSONValue(["path": JSONValue(path), "mime": JSONValue(mimeFor(path))]), JSONValue(null));
         });
     }
 
@@ -1430,6 +1463,12 @@ final class LocalBridge : Bridge
             "sent": JSONValue(sent),
             "skipped": JSONValue(skipped),
             "failed": JSONValue(sendFailed),
+            // failed for good (after its retries) — outlives the run; "Send all now" retries them
+            "gaveUp": JSONValue(index.gaveUpCount()),
+            // photos (not attempts) that failed and are not on the computer: what the UI shows
+            "failedPhotos": JSONValue(index.failedPhotoCount()),
+            // a "Send all now" run is going: CoreService keeps it alive like auto-sync would
+            "manual": JSONValue(manualRun),
             "error": lastSyncError.length ? JSONValue(lastSyncError) : JSONValue(null),
         ]);
     }
@@ -1457,7 +1496,7 @@ final class LocalBridge : Bridge
     /// Queue what is missing on the computer and start, if allowed and connected.
     private void startSync()
     {
-        if (!autoSync || !computer.connected)
+        if ((!autoSync && !manualRun) || !computer.connected)
         {
             publishSync();
             return;
@@ -1486,6 +1525,7 @@ final class LocalBridge : Bridge
         auto ids = index.unsentIds();
         if (ids.length == 0)
         {
+            manualRun = false;   // a "Send all now" run is complete
             pumpSend();   // nothing to offer — let pumpSend finalise the run
             return;
         }
@@ -1666,6 +1706,7 @@ final class LocalBridge : Bridge
             }
             index.saveNow();   // the last marks must not wait for the timer: Android may kill us next
             sent = sendTotal = sendFailed = skipped = declined = 0;
+            manualRun = false;   // a "Send all now" run is over; new photos wait for auto-sync
             publishSync();
             pumpFaces();   // the run is over (even one that found everything already there)
             return;

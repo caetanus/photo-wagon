@@ -96,6 +96,8 @@ version (WithUi)
     @Property("endpointChanged") bool remote = false;
     /// Phone: whether the computer at `endpoint` is reachable right now.
     @Property("endpointChanged") bool computerConnected = false;
+    /// A computer is set up (the phone's pairing), reachable or not.
+    @Property("endpointChanged") bool computerPaired = false;
     /// Desktop: {enabled, port, addrs, code, qr:{width, rows}} while a phone may pair.
     @Property("pairingChanged") string pairing = `{"enabled":false}`;
     /// Desktop: the paired phones — {devices:[{peerId, name, state, pairedAt, lastSeen}]}.
@@ -886,6 +888,7 @@ version (WithUi)
             f[g] = fTagGroup == g && fTag !is null ? fTag : "";
         f["keyword"] = fKeyword is null ? "" : fKeyword;
         f["similarTo"] = fSimilar;
+        f["search"] = fSemantic is null ? "" : fSemantic;   // the free-text search on screen
         filter = f.toString();
         filterChanged.emit();
         if (personFilter != cast(int) fPerson)
@@ -1706,6 +1709,7 @@ version (WithUi)
         {
             auto c = st["computer"];
             computerConnected = "connected" in c && c["connected"].type == JSONType.true_;
+            computerPaired = computerConnected || ("paired" in c && c["paired"].type == JSONType.true_);
             if ("endpoint" in c && c["endpoint"].type == JSONType.string)
                 endpoint = c["endpoint"].str;
             endpointChanged.emit();
@@ -1922,6 +1926,7 @@ version (WithUi)
             break;
         case "computer.link":
             computerConnected = data["connected"].boolean;
+            computerPaired = computerConnected || ("paired" in data && data["paired"].type == JSONType.true_);
             endpoint = data["endpoint"].str;
             endpointChanged.emit();
             break;

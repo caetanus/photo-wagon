@@ -712,6 +712,11 @@ final class PhoneIndex
             if (known && known.size == c.size && known.mtimeMs == c.mtimeMs && known.thumb !is null
                 && known.thumb.startsWith(thumbDir) && known.thumb.exists && known.kind.length)
                 continue;
+            // a video whose frame could not be taken shows the grey tile: done, not retried on
+            // every start (the retriever may hang on it again)
+            if (known && known.size == c.size && known.mtimeMs == c.mtimeMs && known.isVideo
+                && known.thumb is null && known.kind.length)
+                continue;
             todo ~= c;
         }
         long removed;
@@ -908,20 +913,26 @@ final class PhoneIndex
             // play glyph — exactly what the phone does when the retriever fails.
             version (Android)
             {
-                import std.string : toStringz;
-                import qt.quick.qjnienvironment : QJniEnvironment;
-
                 immutable vthumb = buildPath(thumbDir,
                     toHexString!(LetterCase.lower)(sha1Of(c.path ~ "@" ~ c.mtimeMs.to!string)).idup ~ ".jpg");
-                auto env = QJniEnvironment.getJniEnv();
                 long dur = -1;
                 {
                     import photowagon.mobile.atomicfile : publishAtomic;
 
+                    // On a thread of its own, bounded: Android's retriever can hang on a file,
+                    // and here (the core's Qt thread) that blocked the UI's connection for good.
                     cast(void) publishAtomic(vthumb, (string tmp) {
-                        dur = pw_video_thumb(cast(void*) env, c.path.toStringz, tmp.toStringz, 512);
+                        dur = videoFrameBounded(c.path, tmp, 512);
                         return dur >= 0;
                     });
+                }
+                // not tried at all (frames off for this run): no kind, so the next start
+                // decodes it again — only a real failure keeps the grey tile for good
+                if (dur == -2)
+                {
+                    p.thumb = null;
+                    p.kind = null;
+                    return p;
                 }
                 if (dur >= 0 && vthumb.exists)
                 {
@@ -1174,6 +1185,28 @@ final class PhoneIndex
         long n;
         foreach (ref p; photos)
             if (!p.sent && !p.declined && p.tries < maxTries && syncable(p))
+                n++;
+        return n;
+    }
+
+    /// Photos that are not on the computer after at least one failed try (retrying or given
+    /// up) — distinct photos, not attempts.
+    long failedPhotoCount() const
+    {
+        long n;
+        foreach (ref p; photos)
+            if (!p.sent && !p.declined && p.tries > 0 && syncable(p))
+                n++;
+        return n;
+    }
+
+    /// Photos that failed maxTries times: no longer offered on their own, waiting for the
+    /// user's "Send all now" (resetTries) — they must stay visible as failures until then.
+    long gaveUpCount() const
+    {
+        long n;
+        foreach (ref p; photos)
+            if (!p.sent && !p.declined && p.tries >= maxTries && syncable(p))
                 n++;
         return n;
     }
@@ -1483,5 +1516,115 @@ private final class IndexSaver
             plog("phone: cannot save index: ", e.msg);
             return false;
         }
+    }
+}
+
+// ---- video frames, off the calling thread and bounded ----------------------------------------
+//
+// pw_video_thumb (MediaMetadataRetriever through the JNI shim) can block indefinitely on some
+// files. It runs on a thread of its own; the caller waits at most videoFrameLimit. A worker
+// that did not come back is abandoned (it may be stuck in the platform for good) and the next
+// frame gets a new one; after a few abandoned workers, video frames are off for this process.
+version (Android)
+{
+    import core.sync.condition : Condition;
+    import core.sync.mutex : Mutex;
+    import core.thread : Thread;
+    import core.time : Duration;
+
+    private enum Duration videoFrameLimit = 6.seconds;
+    private enum maxStuckGrabbers = 3;
+
+    private final class FrameGrabber
+    {
+        Mutex m;
+        Condition cv;
+        string path, dest;
+        int maxSize;
+        bool hasJob, done;
+        long result;
+        Thread thread;
+
+        this()
+        {
+            m = new Mutex;
+            cv = new Condition(m);
+            thread = new Thread(&run);
+            thread.name = "video-frames";
+            thread.isDaemon = true;
+            thread.start();
+        }
+
+        private void run()
+        {
+            import std.string : toStringz;
+            import qt.quick.qjnienvironment : QJniEnvironment;
+
+            useCrashStack();
+            for (;;)
+            {
+                string p, d;
+                int ms;
+                synchronized (m)
+                {
+                    while (!hasJob)
+                        cv.wait();
+                    p = path; d = dest; ms = maxSize;
+                    hasJob = false;
+                }
+                long r = -1;
+                try
+                {
+                    auto env = QJniEnvironment.getJniEnv();   // attaches this thread to the VM
+                    r = pw_video_thumb(cast(void*) env, p.toStringz, d.toStringz, ms);
+                }
+                catch (Throwable)
+                {
+                }
+                synchronized (m)
+                {
+                    result = r;
+                    done = true;
+                    cv.notifyAll();
+                }
+            }
+        }
+    }
+
+    private __gshared FrameGrabber grabber;
+    private __gshared int stuckGrabbers;
+
+    /// The duration of the video (ms) with its frame written to `dest`, or -1 — within
+    /// videoFrameLimit whatever the platform does.
+    private long videoFrameBounded(string path, string dest, int maxSize)
+    {
+        if (stuckGrabbers >= maxStuckGrabbers)
+            return -2;   // not tried (frames are off for this run): the caller retries next start
+        if (grabber is null)
+            grabber = new FrameGrabber;
+        auto g = grabber;
+        synchronized (g.m)
+        {
+            g.path = path; g.dest = dest; g.maxSize = maxSize;
+            g.done = false;
+            g.hasJob = true;
+            g.cv.notifyAll();
+            immutable deadline = MonoTime.currTime + videoFrameLimit;
+            while (!g.done)
+            {
+                immutable left = deadline - MonoTime.currTime;
+                if (left <= Duration.zero)
+                    break;
+                g.cv.wait(left);
+            }
+            if (g.done)
+                return g.result;
+        }
+        // stuck in the platform: leave it there, the next video gets a fresh worker
+        grabber = null;
+        stuckGrabbers++;
+        plog("phone: no frame from ", path, " within ", videoFrameLimit.total!"seconds", " s — grey tile",
+            stuckGrabbers >= maxStuckGrabbers ? " (video frames off for this run)" : "");
+        return -1;
     }
 }

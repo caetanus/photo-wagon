@@ -14,6 +14,7 @@ abstract class Bridge
 {
     EventCb onEvent;                     /// unsolicited {"event":..,"data":..}
     void delegate(bool up) onConnected;  /// link state changes
+    void delegate() onPairingChanged;    /// a computer was set up (or dropped) by other means — a scanned code
 
     /// Starts connecting. Call after the application object exists.
     abstract void start();
@@ -41,6 +42,9 @@ abstract class Bridge
     /// Where the other end is, for transports that have a choice. No-op by default.
     void setEndpoint(string host, ushort port) {}
     string endpoint() const { return ""; }
+    /// A computer is set up (paired), reachable or not — endpoint() may be empty while it is
+    /// away (a libp2p link names its peer only while up).
+    bool paired() { return endpoint().length > 0; }
 
     /// True when photos live on another machine and must travel as bytes.
     bool remote() const { return false; }

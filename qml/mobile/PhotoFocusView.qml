@@ -73,7 +73,15 @@ Rectangle {
         Label { id: chl; anchors.centerIn: parent; text: parent.text_; color: viewer.theme.accent; font.pixelSize: 12; font.weight: Font.Medium }
     }
     onVisibleChanged: if (visible) forceActiveFocus()
-    onPhotoChanged: { resetZoom(); Qt.callLater(centerStrip) }   // a new photo always opens un-zoomed
+    onPhotoChanged: {
+        resetZoom(); chrome = true; Qt.callLater(centerStrip)
+        // video → video: a fresh player (its first-frame priming and speed start over)
+        if (isVideo) { videoLoader.active = false; videoLoader.active = Qt.binding(() => viewer.isVideo) }
+    }   // a new photo always opens un-zoomed, controls shown
+
+    // A single tap on the photo hides / shows every control (the photo alone, like a gallery);
+    // a double tap still zooms.
+    property bool chrome: true
 
     Keys.onPressed: (event) => {
         if (event.key === Qt.Key_Escape) { viewer.closed(); event.accepted = true }
@@ -89,6 +97,7 @@ Rectangle {
     // A soft scrim under the top controls, so the close / nav buttons stay legible
     // over a bright photo without a hard black bar.
     Rectangle {
+        visible: viewer.chrome
         anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
         height: 96
         gradient: Gradient {
@@ -154,9 +163,18 @@ Rectangle {
             target: image
         }
         TapHandler {
+            // exclusive: singleTapped waits out the double-tap interval, so a double tap is
+            // never also a chrome toggle
+            exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
+            onSingleTapped: viewer.chrome = !viewer.chrome
             onDoubleTapped: (pt) => {
-                if (viewer.zoomed) viewer.resetZoom()
-                else { image.scale = 2.5 }
+                if (viewer.zoomed) { viewer.resetZoom(); return }
+                // zoom INTO the tapped point: keep it under the finger (scale is about the centre)
+                const s = 2.5
+                const p = pt.position
+                image.scale = s
+                image.x -= (s - 1) * (p.x - image.width / 2)
+                image.y -= (s - 1) * (p.y - image.height / 2)
             }
         }
     }
@@ -165,6 +183,7 @@ Rectangle {
     // Loaded only for a video and torn down (which stops it) when you move to a still. The
     // frame thumbnail arrives in the grid once the computer has the video and made one.
     Loader {
+        id: videoLoader
         anchors.fill: parent
         active: viewer.isVideo
         sourceComponent: Component {
@@ -255,7 +274,7 @@ Rectangle {
     // Face boxes over the painted image area.
     Item {
         id: overlay
-        visible: viewer.showFaces && !viewer.zoomed && image.status === Image.Ready && (!viewer.facesOnHover || imageHover.hovered || namer.opened)
+        visible: viewer.chrome && viewer.showFaces && !viewer.zoomed && image.status === Image.Ready && (!viewer.facesOnHover || imageHover.hovered || namer.opened)
         readonly property real px: image.x + (image.width - image.paintedWidth) / 2
         readonly property real py: image.y + (image.height - image.paintedHeight) / 2
         Repeater {
@@ -306,6 +325,7 @@ Rectangle {
         property int faceId: 0
         property string currentName: ""
         modal: true
+        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.55) }
         anchors.centerIn: parent
         width: 320
         padding: 16
@@ -356,6 +376,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.verticalCenter: image.verticalCenter
         anchors.leftMargin: 8
+        visible: viewer.chrome
         enabled: viewer.photo && viewer.photo.prev !== null
         opacity: enabled ? 0.9 : 0.25
         onClicked: library.prev()
@@ -365,12 +386,14 @@ Rectangle {
         anchors.right: parent.right
         anchors.verticalCenter: image.verticalCenter
         anchors.rightMargin: 8
+        visible: viewer.chrome
         enabled: viewer.photo && viewer.photo.next !== null
         opacity: enabled ? 0.9 : 0.25
         onClicked: library.next()
     }
     GlassButton {
         icon_: icons.close
+        visible: viewer.chrome
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.margins: 10
@@ -379,7 +402,8 @@ Rectangle {
     // Edit: opens the mini editor on this photo (local phone photos only).
     GlassButton {
         icon_: icons.edit
-        visible: viewer.photo && viewer.photo.remote !== true && !viewer.zoomed
+        // stills only: the editor paints a picture, a video has none
+        visible: viewer.chrome && viewer.photo && viewer.photo.remote !== true && !viewer.isVideo && !viewer.zoomed
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.margins: 10
@@ -388,7 +412,7 @@ Rectangle {
     // Details: swipe up on the photo, or tap ⓘ.
     GlassButton {
         icon_: icons.info
-        visible: viewer.photo && !viewer.zoomed
+        visible: viewer.chrome && viewer.photo && !viewer.zoomed
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.topMargin: 10
@@ -398,7 +422,7 @@ Rectangle {
     // Share to WhatsApp / e-mail / … through the Android share sheet.
     GlassButton {
         icon_: icons.share
-        visible: viewer.photo && !viewer.zoomed
+        visible: viewer.chrome && viewer.photo && !viewer.zoomed
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.topMargin: 10
@@ -408,7 +432,7 @@ Rectangle {
     // Cast to a TV — the phone drives the computer's CastService (it is on the TV's LAN).
     GlassButton {
         icon_: icons.cast
-        visible: viewer.photo && !viewer.zoomed
+        visible: viewer.chrome && viewer.photo && !viewer.zoomed
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.leftMargin: 62
@@ -446,7 +470,7 @@ Rectangle {
     // Uses the grid's already-loaded page, so it costs no extra backend round-trip.
     Rectangle {
         id: filmstripBar
-        visible: viewer.strip && viewer.strip.length > 1 && !viewer.zoomed
+        visible: viewer.chrome && viewer.strip && viewer.strip.length > 1 && !viewer.zoomed
         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
         height: 60
         color: Qt.rgba(0, 0, 0, 0.62)
@@ -496,6 +520,7 @@ Rectangle {
     // Metadata scrim: date on top, the rest small; the send button at the right.
     // A gradient from transparent up into the photo, not a hard opaque bar.
     Rectangle {
+        visible: viewer.chrome
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: filmstripBar.visible ? filmstripBar.top : parent.bottom
@@ -559,6 +584,7 @@ Rectangle {
         width: viewer.width
         height: Math.min(viewer.height * 0.66, sheetCol.implicitHeight + 34)
         dragMargin: viewer.zoomed ? 0 : 24
+        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.55) }   // dim the photo, don't wash it pale
         Material.background: viewer.theme.panel
         background: Rectangle { color: viewer.theme.panel; topLeftRadius: 20; topRightRadius: 20 }
 

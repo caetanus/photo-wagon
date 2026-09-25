@@ -18,6 +18,7 @@ import QtQuick.Controls.Material
 Item {
     id: grid
     required property QtObject theme
+    property bool ready: true   // the core (and so the listing) is up
     property var page: ({ total: 0, offset: 0, items: [] })
     readonly property bool hasMore: page.offset < page.total
     property bool requesting: false
@@ -262,7 +263,9 @@ Item {
     Label {
         anchors.centerIn: parent
         visible: rows.count === 0
-        text: grid.page.total === 0 ? "No photos yet — allow access to your photos, or wait for the scan." : "Loading…"
+        // before the phone core has answered, "no photos" would be a lie
+        text: !grid.ready ? "Loading your photos…"
+            : grid.page.total === 0 ? "No photos yet — allow access to your photos, or wait for the scan." : "Loading…"
         color: theme.muted; font.pixelSize: 15
         width: parent.width - 48; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap
     }

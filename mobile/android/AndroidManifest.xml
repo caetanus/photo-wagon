@@ -68,5 +68,22 @@
             android:name="org.photowagon.mobile.SyncService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <!-- The core (index, faces, sync, p2p) in its own process: same .so, main() is
+             called again with "-service" and dispatches to coremain.d. See CoreService.java. -->
+        <service
+            android:name="org.photowagon.mobile.CoreService"
+            android:process=":core"
+            android:exported="false"
+            android:foregroundServiceType="dataSync">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="-- %%INSERT_APP_LIB_NAME%% --" />
+            <meta-data
+                android:name="android.app.arguments"
+                android:value="-service" />
+            <meta-data
+                android:name="android.app.background_running"
+                android:value="true" />
+        </service>
 </application>
 </manifest>

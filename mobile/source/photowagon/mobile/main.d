@@ -28,6 +28,8 @@ import photowagon.ui.backend : Library;
 import photowagon.mobile.localbridge : LocalBridge;
 import photowagon.mobile.phoneindex : PhoneIndex;
 import photowagon.mobile.p2pbridge : P2pBridge;
+// static: coremain mixes in its own createApp (QCoreApplication); keep it out of this scope
+static import photowagon.mobile.coremain;
 
 // GC statistics on (read back every 100 photos in phoneindex): a stop-the-world
 // collection pauses the Qt thread too, and that is what a stall looks like.
@@ -101,6 +103,14 @@ int main()
 {
     captureStdioToLogcat();
     adoptQtEnvironment();
+    {
+        // CoreService (":core") loads this same .so and calls main() with "-service"
+        // (android.app.arguments in the manifest): run the core, not the UI.
+        import core.runtime : Runtime;
+        import std.algorithm : canFind;
+        if (Runtime.args.canFind("-service"))
+            return photowagon.mobile.coremain.serviceMain();
+    }
     if ("QT_QUICK_CONTROLS_STYLE" !in environment)
         environment["QT_QUICK_CONTROLS_STYLE"] = "Material";
     version (Android)

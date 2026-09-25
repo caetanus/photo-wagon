@@ -41,6 +41,7 @@ public class MainActivity extends QtActivity
     private static MainActivity instance;
     private static Handler watcher;
     private static long statusSeen;
+    private static boolean coreForegroundSeen = true;   // last auto-sync state the core was reconciled with
     private static boolean notifyAsked;
 
     @Override
@@ -63,6 +64,16 @@ public class MainActivity extends QtActivity
         if (new File(new File(getFilesDir(), "settings"), "autosync").exists())
             SyncService.standby(getApplicationContext());
         handle(getIntent());
+    }
+
+    @Override
+    protected void onStart()
+    {
+        super.onStart();
+        // The core's own process (":core") keeps running when this activity goes away. Started
+        // (or reconciled) on EVERY start, not only onCreate: a core Android stopped while the
+        // app sat in the background must come back when the user returns to the activity.
+        CoreService.start(getApplicationContext());
     }
 
     /**
@@ -159,6 +170,13 @@ public class MainActivity extends QtActivity
                             instance.requestPermissions(new String[] { "android.permission.POST_NOTIFICATIONS" }, REQUEST_NOTIFY);
                         }
                         SyncService.update(app, st);
+                        // auto-sync flipped: move the core in or out of the foreground with it
+                        boolean enabled = st.optBoolean("enabled", true);
+                        if (enabled != coreForegroundSeen)
+                        {
+                            coreForegroundSeen = enabled;
+                            CoreService.start(app);
+                        }
                     }
                 }
                 catch (Exception e)

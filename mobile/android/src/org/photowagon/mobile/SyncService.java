@@ -183,6 +183,19 @@ public class SyncService extends Service
         return START_STICKY;
     }
 
+    /**
+     * Android 15+: the app's dataSync foreground budget (six hours per 24 h, shared with
+     * CoreService) is spent. Leave the foreground and stop as required — otherwise the
+     * system crashes the process.
+     */
+    @Override
+    public void onTimeout(int startId, int fgsType)
+    {
+        Log.w(TAG, "sync service: foreground time budget exhausted (type " + fgsType + ") — stopping");
+        stopForeground(Service.STOP_FOREGROUND_REMOVE);
+        stopSelf();
+    }
+
     @Override
     public void onDestroy()
     {

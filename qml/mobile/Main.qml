@@ -225,25 +225,6 @@ ApplicationWindow {
                 color: theme.text; elide: Text.ElideRight
                 Layout.fillWidth: true
             }
-            BarButton {
-                icon_: icons.share
-                enabled: grid.selectedCount > 0
-                onClicked: library.sharePhotos(JSON.stringify(grid.selectedIds()))
-            }
-            BarButton {
-                icon_: icons.album
-                enabled: grid.selectedCount > 0
-                onClicked: albumPicker.openFor(grid.selectedIds())
-            }
-            BarButton {
-                visible: root.paired
-                icon_: icons.upload
-                enabled: library.computerConnected && selectionBar.unsent.length > 0
-                onClicked: {
-                    library.sendPhotosToComputer(JSON.stringify(selectionBar.unsent.map(it => it.id)))
-                    grid.clearSelection()
-                }
-            }
         }
         RowLayout {
             visible: !selectionBar.visible
@@ -373,6 +354,81 @@ ApplicationWindow {
                 onLoadMore: library.loadPage(root.pageData.offset, root.pageSize, root.filterYear, root.filterMonth, root.filterDay)
                 onOpen: (id) => library.openPhoto(id)
             }
+            // selecting: what can be done with the chosen photos, in reach of the thumb
+            Rectangle {
+                id: selectionPanel
+                visible: grid.selecting
+                Layout.fillWidth: true
+                implicitHeight: selCol.implicitHeight + 16
+                color: theme.panel
+                topLeftRadius: 18; topRightRadius: 18
+                Rectangle { width: parent.width; height: 1; color: theme.border; opacity: 0.6 }
+                component SelAction: ItemDelegate {
+                    id: sa
+                    required property string icon_
+                    property string label: ""
+                    Layout.fillWidth: true
+                    implicitHeight: 68
+                    opacity: enabled ? 1 : 0.4
+                    background: Rectangle { color: sa.pressed ? theme.panelAlt : "transparent"; radius: 12 }
+                    contentItem: ColumnLayout {
+                        spacing: 5
+                        Rectangle {
+                            Layout.alignment: Qt.AlignHCenter
+                            implicitWidth: 44; implicitHeight: 32; radius: 16
+                            color: theme.panelAlt
+                            Image {
+                                anchors.centerIn: parent
+                                source: icons.tint(sa.icon_, theme.text)
+                                sourceSize.width: 20; sourceSize.height: 20
+                            }
+                        }
+                        Label {
+                            Layout.alignment: Qt.AlignHCenter
+                            text: sa.label; color: theme.text; font.pixelSize: 12
+                        }
+                    }
+                }
+                ColumnLayout {
+                    id: selCol
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                    anchors.margins: 8; anchors.topMargin: 10
+                    spacing: 2
+                    Label {
+                        Layout.fillWidth: true; Layout.leftMargin: 8
+                        text: grid.selectedCount === 0 ? "Tap photos to select them, or a day's circle for the whole day"
+                              : root.paired && selectionBar.unsent.length > 0
+                                ? selectionBar.unsent.length + (selectionBar.unsent.length === 1 ? " of them isn't" : " of them aren't") + " on the computer yet"
+                                : ""
+                        visible: text.length > 0
+                        color: theme.muted; font.pixelSize: 12
+                        wrapMode: Text.WordWrap
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 4
+                        SelAction {
+                            icon_: icons.share; label: "Share"
+                            enabled: grid.selectedCount > 0
+                            onClicked: library.sharePhotos(JSON.stringify(grid.selectedIds()))
+                        }
+                        SelAction {
+                            icon_: icons.album; label: "Add to album"
+                            enabled: grid.selectedCount > 0
+                            onClicked: albumPicker.openFor(grid.selectedIds())
+                        }
+                        SelAction {
+                            visible: root.paired
+                            icon_: icons.upload; label: "Send"
+                            enabled: library.computerConnected && selectionBar.unsent.length > 0
+                            onClicked: {
+                                library.sendPhotosToComputer(JSON.stringify(selectionBar.unsent.map(it => it.id)))
+                                grid.clearSelection()
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // 1 — Search (first-class find surface)
@@ -409,6 +465,8 @@ ApplicationWindow {
     // ---- bottom navigation -------------------------------------------------------
     footer: TabBar {
         id: nav
+        // selecting on the grid: the actions panel takes its place (as in a gallery)
+        visible: !(root.tab === 0 && grid.selecting)
         currentIndex: root.tab
         onCurrentIndexChanged: root.tab = currentIndex
         Material.elevation: 0

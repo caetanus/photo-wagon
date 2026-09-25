@@ -81,6 +81,25 @@ Item {
     function clearSelection() { selected = ({}); selectMode = false; selVersion++ }
     function selectedIds() { return Object.keys(selected).map(k => Number(k)) }
     function selectedItems() { return Object.keys(selected).map(k => selected[k]) }
+    // a whole day at once (the loaded photos of it): all on, or all off when already all on
+    function dayItems(key) {
+        const items = (page && page.items) ? page.items : []
+        return items.filter(it => dayKey(it.takenTs || 0) === key)
+    }
+    function dayAllSelected(key) {
+        selVersion
+        const day = dayItems(key)
+        return day.length > 0 && day.every(it => selected[it.id] !== undefined)
+    }
+    function toggleDay(key) {
+        const day = dayItems(key)
+        const on = !dayAllSelected(key)
+        for (const it of day) {
+            if (on) selected[it.id] = { id: it.id, remote: it.remote === true, sent: it.sent === true }
+            else delete selected[it.id]
+        }
+        selVersion++
+    }
 
     onPageChanged: { requesting = false; syncRows() }
     onColsChanged: rebuildRows()   // a rotation / width change re-chunks the rows
@@ -278,6 +297,27 @@ Item {
                 text: rowItem.kind === "h" ? rowItem.label : ""
                 color: theme.text
                 font.pixelSize: 15; font.weight: Font.DemiBold; font.letterSpacing: -0.2
+            }
+            // selecting: the day's circle takes (or drops) every photo of that day
+            Item {
+                visible: rowItem.kind === "h" && grid.selecting
+                anchors.right: parent.right; anchors.bottom: parent.bottom
+                width: 48; height: 46
+                readonly property string dayKey_: rowItem.kind === "h" ? rowItem.key : ""
+                readonly property bool all: visible && grid.dayAllSelected(dayKey_)
+                Rectangle {
+                    anchors.centerIn: parent; anchors.verticalCenterOffset: 3
+                    width: 22; height: 22; radius: 11
+                    color: parent.all ? theme.accent : "transparent"
+                    border.color: parent.all ? theme.accent : theme.muted; border.width: 1.5
+                    Image {
+                        visible: parent.parent.all
+                        anchors.centerIn: parent
+                        source: icons.tint(icons.check, "#ffffff")
+                        sourceSize.width: 14; sourceSize.height: 14
+                    }
+                }
+                TapHandler { onTapped: grid.toggleDay(parent.dayKey_) }
             }
             // ---- tile row
             Row {

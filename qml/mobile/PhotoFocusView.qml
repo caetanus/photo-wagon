@@ -47,6 +47,40 @@ Rectangle {
             verticalAlignment: Image.AlignVCenter
         }
     }
+    // a plain icon button on the dark top bar
+    component TopButton: ToolButton {
+        required property string icon_
+        implicitWidth: 48; implicitHeight: 48
+        contentItem: Image {
+            source: icons.tint(parent.icon_, "#ffffff")
+            sourceSize.width: 22; sourceSize.height: 22
+            fillMode: Image.Pad
+            horizontalAlignment: Image.AlignHCenter; verticalAlignment: Image.AlignVCenter
+        }
+    }
+    // one action of the bottom bar: an icon over its name, in reach of the thumb
+    component BarAction: ItemDelegate {
+        id: ba
+        required property string icon_
+        property string label: ""
+        Layout.fillWidth: true
+        implicitHeight: 64
+        opacity: enabled ? 1 : 0.4
+        background: Rectangle { color: ba.pressed ? Qt.rgba(1, 1, 1, 0.08) : "transparent"; radius: 12 }
+        contentItem: ColumnLayout {
+            spacing: 4
+            Image {
+                Layout.alignment: Qt.AlignHCenter
+                source: icons.tint(ba.icon_, "#ffffff")
+                sourceSize.width: 22; sourceSize.height: 22
+            }
+            Label {
+                Layout.alignment: Qt.AlignHCenter
+                text: ba.label
+                color: "#e6e8ec"; font.pixelSize: 11
+            }
+        }
+    }
     // one line of the swipe-up detail sheet: a muted label over its value, hidden when empty
     component DetailRow: RowLayout {
         id: drow
@@ -113,19 +147,29 @@ Rectangle {
     readonly property bool zoomed: image.scale > 1.01
     function resetZoom() {
         image.scale = 1
-        image.x = image.baseX
-        image.y = image.baseY
+        // bindings again, not values: the frame follows the controls once un-zoomed
+        image.x = Qt.binding(() => image.baseX)
+        image.y = Qt.binding(() => image.baseY)
     }
 
     readonly property bool isVideo: photo && photo.video === true
+
+    // With the controls shown the photo fits BETWEEN the bars (nothing of it — a face to
+    // name, say — lies under a button); alone, it takes the whole screen. The frame only
+    // follows the controls while not zoomed, so a tap on a zoomed photo never moves it.
+    property bool framed: true
+    onChromeChanged: if (!zoomed) framed = chrome
+    onZoomedChanged: if (!zoomed) framed = chrome
+    readonly property real topReserve: framed ? 64 : 0
+    readonly property real bottomReserve: framed ? 72 + (strip && strip.length > 1 ? 60 : 0) : 0
 
     Image {
         id: image
         visible: !viewer.isVideo
         readonly property real baseX: (viewer.width - width) / 2
-        readonly property real baseY: (viewer.height - height) / 2
+        readonly property real baseY: viewer.topReserve
         width: viewer.width
-        height: viewer.height
+        height: Math.max(1, viewer.height - viewer.topReserve - viewer.bottomReserve)
         x: baseX
         y: baseY
         transformOrigin: Item.Center
@@ -156,7 +200,7 @@ Rectangle {
             target: image
             property: "scale"
             // desktop / trackpad zoom
-            onWheel: (e) => { if (image.scale < 1.02) { image.x = image.baseX; image.y = image.baseY } }
+            onWheel: (e) => { if (image.scale < 1.02) viewer.resetZoom() }
         }
         DragHandler {
             // pan only while zoomed; when not zoomed the outer swipe navigates
@@ -234,7 +278,7 @@ Rectangle {
                     TapHandler { onTapped: { mp.priming = false; mp.play() } }
                 }
                 Row {   // speed
-                    anchors.top: parent.top; anchors.right: parent.right; anchors.topMargin: 60; anchors.rightMargin: 14
+                    anchors.top: parent.top; anchors.right: parent.right; anchors.topMargin: 70; anchors.rightMargin: 14
                     spacing: 6
                     visible: mp.duration > 0
                     Repeater {
@@ -251,7 +295,8 @@ Rectangle {
                 Rectangle {   // scrub bar
                     anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
                     anchors.margins: 16
-                    anchors.bottomMargin: 40
+                    // above the action bar and the filmstrip while they show
+                    anchors.bottomMargin: viewer.chrome ? actionBar.height + (filmstripBar.visible ? filmstripBar.height : 0) + 12 : 40
                     height: 40; radius: 10
                     color: Qt.rgba(0, 0, 0, 0.5)
                     visible: mp.duration > 0
@@ -392,63 +437,43 @@ Rectangle {
         opacity: enabled ? 0.9 : 0.25
         onClicked: library.next()
     }
-    GlassButton {
-        icon_: icons.close
+    // ---- top: back, when and where, details and cast ---------------------------------
+    RowLayout {
+        id: topBar
         visible: viewer.chrome
-        anchors.top: parent.top
-        anchors.right: parent.right
-        anchors.margins: 10
-        onClicked: viewer.closed()
-    }
-    // Edit: opens the mini editor on this photo (local phone photos only).
-    GlassButton {
-        icon_: icons.edit
-        // stills only: the editor paints a picture, a video has none
-        visible: viewer.chrome && viewer.photo && viewer.photo.remote !== true && !viewer.isVideo && !viewer.zoomed
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.margins: 10
-        onClicked: viewer.edit()
-    }
-    // Details: swipe up on the photo, or tap ⓘ.
-    GlassButton {
-        icon_: icons.info
-        visible: viewer.chrome && viewer.photo && !viewer.zoomed
-        anchors.top: parent.top
-        anchors.right: parent.right
-        anchors.topMargin: 10
-        anchors.rightMargin: 62
-        onClicked: detailSheet.open()
-    }
-    // Share to WhatsApp / e-mail / … through the Android share sheet.
-    GlassButton {
-        icon_: icons.share
-        visible: viewer.chrome && viewer.photo && !viewer.zoomed
-        anchors.top: parent.top
-        anchors.right: parent.right
-        anchors.topMargin: 10
-        anchors.rightMargin: 114
-        onClicked: library.sharePhoto(viewer.photo.id)
-    }
-    // Add to album (albums live on the computer; a phone photo is sent there first)
-    GlassButton {
-        icon_: icons.album
-        visible: viewer.chrome && viewer.photo && !viewer.zoomed
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.leftMargin: 114
-        anchors.topMargin: 10
-        onClicked: viewer.addToAlbum(viewer.photo.id)
-    }
-    // Cast to a TV — the phone drives the computer's CastService (it is on the TV's LAN).
-    GlassButton {
-        icon_: icons.cast
-        visible: viewer.chrome && viewer.photo && !viewer.zoomed
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.leftMargin: 62
-        anchors.topMargin: 10
-        onClicked: { library.loadCastDevices(); castMenu.open() }
+        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+        anchors.leftMargin: 4; anchors.rightMargin: 4; anchors.topMargin: 6
+        height: 52
+        spacing: 2
+        TopButton { icon_: icons.chevronLeft; onClicked: viewer.closed() }
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 0
+            Label {
+                text: viewer.photo ? viewer.formatDate(viewer.photo.takenAt) : ""
+                color: "#ffffff"; font.pixelSize: 15; font.weight: Font.DemiBold
+                elide: Text.ElideRight; Layout.fillWidth: true
+            }
+            Label {
+                // where, else what it is (camera · size)
+                text: viewer.photo ? (viewer.placeText() || [viewer.photo.camera, viewer.formatSize(viewer.photo.size)].filter(x => x).join("  ·  ")) : ""
+                visible: text.length > 0
+                color: "#c4c8d0"; font.pixelSize: 12
+                elide: Text.ElideRight; Layout.fillWidth: true
+            }
+        }
+        // Cast to a TV — the phone drives the computer's CastService (it is on the TV's LAN).
+        TopButton {
+            icon_: icons.cast
+            visible: viewer.photo && !viewer.zoomed
+            onClicked: { library.loadCastDevices(); castMenu.open() }
+        }
+        // Details: swipe up on the photo, or tap ⓘ.
+        TopButton {
+            icon_: icons.info
+            visible: viewer.photo && !viewer.zoomed
+            onClicked: detailSheet.open()
+        }
     }
     Menu {
         id: castMenu
@@ -482,7 +507,7 @@ Rectangle {
     Rectangle {
         id: filmstripBar
         visible: viewer.chrome && viewer.strip && viewer.strip.length > 1 && !viewer.zoomed
-        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: actionBar.top
         height: 60
         color: Qt.rgba(0, 0, 0, 0.62)
         ListView {
@@ -528,62 +553,41 @@ Rectangle {
             if (strip[i].id === photo.id) { filmstrip.positionViewAtIndex(i, ListView.Center); return }
     }
 
-    // Metadata scrim: date on top, the rest small; the send button at the right.
-    // A gradient from transparent up into the photo, not a hard opaque bar.
+    // ---- bottom: what can be done with this photo ---------------------------------------
     Rectangle {
+        id: actionBar
         visible: viewer.chrome
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: filmstripBar.visible ? filmstripBar.top : parent.bottom
-        height: 116
-        gradient: Gradient {
-            GradientStop { position: 0; color: "transparent" }
-            GradientStop { position: 0.35; color: Qt.rgba(0, 0, 0, 0.55) }
-            GradientStop { position: 1; color: Qt.rgba(0, 0, 0, 0.88) }
-        }
+        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+        height: visible ? 72 : 0
+        color: Qt.rgba(0, 0, 0, 0.62)
         RowLayout {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            anchors.leftMargin: 16
-            anchors.rightMargin: 12
-            anchors.bottomMargin: 12
-            spacing: 12
-            ColumnLayout {
-                spacing: 2
-                Layout.fillWidth: true
-                Label {
-                    text: viewer.photo ? viewer.formatDate(viewer.photo.takenAt) : ""
-                    color: "#eceef2"
-                    font.pixelSize: 14
-                    font.weight: Font.DemiBold
-                    elide: Text.ElideRight
-                    Layout.fillWidth: true
-                }
-                Label {
-                    text: viewer.photo ? [viewer.photo.camera, viewer.photo.width + " × " + viewer.photo.height, viewer.formatSize(viewer.photo.size)].filter(x => x).join("  ·  ") : ""
-                    color: "#8f97a6"
-                    font.pixelSize: 12
-                    elide: Text.ElideRight
-                    Layout.fillWidth: true
-                }
+            anchors.fill: parent
+            anchors.leftMargin: 8; anchors.rightMargin: 8; anchors.bottomMargin: 4
+            spacing: 4
+            // to WhatsApp / e-mail / … through the Android share sheet
+            BarAction {
+                icon_: icons.share; label: "Share"
+                enabled: !!viewer.photo
+                onClicked: library.sharePhoto(viewer.photo.id)
             }
-            Button {
+            // the mini editor: the phone's own stills (the editor paints a picture; a video has none)
+            BarAction {
+                icon_: icons.edit; label: "Edit"
+                enabled: !!viewer.photo && viewer.photo.remote !== true && !viewer.isVideo
+                onClicked: viewer.edit()
+            }
+            // albums live on the computer; a phone photo is sent there first
+            BarAction {
+                icon_: icons.album; label: "Add to album"
+                enabled: !!viewer.photo
+                onClicked: viewer.addToAlbum(viewer.photo.id)
+            }
+            BarAction {
                 visible: viewer.canSend
-                enabled: viewer.sendEnabled && viewer.photo && !viewer.photo.sent
-                text: viewer.photo && viewer.photo.sent ? "On the computer" : "Send"
-                highlighted: enabled
-                Material.accent: theme.accent
-                Material.foreground: enabled ? "#ffffff" : "#8f97a6"
-                flat: !enabled
+                icon_: viewer.photo && viewer.photo.sent ? icons.check : icons.upload
+                label: viewer.photo && viewer.photo.sent ? "On computer" : "Send"
+                enabled: viewer.sendEnabled && !!viewer.photo && !viewer.photo.sent
                 onClicked: viewer.send(viewer.photo.id)
-            }
-            Label {
-                visible: !viewer.canSend
-                text: viewer.photo ? viewer.photo.path : ""
-                color: "#8f97a6"
-                elide: Text.ElideMiddle
-                Layout.maximumWidth: 480
             }
         }
     }

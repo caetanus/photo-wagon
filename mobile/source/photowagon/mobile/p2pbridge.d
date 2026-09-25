@@ -34,6 +34,8 @@ import libp2p.transport.tcp : TcpTransport;
 import libp2p.protocol.relay.service : Relay;
 import libp2p.protocol.kad.kad : Kademlia, KademliaConfig, PeerInfo;
 version (Libp2pQuic) import libp2p.transport.quic.transport : QuicTransport;
+version (Libp2pWebrtc) import libp2p.transport.webrtc.transport : WebRtcTransport;
+version (Android) private extern (C) int __system_property_get(const(char)* name, char* value) nothrow @nogc;
 
 import photowagon.core.ipc.link : InProcessLink;
 import photowagon.core.sync.pieces : PieceStore, PieceService, Manifest, Bitfield, manifestOf, askInfo, askHave,
@@ -870,7 +872,30 @@ final class P2pBridge : Bridge
             auto ws = new WsTransport(new OpensslTlsProvider());
         else
             auto ws = new WsTransport();
-        Transport[] transports = [cast(Transport) new TcpTransport, ws];   // cast: else the literal infers Object[]
+        // PW_TRANSPORT=tcp|quic|webrtc: only that direct transport (tests, diagnosis); the
+        // WebSocket one stays for the relays (the meeting point, never the pipe).
+        import std.process : environment;
+
+        string onlyTransportSel = environment.get("PW_TRANSPORT", "");
+        version (Android)
+        {
+            // no environment to set on a phone: `adb shell setprop debug.photowagon.transport
+            // webrtc` does the same (debug.* properties are settable by the shell, no root)
+            if (onlyTransportSel.length == 0)
+            {
+                import std.string : fromStringz;
+
+                char[92] v;   // PROP_VALUE_MAX
+                if (__system_property_get("debug.photowagon.transport", v.ptr) > 0)
+                    onlyTransportSel = fromStringz(v.ptr).idup;
+            }
+        }
+        immutable onlyTransport = onlyTransportSel;
+        if (onlyTransport.length)
+            plog("p2p: direct transport limited to ", onlyTransport, " (PW_TRANSPORT)");
+        Transport[] transports = onlyTransport.length == 0 || onlyTransport == "tcp"
+            ? [cast(Transport) new TcpTransport, ws]   // cast: else the literal infers Object[]
+            : [cast(Transport) ws];
         auto host = new Host(identity, transports, hc);
         // The piece protocol, both ways: what arrives from the computer lands in the piece
         // store (resumable in any order); what we have complete — our own camera roll by
@@ -890,7 +915,13 @@ final class P2pBridge : Bridge
         // DCUtR hole punch runs over — the sync pipe. Built in when the arm64 ngtcp2/OpenSSL
         // archives are present (mobile/build-android.sh); TCP+Noise is the fallback.
         version (Libp2pQuic)
-            host.swarm.addCapableTransport(new QuicTransport(identity));
+            if (onlyTransport.length == 0 || onlyTransport == "quic")
+                host.swarm.addCapableTransport(new QuicTransport(identity));
+        // WebRTC (/webrtc-direct): ICE + DTLS + SCTP data channels — a third direct path to
+        // the computer, dialed like the others when it advertises one.
+        version (Libp2pWebrtc)
+            if (onlyTransport.length == 0 || onlyTransport == "webrtc")
+                host.swarm.addCapableTransport(new WebRtcTransport(identity));
         // The relay is only where the phone and the computer MEET off-LAN (a /p2p-circuit
         // carries the DCUtR signalling, a few KB); session() then insists on a direct
         // connection for the pipe. Auto-DCUtR stays off so the punch runs once, driven there.

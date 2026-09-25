@@ -19,6 +19,9 @@ libs "sqlite3" "gexiv2" "vips" "gobject-2.0" "glib-2.0" "qrencode" "curl"   // c
 // runs over it. ngtcp2 with its OpenSSL (>= 3.5) crypto backend; the version flag turns the
 // transport on in libp2p-dlang.
 versions "Libp2pQuic"
+// WebRTC (/webrtc-direct) as a third direct transport beside QUIC and TCP — libp2p-dlang's
+// transport over d-webrtc (ICE, DTLS via OpenSSL, SCTP); its default "library" config builds it.
+versions "Libp2pWebrtc"
 libs "ngtcp2" "ngtcp2_crypto_ossl" "ssl" "crypto"
 
 // The C/C++ shims (csrc/build.sh): the OpenCV face + CLIP shims and sqlite-vec go into

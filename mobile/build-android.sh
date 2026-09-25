@@ -125,6 +125,36 @@ if [ -z "${PW_NO_QUIC:-}" ]; then
         echo "QUIC: transport ON (ngtcp2 + OpenSSL for $ABI_DIR)"
     fi
 fi
+# WebRTC (/webrtc-direct) — libp2p's transport/webrtc over the whole d-webrtc-v3 engine (ICE,
+# DTLS on OpenSSL, SCTP, DCEP; libsodium for randomness): a third direct transport beside QUIC
+# and TCP. Needs only the OpenSSL archives (not ngtcp2): on without QUIC too. PW_NO_WEBRTC=1
+# leaves it out.
+if [ -z "${PW_NO_WEBRTC:-}" ]; then
+    if [ -e "$HERE/toolchain/android-libs/$ABI_DIR/libssl.a" ] && [ -e "$HERE/toolchain/android-libs/$ABI_DIR/libcrypto.a" ]; then
+        WEBRTC_SRC=$HERE/../../d-webrtc-v3/source
+        [ -d "$WEBRTC_SRC/webrtc" ] || { echo "WebRTC: $WEBRTC_SRC missing (clone d-webrtc-v3 next to photo-wagon)" >&2; exit 1; }
+        DEIMOS_COPY=$OUT/deimos-openssl
+        if [ ! -d "$DEIMOS_COPY/deimos/openssl" ]; then
+            # QUIC is off: the deimos OpenSSL binding is prepared here instead (see above)
+            OPENSSL_DI=$(ls -d "$DUBP"/openssl-3.4.0/openssl/source 2>/dev/null | head -1)
+            [ -n "$OPENSSL_DI" ] || { echo "WebRTC: the deimos openssl-3.4.0 binding is not under $DUBP" >&2; exit 1; }
+            mkdir -p "$DEIMOS_COPY/deimos/openssl"
+            for f in "$OPENSSL_DI"/deimos/openssl/*.di; do
+                b=$(basename "$f" .di)
+                [ "$b" = applink ] || cp "$f" "$DEIMOS_COPY/deimos/openssl/$b.d"
+            done
+        fi
+        case " $QUIC_VERSION " in *DeimosOpenSSL_3_0*) ;; *) QUIC_VERSION="$QUIC_VERSION -d-version=DeimosOpenSSL_3_0" ;; esac
+        QUIC_VERSION="$QUIC_VERSION -d-version=Libp2pWebrtc"
+        QUIC_INCLUDES="-I$DEIMOS_COPY -I$WEBRTC_SRC"
+        # the whole engine (its stun/message.d included, which QUIC's punch reuses)
+        QUIC_SOURCES="$(find "$WEBRTC_SRC" -name '*.d') $(find "$LIBP2P/libp2p/transport/webrtc" -name '*.d') $(find "$DEIMOS_COPY" -name '*.d')"
+        [ -n "$QUIC_LIBS" ] || QUIC_LIBS="-L--start-group -L=$HERE/toolchain/android-libs/$ABI_DIR/libssl.a -L=$HERE/toolchain/android-libs/$ABI_DIR/libcrypto.a -L--end-group"
+        echo "WebRTC: transport ON (webrtc-direct over d-webrtc-v3)"
+    else
+        echo "WebRTC: libssl.a/libcrypto.a missing for $ABI_DIR — transport left out" >&2
+    fi
+fi
 # Optional, PW_UDX=1: the UDX/hyperswarm sync transport (Holepunch stack) — parked, its
 # relayed hole punch never passed live acceptance. Two archives dropped into
 # toolchain/android-libs/<abi>/ by the d-hyperswarm build: libhsudx-android.a (the libudx C

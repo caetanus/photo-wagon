@@ -23,6 +23,7 @@ import libp2p.transport.ws : WsTransport;
 import libp2p.transport.transport : Transport;
 import std.algorithm.searching : canFind;
 version (Libp2pQuic) import libp2p.transport.quic.transport : QuicTransport;
+version (Libp2pWebrtc) import libp2p.transport.webrtc.transport : WebRtcTransport;
 import libp2p.discovery.mdns : MdnsRendezvous;
 import libp2p.discovery.rendezvous : announceUnder, rendezvousKeyFor;
 version (LibP2P_OpensslTls) import libp2p.transport.ws_tls_openssl : OpensslTlsProvider;
@@ -94,6 +95,10 @@ final class Node : Notifiee
 		// prefers — the phone's sync pipe. TCP+Noise stays as the fallback.
 		version (Libp2pQuic)
 			host.swarm.addCapableTransport(new QuicTransport(identity));
+		// WebRTC (/webrtc-direct): ICE + DTLS + SCTP data channels, a third direct path the
+		// phone may take (libp2p-dlang's transport; Noise proves the identities).
+		version (Libp2pWebrtc)
+			host.swarm.addCapableTransport(new WebRtcTransport(identity));
 		identify = new IdentifyService(host);
 		identify.onIdentified = &identified;
 		PingConfig pc;
@@ -171,6 +176,28 @@ final class Node : Notifiee
 					catch (Exception e)
 						logWarn("p2p: quic listen on udp/%s failed: %s", p, e.msg);
 				}
+			// webrtc-direct on the next UDP port (QUIC holds udp/<p>). Its address carries the
+			// DTLS certificate's hash, which is new on every start: the phone learns the
+			// current one from mDNS / the DHT like any other address.
+			version (Libp2pWebrtc)
+			{
+				// that port taken (or none next to it): any free one — discovery carries the port
+				// actually bound, like the certhash
+				bool rtc;
+				if (p > 0 && p < ushort.max)
+					try
+					{
+						host.listen(Multiaddr.parse("/ip4/0.0.0.0/udp/" ~ (p + 1).to!string ~ "/webrtc-direct"));
+						rtc = true;
+					}
+					catch (Exception e)
+						logWarn("p2p: webrtc-direct listen on udp/%s failed (%s) — taking an ephemeral port", p + 1, e.msg);
+				if (!rtc)
+					try
+						host.listen(Multiaddr.parse("/ip4/0.0.0.0/udp/0/webrtc-direct"));
+					catch (Exception e)
+						logWarn("p2p: webrtc-direct listen failed: %s", e.msg);
+			}
 		}
 		catch (Exception)
 		{

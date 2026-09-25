@@ -128,6 +128,7 @@ final class CoreServer
     private ServerConn session;
     private ServerConn[] conns;        // every live connection (session, joining, closing)
     private bool[string] supersededUis;
+    private bool hadSession;
     private QTimer tick, soon, quitSoon;
     private enum Duration helloWithin = 5.seconds, drainWithin = 1.seconds;
 
@@ -232,6 +233,11 @@ final class CoreServer
         // snapshot — the UI is "up" once it has it
         bridge.beginSession();
         c.sendEvent("core.state", bridge.coreState());
+        // A UI (re)attaching to a core that kept running: photos may have come and gone while
+        // no UI was up — look again (the first session coincides with the start's own scan).
+        if (hadSession)
+            bridge.request("library.rescan", JSONValue(null), (JSONValue r, JSONValue e) {});
+        hadSession = true;
         plog("core: UI session ", c.serial, " attached (ui ", ui, ")");
     }
 

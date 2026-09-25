@@ -46,6 +46,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="pwscan" />
                 <data android:scheme="pwperm" />
+                <data android:scheme="pwcore" />
                 <data android:scheme="pw" />
             </intent-filter>
             <meta-data

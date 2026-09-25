@@ -1,11 +1,11 @@
 // The phone's core process: what CoreService (":core") runs. QtServiceBase loads the same
 // .so as the activity and calls main() again with "-service"; main.d dispatches here.
 //
-// A QCoreApplication, not a QGuiApplication: this process has no window and no QML. For
-// now it only proves the lifecycle — it comes up, stays up with the UI gone, and logs a
-// heartbeat; the indexer, faces, sync and p2p move in behind a local IPC next (see the
-// phone-core-in-qtservice plan). Kept in its own module because the qtdApplication mixin
-// defines createApp(), and main.d already mixes one in for QGuiApplication.
+// A QCoreApplication, not a QGuiApplication: this process has no window and no QML. It
+// builds the core (indexer, faces, sync, p2p) and serves it to the UI over <dataDir>/core.sock
+// (docs/phone-core-service.md). The same entry is the host's `-service` child. Kept in its
+// own module because the qtdApplication mixin defines createApp(), and main.d already mixes
+// one in for QGuiApplication.
 module photowagon.mobile.coremain;
 
 import photowagon.mobile.plog : plog, installCrashHandler, installQuitHandler;
@@ -49,15 +49,13 @@ else
 
 enum CORE_ID = "photo-wagon-mobile";   // same app id: the same data/settings dirs as the UI
 
-version (Android) {} else
-{
-    import photowagon.mobile.corefactory : PhoneCore;
-    import photowagon.mobile.coreipc : CoreServer;
+import photowagon.mobile.corefactory : PhoneCore;
+import photowagon.mobile.coreipc : CoreServer;
 
-    private __gshared PhoneCore hostCore;      // kept for the life of the process
-    private __gshared CoreServer hostServer;
+private __gshared PhoneCore theCore;       // kept for the life of the process
+private __gshared CoreServer theServer;
+version (Android) {} else
     private __gshared QTimer dieTimer;
-}
 
 /// The core's entry. Never returns: like the UI's main it leaves with exit(), because
 /// returning from D's main tears the runtime down under still-running threads.
@@ -69,6 +67,12 @@ int serviceMain()
     installCrashHandler();
     installQuitHandler();
     {
+        // Android: the GC does not scan TLS on its own (android-tls-gc-roots) — the core's Qt
+        // thread holds the p2p / vibe objects just like the UI's did
+        import photowagon.mobile.plog : pinThreadTls;
+        pinThreadTls("core qt thread");
+    }
+    {
         // same memory discipline as the UI process: no core dumps, bounded RSS
         import photowagon.core.jobs.memguard : startMemoryGuard, disableCoreDumps;
         disableCoreDumps();
@@ -79,26 +83,28 @@ int serviceMain()
     QCoreApplication.setApplicationName(CORE_ID);
     plog("core: service process up (pid ", getpid(), ")");
 
-    version (Android) {} else
     {
-        // Host: the core proper — index, computer link, local bridge — served to a UI over
-        // <dataDir>/core.sock (stage 5). On Android the UI process still builds the core until
-        // stage 7 (two cores would fight over the data directory's lock).
+        // The core proper — index, faces, computer link, sync, local bridge — served to the UI
+        // over <dataDir>/core.sock (stage 7 on Android: the ":core" CoreService process; on the
+        // host the child the UI starts). QtServiceBase quitting the app (CoreService onDestroy,
+        // after onTimeout's stopSelf too) runs aboutToQuit: the one orderly shutdown.
         import photowagon.mobile.corefactory : buildPhoneCore, CoreLockedException;
-        import photowagon.mobile.coreipc : CoreServer;
         import core.time : seconds;
 
         try
-            hostCore = buildPhoneCore();
+            theCore = buildPhoneCore();
         catch (CoreLockedException e)
         {
             plog("core: ", e.msg, " — not starting a second one");
             exit(3);
         }
-        hostServer = new CoreServer(hostCore.bridge, hostCore.dataDir);
-        hostServer.start();
-        hostCore.bridge.start();
-        QCoreApplication.instance().connectAboutToQuit({ hostCore.shutdown(2.seconds); });
+        theServer = new CoreServer(theCore.bridge, theCore.dataDir);
+        theServer.start();
+        theCore.bridge.start();
+        QCoreApplication.instance().connectAboutToQuit({ theCore.shutdown(2.seconds); });
+    }
+    version (Android) {} else
+    {
         {
             // PW_TEST_CORE_DIE_AFTER=<ms>: die (exit 1) that long after starting — the UI's
             // restart supervision test (it must back off)

@@ -24,6 +24,12 @@ version (Android)
     private extern (C) int pw_share_image(void* env, const char* path, const char* mime);
 }
 
+/// The UI's application object, as the QGuiApplication it is (set by main.d; holding it
+/// here also keeps DSide's wrapper alive).
+__gshared QGuiApplicationRef uiApp;
+
+import qt.quick.qguiapplication : QGuiApplicationRef = QGuiApplication;
+
 final class UiBridge : Bridge
 {
     private Bridge inner;        // the core: in this process (local) or over its socket (CoreClient)
@@ -61,6 +67,23 @@ final class UiBridge : Bridge
         inner.start();
         if (local !is null)
             testRelink();
+        version (Android)
+        {
+            watchCore(false);   // armed from the start: a core that never comes up counts too
+            if (local is null)
+            {
+                // back in front: photos taken meanwhile show up (the core lives on while the
+                // UI is in the background, so no start-up scan covers them)
+                import qt.quick.applicationstate : ApplicationState;
+
+                if (uiApp !is null)
+                    cast(void) uiApp.connectApplicationStateChanged(
+                    (ApplicationState st) {
+                        if (st == ApplicationState.ApplicationActive && inner.connected())
+                            inner.request("library.rescan", JSONValue(null), (JSONValue r, JSONValue e) {});
+                    });
+            }
+        }
     }
 
     private void deliver(string event, JSONValue data)
@@ -90,6 +113,8 @@ final class UiBridge : Bridge
     // code shows that at once (and a stale "indexing" spinner is reset).
     private void coreUp(bool up)
     {
+        version (Android)
+            watchCore(up);
         if (up && local !is null)
         {
             local.beginSession();   // what the previous session had pending is cut short
@@ -141,6 +166,65 @@ final class UiBridge : Bridge
             coreUp(true);
         });
         relinkDown.start();
+    }
+
+    // Android: the core is the ":core" service. Android restarts it after a crash — but not
+    // after crashes in quick succession, and a stopped one only at the next activity start.
+    // While the UI is up and the core stays gone, ask MainActivity to start it (pwcore://),
+    // backing off 2 s → 30 s.
+    version (Android)
+    {
+        private QTimer coreWatch;
+        private int coreWatchMs = 2000;
+
+        private void watchCore(bool up)
+        {
+            if (local !is null)
+                return;
+            if (coreWatch is null)
+            {
+                coreWatch = new QTimer(cast(cppq.QObject) null);
+                coreWatch.setSingleShot(true);
+                coreWatch.connectTimeout({
+                    if (inner.connected())
+                        return;
+                    {
+                        // only while our activity is in front: starting it (and the service)
+                        // from the background would pull it over another app or be refused;
+                        // MainActivity.onStart starts the core when it comes back anyway
+                        import qt.quick.qguiapplication : QGuiApplication;
+                        import qt.quick.applicationstate : ApplicationState;
+
+                        if (QGuiApplication.applicationState() != ApplicationState.ApplicationActive)
+                        {
+                            coreWatch.setInterval(coreWatchMs);
+                            coreWatch.start();
+                            return;
+                        }
+                    }
+                    import qt.quick.qdesktopservices : QDesktopServices;
+                    import qt.quick.qurl : QUrl;
+                    import photowagon.mobile.plog : plog;
+
+                    plog("ui: the phone core is still gone — asking for it to be started");
+                    auto u = QUrl("pwcore://start", QUrl.ParsingMode.TolerantMode);
+                    QDesktopServices.openUrl(u);
+                    coreWatchMs = coreWatchMs * 2 > 30_000 ? 30_000 : coreWatchMs * 2;
+                    coreWatch.setInterval(coreWatchMs);
+                    coreWatch.start();
+                });
+            }
+            if (up)
+            {
+                coreWatch.stop();
+                coreWatchMs = 2000;
+            }
+            else if (!coreWatch.isActive())
+            {
+                coreWatch.setInterval(coreWatchMs);
+                coreWatch.start();
+            }
+        }
     }
 
     override bool connected() const { return inner.connected(); }

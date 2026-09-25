@@ -332,13 +332,6 @@ final class PhoneIndex
         load();
         version (Android)
             facesInit(dataDir);
-        if (facesReady)
-        {
-            facesPump = new QTimer(cast(cppq.QObject) null);
-            facesPump.setInterval(1200);   // r100 is heavy; a relaxed cadence keeps it gentle
-            facesPump.connectTimeout(&stepFaces);
-            facesPump.start();
-        }
         pump = new QTimer(cast(cppq.QObject) null);
         pump.setInterval(50);   // more breathing room between decode slices so scrolling/rendering
                                 // stays smooth (a single big-image decode can blow a frame; a wider
@@ -349,20 +342,17 @@ final class PhoneIndex
     private bool facesReady;              // on-device face models loaded (Android only)
     private string faceYunet, faceR100;   // extracted model paths
 
-    // Extract the bundled YuNet + r100 tflite models from the APK assets to the data dir
-    // (once) and initialise facelite. Android only — no libLiteRt on the desktop test build.
+    // Initialise facelite with the bundled YuNet + r100 tflite models. CoreService extracts
+    // them from the APK assets to <dataDir>/models (atomically, on a thread of its own: the
+    // windowless service process has no Qt assets:/ engine, and a 120 MB copy on its main
+    // thread risks an ANR) — so on a fresh install they may not be there yet: look again every
+    // few seconds until they are. Android only — no libLiteRt on the desktop test build.
     version (Android)
     private void facesInit(string dataDir)
     {
-        import std.string : toStringz;
-        import qt.quick.qfile : QFile;
-
         immutable mdir = buildPath(dataDir, "models");
-        mkdirRecurse(mdir);
         faceYunet = buildPath(mdir, "yunet.tflite");
         faceR100 = buildPath(mdir, "r100.tflite");
-        if (!faceYunet.exists) cast(void) QFile.copy("assets:/models/yunet.tflite", faceYunet);
-        if (!faceR100.exists) cast(void) QFile.copy("assets:/models/r100.tflite", faceR100);
         if (faceYunet.exists && faceR100.exists)
         {
             // The worker initialises facelite on ITS thread and runs every detect there: the
@@ -371,10 +361,34 @@ final class PhoneIndex
             faceWorker = new FaceWorker(faceYunet, faceR100);
             facesReady = true;
             plog("phone: on-device faces starting (YuNet + r100 on the face worker)");
+            facesPump = new QTimer(cast(cppq.QObject) null);
+            facesPump.setInterval(1200);   // r100 is heavy; a relaxed cadence keeps it gentle
+            facesPump.connectTimeout(&stepFaces);
+            facesPump.start();
+            if (facesWait !is null)
+                facesWait.stop();
+            return;
         }
-        else
-            plog("phone: on-device faces unavailable (models missing?) — computer detects on sync");
+        if (facesWait is null)
+        {
+            plog("phone: on-device face models not extracted yet — waiting for them");
+            facesWait = new QTimer(cast(cppq.QObject) null);
+            facesWait.setInterval(3000);
+            facesWait.connectTimeout({
+                if (++facesWaits > 200)   // ten minutes: the extraction failed
+                {
+                    facesWait.stop();
+                    plog("phone: on-device faces unavailable (models missing) — computer detects on sync");
+                    return;
+                }
+                facesInit(dataDir);
+            });
+            facesWait.start();
+        }
     }
+
+    version (Android) private QTimer facesWait;
+    version (Android) private int facesWaits;
 
     version (Android) private FaceWorker faceWorker;
 

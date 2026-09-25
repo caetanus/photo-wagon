@@ -8,6 +8,9 @@ import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.util.Log;
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import org.json.JSONObject;
 import org.qtproject.qt.android.bindings.QtService;
 
@@ -113,8 +116,49 @@ public class CoreService extends QtService
         // on re-reading a setting that may have changed since the request. onStartCommand,
         // which follows at once, leaves the foreground again if this start did not ask for it.
         enterForeground();
+        // off the main thread: a first-install copy of 120 MB must not hold onCreate (the
+        // service-execution timeout); the core waits for the files to appear
+        Thread x = new Thread(this::extractModels, "extract-models");
+        x.setDaemon(true);
+        x.start();
         super.onCreate();   // QtServiceBase: load the .so, run main("-service") on Qt's thread
         Log.i(TAG, "core service: created");
+    }
+
+    /**
+     * The on-device face models ship as APK assets; the core reads them as files. Qt's
+     * "assets:/" file engine comes with the Android platform plugin, which this windowless
+     * service process does not load — so they are copied out here, once, atomically (a temp
+     * file renamed into place: the core never sees half of one).
+     */
+    private void extractModels()
+    {
+        File dir = new File(getFilesDir(), "models");
+        dir.mkdirs();
+        for (String name : new String[] { "yunet.tflite", "r100.tflite" })
+        {
+            File out = new File(dir, name);
+            if (out.exists())
+                continue;
+            File tmp = new File(dir, name + ".tmp-java");
+            try (InputStream in = getAssets().open("models/" + name);
+                 OutputStream os = new FileOutputStream(tmp))
+            {
+                byte[] buf = new byte[1 << 16];
+                for (int n; (n = in.read(buf)) > 0; )
+                    os.write(buf, 0, n);
+            }
+            catch (Exception e)
+            {
+                Log.w(TAG, "core service: cannot extract " + name + ": " + e.getMessage());
+                tmp.delete();
+                continue;
+            }
+            if (!tmp.renameTo(out))
+                tmp.delete();
+            else
+                Log.i(TAG, "core service: extracted " + name);
+        }
     }
 
     @Override

@@ -254,4 +254,14 @@ mode, so removing them from `LocalBridge` does not break it.
    native shutdown, permission/share integration, TLS init; device tests: cold start, UI
    death, core death, permission grant, sharing, image/video decode, faces, foreground
    timeout. The notification/wake-lock move is a separate 5c commit.
+   Done: `-service` builds and serves the core on Android too (TLS pinned on its Qt thread;
+   aboutToQuit → shutdown when QtServiceBase quits); MainActivity's UI is a CoreClient to
+   `files/core.sock`; CoreService extracts the face models with the AssetManager before Qt
+   starts (the windowless service has no `assets:/` engine); the UI asks MainActivity to start
+   the service (`pwcore://start`, backing off 2 s → 30 s) while the core stays gone — Android
+   does not restart a service that crashes twice in quick succession. Waydroid-tested: cold
+   start, core crash (restarted by Android; again → by the UI), UI crash (the core survives,
+   the relaunched UI attaches), permission revoke → prompt → grant → rescan, share sheet,
+   video frame via JNI in the service, a face detected in the service. Not reproducible on
+   the rig: the Android 15 foreground-time budget (onTimeout).
 

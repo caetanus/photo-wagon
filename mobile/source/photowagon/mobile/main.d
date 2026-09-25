@@ -139,7 +139,13 @@ int main()
         probe.join();
     }
 
-    cast(void) createApp(APP_ID);
+    {
+        import photowagon.mobile.uiadapter : uiApp;
+
+        // kept, typed: DSide's wrapper registry is weak, and QGuiApplication.instance() hands
+        // back a base QCoreApplication wrapper once this one is collected
+        uiApp = createApp(APP_ID);
+    }
     QCoreApplication.setOrganizationName("PhotoWagon");
     QCoreApplication.setApplicationName(APP_ID);
     QCoreApplication.setApplicationVersion(APP_VERSION);
@@ -159,11 +165,18 @@ int main()
     // Host builds run the core in its own process by default: the UI starts it as a child
     // (`-service`) and is its client over <dataDir>/core.sock (stage 6). PW_CORE_SOCKET=<path>
     // uses a core someone else started; PW_CORE_INPROC=1 keeps the old single-process wiring
-    // (and the in-process test hooks). Android: the UI process still builds the core until
-    // stage 7.
+    // (and the in-process test hooks). Android: the core is the ":core" service (stage 7).
     string coreSocket = environment.get("PW_CORE_SOCKET", "");
     bool childCore;
-    version (Android) {} else
+    version (Android)
+    {
+        // the core runs in the ":core" CoreService process (MainActivity starts it)
+        import std.path : buildPath;
+
+        coreSocket = buildPath(QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.AppDataLocation).toString(), "core.sock");
+    }
+    else
         if (coreSocket.length == 0 && environment.get("PW_CORE_INPROC", "") != "1")
         {
             import std.path : buildPath;

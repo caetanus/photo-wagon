@@ -42,7 +42,7 @@ import photowagon.core.sync.pieces : PieceStore, PieceService, Manifest, Bitfiel
     askPiece, tellManifest, givePiece, askThumbs, pieceProtocol, pieceSize, sendPiece, pieceAccepted;
 version (PwHyperswarm)
 {
-    import photowagon.core.p2p.hswarm : HsTransport;
+    import photowagon.core.p2p.hswarm : HsTransport, hsWaitWritable;
     import photowagon.core.sync.muxstream : MuxSession, MuxStream, muxTagControl, muxTagPiece;
     import hyperswarm.connection : HsConn = Connection;
 }
@@ -1292,6 +1292,7 @@ final class P2pBridge : Bridge
                             hsSessions.remove(peerKey);
 
             auto mux = new MuxSession(hsWrite(c), /*initiator*/ true, null);
+            mux.throttle = hsThrottle(c);
             c.onData((ubyte[] b) nothrow { try mux.feed(b); catch (Exception) {} });
             bool dead;
             c.onClose = () nothrow { dead = true; try mux.closeAll(); catch (Exception) {} };
@@ -1471,7 +1472,14 @@ final class P2pBridge : Bridge
         // A nothrow byte-sink bound to a connection, for the mux.
         private void delegate(const(ubyte)[]) nothrow hsWrite(HsConn c)
         {
-            return (const(ubyte)[] f) nothrow { try c.write(f.dup); catch (Exception) {} };
+            // (Connection.write encrypts into a buffer of its own: no copy needed)
+            return (const(ubyte)[] f) nothrow { try c.write(f); catch (Exception) {} };
+        }
+
+        // the mux's backpressure: at most hsInFlightFrames unacknowledged frames (~64 KiB each)
+        private void delegate() nothrow hsThrottle(HsConn c)
+        {
+            return () nothrow { hsWaitWritable(c); };
         }
 
         // daemon.auth, then daemon.pair if the desktop needs it; blocks until admitted or refused.
@@ -2264,7 +2272,7 @@ private long pushedBytes;
 private void pushPieces(Stream st, string path, string sha, string keptPieces = null, long keptSize = -1)
 {
     import std.conv : to;
-    import std.digest.sha : sha256Of;
+    import photowagon.core.util.fastsha : sha256Of;
     import std.file : getSize;
     import vibe.core.file : openFile, FileMode;
     import photowagon.core.sync.digest : decodePieces;
@@ -2439,7 +2447,7 @@ private long pullOne(Connection conn, long id, string dest, out bool retry)
     import std.file : exists, getSize, rename, remove, mkdirRecurse;
     import std.path : dirName;
     import std.conv : to;
-    import std.digest.sha : SHA256;
+    import photowagon.core.util.fastsha : SHA256;
     import std.digest : toHexString, LetterCase;
 
     retry = true;

@@ -4,7 +4,9 @@
 /// worker thread; `ContentStore` is the convenience wrapper over one root.
 module photowagon.core.store.store;
 
-import std.digest.sha : SHA256, toHexString, LetterCase;
+import std.digest.sha : toHexString, LetterCase;
+
+import photowagon.core.util.fastsha : SHA256;
 import std.file : exists, mkdirRecurse, read, rename, write, remove;
 import std.path : buildPath, dirName;
 

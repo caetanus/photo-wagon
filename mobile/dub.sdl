@@ -10,7 +10,7 @@ sourceFiles "../source/photowagon/ui/backend.d" "../source/photowagon/ui/gridrow
 	"../source/photowagon/core/indexer/scan.d" "../source/photowagon/core/library/calendar.d" "../source/photowagon/core/jobs/memguard.d" \
 	"../source/photowagon/core/library/kind.d" "../source/photowagon/core/thumbs/imagestats.d" \
 	"../source/photowagon/core/metadata/exifparse.d" "../source/photowagon/core/metadata/datefromname.d" \
-	"../source/photowagon/core/pairingcode.d" "../source/photowagon/core/sync/pieces.d" "../source/photowagon/core/sync/digest.d" \
+	"../source/photowagon/core/pairingcode.d" "../source/photowagon/core/util/fastsha.d" "../source/photowagon/core/sync/pieces.d" "../source/photowagon/core/sync/digest.d" \
 	"../../qt-dlang-gen/runtime/qrc/qrc.d"
 stringImportPaths "../qml"
 // libp2p on the phone: the lite build (Ed25519 only, IP addresses only — no OpenSSL, no c-ares)

@@ -24,7 +24,7 @@ import std.algorithm : all, min;
 import std.ascii : isHexDigit;
 import std.conv : to;
 import std.digest : toHexString, LetterCase;
-import std.digest.sha : SHA256, sha256Of;
+import photowagon.core.util.fastsha : SHA256, sha256Of;
 import std.exception : enforce;
 import std.file : exists, getSize, mkdirRecurse, read, remove, rename, write;
 import std.path : buildPath;

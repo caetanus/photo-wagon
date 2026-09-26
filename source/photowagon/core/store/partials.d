@@ -82,7 +82,7 @@ final class PartialStore
 	string finishToPath(string sha)
 	{
 		import std.digest : toHexString, LetterCase;
-		import std.digest.sha : SHA256;
+		import photowagon.core.util.fastsha : SHA256;
 		import std.stdio : File;
 
 		immutable p = pathOf(sha);
@@ -125,7 +125,7 @@ final class PartialStore
 unittest
 {
 	import std.file : tempDir, rmdirRecurse;
-	import std.digest.sha : sha256Of;
+	import photowagon.core.util.fastsha : sha256Of;
 	import std.digest : toHexString, LetterCase;
 
 	auto d = buildPath(tempDir, "pw-partials-ut");

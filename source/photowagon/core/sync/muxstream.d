@@ -42,6 +42,11 @@ final class MuxSession
 	private uint nextId;                                   // odd for the initiator, even for the acceptor
 	private ubyte[] inbuf;                                 // reassembly across pipe deliveries
 	private bool closed;
+	/// Backpressure: called by a stream's write between its data frames, from the writing
+	/// task; it waits while the pipe has too much unacknowledged (the transport's queue).
+	/// Without it a sender handed udx every frame at once (16 MiB of pieces in flight): bursts
+	/// the receiver's socket buffer dropped, and control frames queued behind all of it.
+	void delegate() nothrow throttle;
 
 	/// `initiator` = the side that dials (the phone). `onAccept` fires on the accepting side
 	/// once per logical stream the peer opens.
@@ -163,6 +168,8 @@ final class MuxStream : Stream
 	private bool remoteClosed;        // peer sent fin
 	private bool wasReset;            // pipe/stream torn down
 	private bool localClosed;
+	private import vibe.core.sync : TaskMutex;
+	private TaskMutex wlock;          // one write at a time (see write)
 
 	private this(MuxSession mux, uint id) nothrow
 	{
@@ -200,13 +207,36 @@ final class MuxStream : Stream
 	{
 		enforce(!wasReset, "mux: stream reset");
 		enforce(!localClosed, "mux: write after close");
+		// one write at a time per stream: the throttle may yield between frames, and another
+		// task writing to this stream then would interleave its frames into this message
+		import vibe.core.sync : TaskMutex;
+
+		if (wlock is null)
+			wlock = new TaskMutex;
+		wlock.lock();
+		scope (exit)
+			wlock.unlock();
+		// (another writer, or the throttle below, may have yielded to a close / reset)
+		void live()
+		{
+			enforce(!wasReset, "mux: stream reset");
+			enforce(!localClosed, "mux: write after close");
+		}
+		live();
 		// split so one big write can't hold the pipe against other streams' frames
 		while (data.length > maxMuxPayload)
 		{
 			mux.sendFrame(id, flagData, data[0 .. maxMuxPayload]);
 			data = data[maxMuxPayload .. $];
+			if (mux.throttle !is null)
+			{
+				mux.throttle();
+				live();   // no DATA after this stream's FIN or reset
+			}
 		}
 		mux.sendFrame(id, flagData, data);
+		if (mux.throttle !is null)
+			mux.throttle();
 	}
 
 	void close() nothrow

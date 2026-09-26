@@ -205,3 +205,48 @@ final class HsTransport
         return swarm.keyPair.publicKey;
     }
 }
+
+/// Frames (~64 KiB each) a writer may have unacknowledged on a hyperswarm connection before
+/// it waits. OFF by default (0 = no limit): measured 2026-09-26 on an emulated 100 Mbit link
+/// and on one host, every limit (32/64/128) was slower than none — udx's own congestion
+/// control paces the queue, and a writer parked on a 1 ms poll only left gaps. Kept as
+/// PW_HS_INFLIGHT=<frames> for measuring.
+size_t hsInFlightFrames() nothrow
+{
+	import std.process : environment;
+	import std.conv : to;
+
+	static size_t cached = size_t.max;
+	if (cached == size_t.max)
+	{
+		cached = 0;
+		try
+		{
+			immutable v = environment.get("PW_HS_INFLIGHT", "");
+			if (v.length)
+				cached = v.to!size_t;
+		}
+		catch (Exception)
+		{
+		}
+	}
+	return cached;
+}
+
+/// Waits (sleeping, from a task) while `c` has more than hsInFlightFrames unacknowledged
+/// writes, or until it closes. The mux's backpressure on both sides.
+void hsWaitWritable(Connection c) nothrow
+{
+	import vibe.core.core : sleep;
+	import core.time : msecs;
+
+	immutable limit = hsInFlightFrames();
+	if (limit == 0)
+		return;
+	try
+		while (!c.closed && c.pendingWrites > limit)
+			sleep(1.msecs);
+	catch (Exception)
+	{
+	}
+}

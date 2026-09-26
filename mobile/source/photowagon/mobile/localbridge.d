@@ -2181,7 +2181,7 @@ private bool slowComputer;
     private static string fileSha256(string path)
     {
         import std.digest : toHexString, LetterCase;
-        import std.digest.sha : SHA256;
+        import photowagon.core.util.fastsha : SHA256;
         import std.stdio : File;
 
         SHA256 h;
@@ -2443,7 +2443,7 @@ private bool slowComputer;
             params["faces"] = facesToJson(ph.faces);   // on-device faces (or [] = none) → the computer stores them
         // keep the hash: faces computed later go on their own (library.faces) by sha256
         import std.digest : toHexString, LetterCase;
-        import std.digest.sha : sha256Of;
+        import photowagon.core.util.fastsha : sha256Of;
         immutable sentHash = toHexString!(LetterCase.lower)(sha256Of(bytes)).idup;
         // these bytes ARE the photo now: its hash is what was just read (markSent only marks
         // the content the photo still has)
@@ -2734,7 +2734,8 @@ private bool slowComputer;
 
     private static void hashFiles(shared(HashBatch)* hb, immutable(string)[] paths)
     {
-        import std.digest.sha : sha256Of, toHexString, LetterCase;
+        import std.digest.sha : toHexString, LetterCase;
+        import photowagon.core.util.fastsha : sha256Of;
 
         // Run behind the UI: hashing a 512-photo batch reads and digests gigabytes, and at
         // normal priority it starved the render thread — scrolling went to pieces during a
@@ -3044,7 +3045,8 @@ private bool slowComputer;
 
     private static void prepare(shared(Prepared)* pr, string path, string knownHash)
     {
-        import std.digest.sha : sha256Of, toHexString, LetterCase;
+        import std.digest.sha : toHexString, LetterCase;
+        import photowagon.core.util.fastsha : sha256Of;
         try
         {
             auto bytes = cast(ubyte[]) read(path);

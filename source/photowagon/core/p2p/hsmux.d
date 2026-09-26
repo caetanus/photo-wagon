@@ -19,6 +19,7 @@ import vibe.core.task : Task;
 import vibe.core.log : logDiagnostic, logInfo;
 
 import hyperswarm.connection : Connection;
+import photowagon.core.p2p.hswarm : hsWaitWritable;
 
 import libp2p.core.stream : Stream, readLengthPrefixed, writeLengthPrefixed;
 
@@ -80,6 +81,7 @@ final class HsMuxServe
 		sink = &send;
 		authed = token.length == 0;
 		mux = new MuxSession(&write, /*initiator*/ false, &onAccept);
+		mux.throttle = () nothrow { hsWaitWritable(c); };
 		lastRecv = MonoTime.currTime;
 		c.onData((ubyte[] b) nothrow {
 			if (gone)
@@ -126,7 +128,7 @@ final class HsMuxServe
 	private void write(const(ubyte)[] f) nothrow
 	{
 		try
-			c.write(f.dup);
+			c.write(f);   // (Connection.write encrypts into a buffer of its own: no copy needed)
 		catch (Exception)
 		{
 		}

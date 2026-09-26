@@ -13,7 +13,7 @@ module photowagon.core.sync.digest;
 
 import std.base64 : Base64;
 import std.digest : toHexString, LetterCase;
-import std.digest.sha : SHA256, sha256Of;
+import photowagon.core.util.fastsha : SHA256, sha256Of;
 import std.file : getSize;
 import std.stdio : File;
 

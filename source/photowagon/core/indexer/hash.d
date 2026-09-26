@@ -1,7 +1,9 @@
 /// Hashing a file by content. Worker-safe.
 module photowagon.core.indexer.hash;
 
-import std.digest.sha : SHA256, toHexString, LetterCase;
+import std.digest.sha : toHexString, LetterCase;
+
+import photowagon.core.util.fastsha : SHA256;
 import std.stdio : File;
 
 string sha256File(string path)

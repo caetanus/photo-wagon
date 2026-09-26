@@ -205,7 +205,7 @@ link() {
         source/photowagon/mobile/main.d source/photowagon/mobile/coremain.d source/photowagon/mobile/corefactory.d source/photowagon/mobile/corelock.d source/photowagon/mobile/coreipc.d source/photowagon/mobile/corehost.d source/photowagon/mobile/atomicfile.d source/photowagon/mobile/uiadapter.d source/photowagon/mobile/plog.d source/photowagon/mobile/tcpbridge.d \
         source/photowagon/mobile/p2pbridge.d \
         source/photowagon/mobile/localbridge.d source/photowagon/mobile/region.d source/photowagon/mobile/phoneindex.d \
-        ../source/photowagon/ui/backend.d ../source/photowagon/ui/transport.d ../source/photowagon/ui/bridge.d \
+        ../source/photowagon/ui/backend.d ../source/photowagon/ui/gridrows.d ../source/photowagon/ui/transport.d ../source/photowagon/ui/bridge.d \
         ../source/photowagon/core/ipc/link.d ../source/photowagon/core/p2p/identity.d \
         $P2P_SOURCES $QUIC_SOURCES $HS_SOURCES -d-version=LibP2P_Lite -d-version=EventcoreEpollDriver $TLS_VERSION $QUIC_VERSION $HS_VERSION ${EXTRA_DVERSIONS:-} $P2P_INCLUDES $TLS_INCLUDES $QUIC_INCLUDES $HS_INCLUDES \
         ../source/photowagon/core/indexer/scan.d ../source/photowagon/core/library/calendar.d ../source/photowagon/core/jobs/memguard.d \

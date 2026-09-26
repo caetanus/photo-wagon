@@ -43,17 +43,17 @@ Item {
     function setDensity(d) {
         d = Math.max(2, Math.min(6, d))
         if (d === grid.cols) return
-        const idx = view.indexAt(4, view.contentY + 6)
-        let anchorPid = -1
-        if (idx >= 0) { const r = rows.get(idx); if (r && r.tiles && r.tiles.length) anchorPid = r.tiles[0].pid }
+        const top = view.itemAtIndex(view.indexAt(4, view.contentY + 6))
+        grid.pendingAnchor = top && top.tileList.length ? top.tileList[0].pid : 0
         grid.density = d
-        if (anchorPid >= 0) Qt.callLater(function () {
-            for (let n = 0; n < rows.count; n++) {
-                const rr = rows.get(n)
-                if (rr.tiles) for (let m = 0; m < rr.tiles.length; m++)
-                    if (rr.tiles[m].pid === anchorPid) { view.positionViewAtIndex(n, ListView.Beginning); return }
-            }
-        })
+    }
+    // the photo to keep in view across a re-chunk (the model reports its new row: anchorRow)
+    property int pendingAnchor: 0
+    Connections {
+        target: library
+        function onAnchorRowChanged() {
+            if (library.anchorRow >= 0) view.positionViewAtIndex(library.anchorRow, ListView.Beginning)
+        }
     }
 
     // built-once glyphs shared by every tile
@@ -101,8 +101,11 @@ Item {
         selVersion++
     }
 
-    onPageChanged: { requesting = false; syncRows() }
-    onColsChanged: rebuildRows()   // a rotation / width change re-chunks the rows
+    onPageChanged: requesting = false
+    // the rows are built and reconciled in D (library.rows, a QAbstractListModel): a rotation,
+    // a width change or a pinch only tells it the column count
+    onColsChanged: { library.setGridColumns(cols, pendingAnchor); pendingAnchor = 0 }
+    Component.onCompleted: library.setGridColumns(cols, 0)
 
     // ---- day grouping -----------------------------------------------------------
     // taken_ts is Unix SECONDS (the backend stores it with 'unixepoch'); JS Date wants
@@ -122,85 +125,6 @@ Item {
         return d.getFullYear() === now.getFullYear() ? base : base + " " + d.getFullYear()
     }
 
-    // items -> [ {kind:"h",key,label}, {kind:"r",key,tiles:[…]} … ], chunked by `cols`
-    function buildRows() {
-        const items = (page && page.items) ? page.items : []
-        const out = []
-        let i = 0
-        while (i < items.length) {
-            const ts = items[i].takenTs || 0
-            const key = dayKey(ts)
-            out.push({ kind: "h", key: key, label: dayLabel(ts), tiles: [] })
-            const day = []
-            while (i < items.length && dayKey(items[i].takenTs || 0) === key) { day.push(items[i]); i++ }
-            for (let j = 0; j < day.length; j += cols) {
-                const tiles = []
-                for (let k = j; k < Math.min(j + cols, day.length); k++) {
-                    const it = day[k]
-                    tiles.push({ pid: it.id, thumbUrl: it.thumbUrl || "", sent: it.sent === true, remote: it.remote === true,
-                                 video: it.video === true, duration: it.duration || 0 })
-                }
-                out.push({ kind: "r", key: key + "#" + j, label: "", tiles: tiles })
-            }
-        }
-        return out
-    }
-
-    function sameTiles(a, b) {
-        if (!a || !b || a.length !== b.length) return false
-        for (let n = 0; n < a.length; n++) if (a[n].pid !== b[n].pid) return false
-        return true
-    }
-    function tilesContentDiffer(a, b) {
-        for (let n = 0; n < a.length; n++)
-            if (a[n].thumbUrl !== b[n].thumbUrl || a[n].sent !== b[n].sent) return true
-        return false
-    }
-
-    // Reconcile `rows` with the freshly computed rows, touching as few as possible — BY KEY
-    // (a day header, or a day's row "day#n"), not by position: the listing is newest first,
-    // so a new photo or a new day arrives at the TOP, and a positional prefix match threw
-    // every row below it away and rebuilt them (the scroll jumped, every thumbnail decoded
-    // again). A row whose tiles changed (a thumbnail arrived, a photo joined its day) is
-    // patched in place; new rows are inserted, gone ones removed.
-    // A row's content signature, stored WITH the row (role "sig"): a row read back from the
-    // ListModel holds its tiles as a nested model, which cannot be walked like the array.
-    function rowSig(r) {
-        if (r.kind !== "r") return r.label
-        return JSON.stringify(r.tiles)   // every field a tile shows (thumb, sent, video, duration, remote…)
-    }
-    function syncRows() {
-        const nr = buildRows()
-        const keys = new Set()
-        for (const r of nr) { r.sig = rowSig(r); keys.add(r.key) }
-        let i = 0
-        while (i < nr.length) {
-            const r = nr[i]
-            if (i < rows.count) {
-                const cur = rows.get(i)
-                if (cur.key === r.key && cur.kind === r.kind) {
-                    if (cur.sig !== r.sig) rows.set(i, r)
-                    i++
-                    continue
-                }
-                if (!keys.has(cur.key)) { rows.remove(i); continue }   // gone
-                let j = i + 1
-                while (j < rows.count && rows.get(j).key !== r.key) j++
-                if (j < rows.count && rows.get(j).kind === r.kind) {   // further down: move it up
-                    rows.move(j, i, 1)
-                    if (rows.get(i).sig !== r.sig) rows.set(i, r)
-                    i++
-                    continue
-                }
-            }
-            rows.insert(i, r)   // new here
-            i++
-        }
-        if (rows.count > nr.length) rows.remove(nr.length, rows.count - nr.length)
-    }
-    function rebuildRows() { rows.clear(); syncRows() }
-
-    ListModel { id: rows; dynamicRoles: true }
 
     Rectangle { anchors.fill: parent; color: theme.bg }
 
@@ -208,7 +132,7 @@ Item {
         id: view
         anchors.fill: parent
         clip: true
-        model: rows
+        model: library.rows
         reuseItems: true
         maximumFlickVelocity: 9000
         flickDeceleration: 1100
@@ -307,8 +231,9 @@ Item {
             id: rowItem
             required property string kind
             required property string key
-            required property var tiles
+            required property string tiles     // JSON: the row's photos
             required property string label
+            readonly property var tileList: kind === "r" ? JSON.parse(tiles) : []
             width: view.width
             height: kind === "h" ? 46 : grid.cellSize + grid.gap
 
@@ -347,7 +272,7 @@ Item {
                 visible: rowItem.kind === "r"
                 spacing: grid.gap
                 Repeater {
-                    model: rowItem.kind === "r" ? rowItem.tiles : 0
+                    model: rowItem.tileList
                     delegate: Tile { }
                 }
             }
@@ -371,7 +296,7 @@ Item {
 
     Label {
         anchors.centerIn: parent
-        visible: rows.count === 0
+        visible: view.count === 0
         // before the phone core has answered, "no photos" would be a lie
         text: !grid.ready ? "Loading your photos…"
             : grid.page.total === 0 ? grid.emptyText : "Loading…"
@@ -395,10 +320,9 @@ Item {
     // the month + year of the row at the top of the viewport
     function computeScrubDate() {
         const idx = view.indexAt(4, view.contentY + 6)
-        if (idx < 0 || idx >= rows.count) return grid.scrubText
-        const r = rows.get(idx)
-        if (!r || !r.key) return grid.scrubText
-        const keyPart = ("" + r.key).split("#")[0]
+        const it = idx >= 0 ? view.itemAtIndex(idx) : null
+        if (!it || !it.key) return grid.scrubText
+        const keyPart = ("" + it.key).split("#")[0]
         if (keyPart === "undated") return "Sem data"
         const p = keyPart.split("-")
         const d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]))

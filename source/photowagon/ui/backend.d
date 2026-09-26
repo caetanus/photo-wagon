@@ -21,6 +21,7 @@ import std.conv : to;
 import std.datetime.systime : Clock;
 
 import photowagon.ui.transport : Bridge;
+import photowagon.ui.gridrows : GridRows;
 
 version (WithUi)
 {
@@ -32,6 +33,14 @@ version (WithUi)
 @QObject class Library
 {
     Signal!() pageChanged;
+    Signal!() rowsChanged;
+    Signal!() anchorRowChanged;
+    /// The phone grid's rows (a QAbstractListModel built in D, updated by key on every page:
+    /// the delegates on screen survive) — `ListView { model: library.rows }`.
+    @Property("rowsChanged") cppq.QObject rows;
+    /// After setGridColumns: the row now holding the photo that was under the fingers.
+    @Property("anchorRowChanged") int anchorRow = -1;
+    private GridRows gridRows;
     Signal!() noticeChanged;
     Signal!() placesChanged;
     Signal!() tagsChanged;
@@ -241,6 +250,13 @@ version (WithUi)
     {
         import std.process : environment;
         import std.file : exists, readText;
+
+        if (gridRows is null)
+        {
+            gridRows = new GridRows();   // `new`, not newQObject: a QtdWidget (see the dside skill)
+            rows = cppq.QObject.wrap(qobjOf(gridRows));
+            rowsChanged.emit();
+        }
 
         try
             if (uiStatePath().exists)
@@ -1064,6 +1080,8 @@ version (WithUi)
                 pending["items"] = JSONValue.emptyArray;
                 pending["searching"] = true;
                 page = pending.toString();
+                if (gridRows !is null)
+                    gridRows.update(items);   // the grid shows what the page does
                 pageChanged.emit();
             }
             client.request("search.combined", sp, (r, e) {
@@ -1091,6 +1109,8 @@ version (WithUi)
                 pg["offset"] = items.length;   // the whole result: nothing more to load
                 pg["items"] = JSONValue(items);
                 page = pg.toString();
+                if (gridRows !is null)
+                    gridRows.update(items);   // the grid shows what the page does
                 pageChanged.emit();
             });
             return;
@@ -1114,6 +1134,8 @@ version (WithUi)
                 pg["offset"] = items.length;   // the whole result: nothing more to load
                 pg["items"] = JSONValue(items);
                 page = pg.toString();
+                if (gridRows !is null)
+                    gridRows.update(items);   // the grid shows what the page does
                 pageChanged.emit();
             });
             return;
@@ -2232,8 +2254,24 @@ version (WithUi)
         });
     }
 
+    /// The grid's column count changed (a pinch, a rotation): re-chunk; `anchorPid` is the
+    /// photo to keep in view — its new row lands in `anchorRow`.
+    @Slot void setGridColumns(int cols, int anchorPid)
+    {
+        if (gridRows is null)
+            return;
+        gridRows.setCols(cols);
+        if (anchorPid > 0)
+        {
+            anchorRow = gridRows.rowOf(anchorPid);
+            anchorRowChanged.emit();
+        }
+    }
+
     private void publishPage()
     {
+        if (gridRows !is null)
+            gridRows.update(items);
         if (!indexing)
             setStatus(client.connected(), false, total.to!string ~ " photo" ~ (total == 1 ? "" : "s")
                 ~ (progressText.length ? " · " ~ progressText : ""));

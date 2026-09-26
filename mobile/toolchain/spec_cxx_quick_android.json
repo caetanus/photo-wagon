@@ -76,6 +76,7 @@
     "/home/caetano/Qt/6.11.1/android_arm64_v8a/qml/QtQuick/plugins.qmltypes"
   ],
   "subclass": [
+    "QAbstractListModel",
     "QQuickBasePositioner",
     "QQuickBehavior",
     "QQuickDoubleValidator",

@@ -28,6 +28,11 @@ ApplicationWindow {
     // Both follow the OS light/dark automatically: Mac via colorScheme, System via the
     // active desktop palette. The choice is remembered between sessions (in _ui.theme).
     property string themeMode: "mac"          // "mac" | "system"
+    // Settings → Appearance → Menu: the menu bar folded into a ☰ button in the toolbar (a
+    // tiling WM with no title bars looks cleaner without a bar of its own). The GTK theme's
+    // headerbar always folds it.
+    property bool menuInButton: false
+    readonly property bool hamburger: root.csd || root.menuInButton
     readonly property bool dark: Application.styleHints.colorScheme === Qt.ColorScheme.Dark
     SystemPalette { id: sysPalette; colorGroup: SystemPalette.Active }
     // GTK mode reads its colours from the qml-css engine (cssTheme), which app.d loads with the
@@ -73,12 +78,14 @@ ApplicationWindow {
         root._ui.theme = root.themeMode
         root._ui.zoom = root.zoom
         root._ui.startupView = root.startupView
+        root._ui.menuButton = root.menuInButton
         library.saveUiState(JSON.stringify(root._ui))
     }
     Component.onCompleted: {
         try { root._ui = JSON.parse(library.uiState) || {} } catch (e) { root._ui = {} }
         if (["mac","system","gtk"].indexOf(root._ui.theme) >= 0) root.themeMode = root._ui.theme
         if (typeof root._ui.zoom === "number" && root._ui.zoom >= 72 && root._ui.zoom <= 320) root.zoom = root._ui.zoom
+        if (typeof root._ui.menuButton === "boolean") root.menuInButton = root._ui.menuButton
         if (["years", "months", "days", "all"].indexOf(root._ui.startupView) >= 0) { root.startupView = root._ui.startupView; root.mode = root.startupView }
         library.refreshSystemAccent()
         const w = root._ui.win
@@ -239,8 +246,8 @@ ApplicationWindow {
 
     menuBar: MenuBar {
         id: appMenuBar
-        visible: !root.csd
-        height: root.csd ? 0 : implicitHeight
+        visible: !root.hamburger
+        height: root.hamburger ? 0 : implicitHeight
         background: Rectangle {
             color: theme.toolbar
             Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: theme.separator }
@@ -718,9 +725,10 @@ ApplicationWindow {
                     onClicked: settingsDialog.open()
                 }
 
-                // ---- CSD window controls (GTK theme only): the 🍔 primary menu + close ----
+                // ---- the 🍔 primary menu (GTK headerbar, or the menu bar folded by choice)
+                // and, GTK theme only, the close button ----
                 ToolIcon {
-                    visible: root.csd
+                    visible: root.hamburger
                     icon_: icons.menu
                     ToolTip.text: "Main menu"; ToolTip.visible: hovered
                     onClicked: primaryMenu.popup(this, width - primaryMenu.width, height + 4)
@@ -772,6 +780,11 @@ ApplicationWindow {
                 AppMenuItem { action: actAddTags }
                 AppMenuItem { action: actSetPlace }
                 MenuSeparator {}
+                AppMenuItem { text: "Years";      checkable: true; checked: root.mode === "years";  enabled: !root.viewing; onTriggered: { root.mode = "years";  library.filterDate(0, 0, 0) } }
+                AppMenuItem { text: "Months";     checkable: true; checked: root.mode === "months"; enabled: !root.viewing; onTriggered: { root.mode = "months"; library.filterDate(0, 0, 0) } }
+                AppMenuItem { text: "Days";       checkable: true; checked: root.mode === "days";   enabled: !root.viewing; onTriggered: { root.mode = "days";   library.filterDate(0, 0, 0) } }
+                AppMenuItem { text: "All Photos"; checkable: true; checked: root.mode === "all";    enabled: !root.viewing; onTriggered: { root.mode = "all";    library.filterDate(0, 0, 0) } }
+                MenuSeparator {}
                 AppMenuItem { action: actZoomIn }
                 AppMenuItem { action: actZoomOut }
                 AppMenuItem { action: actInfo }
@@ -787,6 +800,7 @@ ApplicationWindow {
                 MenuSeparator {}
                 AppMenuItem { action: actMinimize }
                 AppMenuItem { action: actZoomWindow }
+                AppMenuItem { action: actClose }
                 AppMenuItem { action: actAbout }
                 MenuSeparator {}
                 AppMenuItem { action: actQuit }
@@ -1056,7 +1070,9 @@ ApplicationWindow {
         themeMode: root.themeMode
         thumbSize: root.zoom
         startupView: root.startupView
+        menuInButton: root.menuInButton
         onPickTheme: (m) => { root.themeMode = m; root._scheduleSaveUi() }
+        onPickMenuInButton: (on) => { root.menuInButton = on; root._scheduleSaveUi() }
         onPickThumbSize: (z) => { root.zoom = z; root._scheduleSaveUi() }
         onPickView: (v) => { root.startupView = v; root.mode = v; library.filterDate(0, 0, 0); root._scheduleSaveUi() }
         onManageComputers: peersPanel.open()

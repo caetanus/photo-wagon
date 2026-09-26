@@ -15,11 +15,13 @@ Dialog {
     property string themeMode: "mac"      // "mac" | "system" | "gtk"
     property string startupView: "all"    // "years" | "months" | "days" | "all"
     property int thumbSize: 176           // 72..320
+    property bool menuInButton: false     // the menu bar folded into a ☰ button
 
     // ---- choices reported back to the window ------------------------------------
     signal pickTheme(string mode)
     signal pickView(string v)
     signal pickThumbSize(int z)
+    signal pickMenuInButton(bool on)
     signal manageComputers()
 
     property int section: 0               // 0 Appearance · 1 View · 2 Sharing
@@ -170,6 +172,29 @@ Dialog {
                             text: (dlg.themeMode === "system" || dlg.themeMode === "gtk") ? "from your desktop" : "Photo Wagon blue"
                             color: theme.muted; font.pixelSize: 12
                         }
+                    }
+
+                    Rectangle { Layout.fillWidth: true; height: 1; color: theme.separator }
+
+                    Label { text: "Menu"; font.pixelSize: 15; font.bold: true; color: theme.text }
+                    RowLayout {
+                        spacing: 8
+                        enabled: dlg.themeMode !== "gtk"
+                        Repeater {
+                            model: [[false, "Menu bar"], [true, "☰ button in the toolbar"]]
+                            delegate: Button {
+                                required property var modelData
+                                text: modelData[1]
+                                highlighted: (dlg.themeMode === "gtk" || dlg.menuInButton) === modelData[0]
+                                onClicked: dlg.pickMenuInButton(modelData[0])
+                            }
+                        }
+                    }
+                    Label {
+                        text: dlg.themeMode === "gtk" ? "The GTK / Adwaita theme always keeps the menu in its header bar."
+                                                      : "The ☰ button hides the menu bar: cleaner on a window manager without title bars. Keyboard shortcuts keep working."
+                        color: theme.muted; font.pixelSize: 12
+                        wrapMode: Text.WordWrap; Layout.fillWidth: true
                     }
                 }
             }

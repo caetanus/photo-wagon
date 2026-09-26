@@ -69,6 +69,7 @@ version (WithUi)
     Signal!() syncChanged;
     Signal!() candidatesChanged;
     Signal!() regionChanged;
+    Signal!() originalChanged;
     Signal!() uiStateChanged;
 
     /// {"total":N,"offset":o,"items":[Photo…]} — accumulated across loadPage calls.
@@ -155,6 +156,9 @@ version (WithUi)
     @Property("suggestionChanged") string suggestion = "{}";
     /// photo.region for the zoomed viewer: {id, x, y, w, h, url}
     @Property("regionChanged") string region = `{"id":0}`;
+    /// the phone's zoomed viewer: the photo's ORIGINAL as a local file {id, url} — its own file,
+    /// or the computer's original fetched raw over the piece pipe (photo.download)
+    @Property("originalChanged") string original = `{"id":0}`;
     /// face.candidates for the face being named: {faceId, people: [{id, name, faces, coverUrl, similarity}]}
     @Property("candidatesChanged") string candidates = `{"faceId":0,"people":[]}`;
     /// The window's own remembered state (geometry, which sections are folded, the last view):
@@ -1035,7 +1039,10 @@ version (WithUi)
         step(0);
     }
 
-    private void reload(int offset, int limit)
+    /// `refresh`: the listing on screen is being brought up to date (a library.changed),
+    /// not a new one opened — the phone core then waits for the computer instead of
+    /// answering with its own photos first, which shrank the grid and threw the scroll away.
+    private void reload(int offset, int limit, bool refresh = false)
     {
         if (fSemantic.length)
         {
@@ -1165,8 +1172,8 @@ version (WithUi)
             });
             return;
         }
-        if (offset == 0)
-            items.length = 0;
+        if (offset == 0 && !refresh)
+            items.length = 0;   // (a refresh keeps them until its answer replaces them)
         if (limit > 0)
             pageLimit = limit;
         JSONValue params = JSONValue.emptyObject;
@@ -1184,6 +1191,8 @@ version (WithUi)
         if (fPlace.length) { params["place"] = fPlace; if (fCountry.length) params["country"] = fCountry; }
         if (fTag.length && fTagGroup.length) params[fTagGroup] = fTag;
         if (fKeyword.length) params["keyword"] = fKeyword;
+        if (refresh && offset == 0)
+            params["refresh"] = true;
         immutable off = offset;
         immutable epoch = offset == 0 ? ++pageEpoch : pageEpoch;
         client.request("library.page", params, (r, e) {
@@ -1191,7 +1200,11 @@ version (WithUi)
                 return;   // a newer listing replaced this one
             if (e.type != JSONType.null_)
             {
-                if (!isSuperseded(e))   // the phone core cut an outdated request short: not a failure
+                // the phone core cut an outdated request short, or a refresh found the computer
+                // too slow (the listing on screen stays): neither is a failure to show
+                immutable quiet = isSuperseded(e) || (e.type == JSONType.object && "code" in e
+                    && e["code"].type == JSONType.string && e["code"].str == "refresh_timeout");
+                if (!quiet)
                     report("page", e);
                 return;
             }
@@ -1680,9 +1693,21 @@ version (WithUi)
             if (openId != id) return;   // moved on
             JSONValue out_ = JSONValue.emptyObject;
             out_["id"] = id; out_["x"] = x; out_["y"] = y; out_["w"] = w; out_["h"] = h;
-            out_["url"] = "data:" ~ r["mime"].str ~ ";base64," ~ r["base64"].str;
+            // the phone's core decodes it to a local file (raw); the desktop daemon answers inline
+            out_["url"] = "fileUrl" in r ? r["fileUrl"].str : "data:" ~ r["mime"].str ~ ";base64," ~ r["base64"].str;
             region = out_.toString();
             regionChanged.emit();
+        });
+    }
+
+    /// The phone's viewer zoomed in: the original as a local file (answers land in `original`).
+    @Slot void loadOriginal(int id)
+    {
+        client.request("photo.download", JSONValue(["id": JSONValue(id)]), (r, e) {
+            if (e.type != JSONType.null_) { report("photo.download", e); return; }
+            if (openId != id || r.type != JSONType.object || "fileUrl" !in r) return;   // moved on
+            original = JSONValue(["id": JSONValue(id), "url": r["fileUrl"]]).toString();
+            originalChanged.emit();
         });
     }
 
@@ -1926,7 +1951,8 @@ version (WithUi)
         loadStats();
         loadMemories();
         loadMoments();
-        reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));   // keep what was scrolled to
+        immutable onScreen = items.length > 0;
+        reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit), onScreen);   // keep what was scrolled to
     }
 
     private void onEvent(string ev, JSONValue data)

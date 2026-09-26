@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
@@ -186,6 +187,75 @@ Rectangle {
         smooth: true
         mipmap: true
         HoverHandler { id: imageHover }
+
+        // Zoomed in, the picture above is only its 2560 px decode (or the computer's 2048 px
+        // preview), blown up: blurry. After a pause in the zoom or the pan the original's
+        // pixels come in — from the phone's own file, or the computer's fetched raw:
+        //   - up to 24 MP: the whole original at its own size (hiRes), once per zoom;
+        //   - above: only the visible part, at the resolution the screen shows it
+        //     (library.loadRegion → region), again after each pan.
+        // Both are children of `image`: they take its scale and pan for free.
+        readonly property real photoW: viewer.photo ? (viewer.photo.width || 0) : 0
+        readonly property real photoH: viewer.photo ? (viewer.photo.height || 0) : 0
+        readonly property bool bigPhoto: photoW * photoH > 24e6
+        // the painted picture inside this item (PreserveAspectFit centres it)
+        readonly property real padX: (width - paintedWidth) / 2
+        readonly property real padY: (height - paintedHeight) / 2
+        Image {
+            id: hiRes
+            anchors.fill: parent
+            readonly property var orig: JSON.parse(library.original)
+            readonly property bool wanted: !image.bigPhoto && viewer.zoomed && hiResTimer.settled
+                                           && viewer.photo && orig.id === viewer.photo.id
+            source: wanted ? orig.url : ""
+            visible: status === Image.Ready
+            asynchronous: true
+            cache: false
+            fillMode: Image.PreserveAspectFit
+            autoTransform: true
+            smooth: true
+        }
+        Image {
+            id: regionImage
+            readonly property var r: JSON.parse(library.region)
+            visible: image.bigPhoto && viewer.zoomed && viewer.photo && r.id === viewer.photo.id && status === Image.Ready
+            x: image.padX + (r.x || 0) * image.paintedWidth
+            y: image.padY + (r.y || 0) * image.paintedHeight
+            width: (r.w || 0) * image.paintedWidth
+            height: (r.h || 0) * image.paintedHeight
+            source: image.bigPhoto && viewer.zoomed ? (r.url || "") : ""
+            asynchronous: true
+            cache: false
+            fillMode: Image.Stretch
+            smooth: true
+        }
+        Timer {
+            id: hiResTimer
+            property bool settled: false
+            interval: 300
+            onTriggered: {
+                settled = true
+                if (!viewer.photo || viewer.isVideo || !viewer.zoomed || image.paintedWidth <= 0) return
+                if (!image.bigPhoto) {
+                    if (JSON.parse(library.original).id !== viewer.photo.id)
+                        library.loadOriginal(viewer.photo.id)
+                    return
+                }
+                // the viewer's rectangle in this item's coordinates, as fractions of the picture
+                const p0 = image.mapFromItem(viewer, 0, 0)
+                const p1 = image.mapFromItem(viewer, viewer.width, viewer.height)
+                const cl = (v) => Math.max(0, Math.min(1, v))
+                const x0 = cl((p0.x - image.padX) / image.paintedWidth), y0 = cl((p0.y - image.padY) / image.paintedHeight)
+                const x1 = cl((p1.x - image.padX) / image.paintedWidth), y1 = cl((p1.y - image.padY) / image.paintedHeight)
+                if (x1 <= x0 || y1 <= y0) return
+                const px = Math.ceil(Math.max((x1 - x0) * image.paintedWidth, (y1 - y0) * image.paintedHeight)
+                                     * image.scale * Screen.devicePixelRatio)
+                library.loadRegion(viewer.photo.id, x0, y0, x1 - x0, y1 - y0, px)
+            }
+        }
+        onScaleChanged: if (viewer.zoomed) hiResTimer.restart(); else { hiResTimer.stop(); hiResTimer.settled = false }
+        onXChanged: if (viewer.zoomed && bigPhoto) hiResTimer.restart()
+        onYChanged: if (viewer.zoomed && bigPhoto) hiResTimer.restart()
 
         PinchHandler {
             target: image

@@ -894,7 +894,9 @@ bool givePiece(Stream s, string sha, uint i, const(ubyte)[] bytes)
 /// idling one round trip per piece (stop-and-wait held a 4G push to ~50 KB/s).
 void sendPiece(Stream s, string sha, uint i, const(ubyte)[] bytes)
 {
-	s.write(cast(ubyte[])[PieceOp.put] ~ shaBytes(sha)[] ~ uintToBe(i)[] ~ uintToBe(cast(uint) bytes.length)[] ~ bytes);
+	// the header, then the piece as it is (no 1 MiB copy of it glued behind the header)
+	s.write(cast(ubyte[])[PieceOp.put] ~ shaBytes(sha)[] ~ uintToBe(i)[] ~ uintToBe(cast(uint) bytes.length)[]);
+	s.write(bytes);
 }
 
 /// The answer to the oldest piece sent with sendPiece and not yet answered.

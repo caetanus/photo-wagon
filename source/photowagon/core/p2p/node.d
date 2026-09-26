@@ -282,9 +282,65 @@ final class Node : Notifiee
 		}
 	}
 
+	/// The relays we hold a slot on, as dialable "/ip4/…/p2p/<relay>" addresses (a
+	/// circuit's part before /p2p-circuit), kept in <dataDir>/p2p-relays across restarts.
+	private string[] loadRememberedRelays() nothrow
+	{
+		import std.file : exists, readText;
+		import std.path : buildPath;
+		import std.string : splitLines, strip;
+
+		string[] out_;
+		try
+		{
+			immutable f = buildPath(cfg.dataDir, "p2p-relays");
+			if (f.exists)
+				foreach (l; readText(f).splitLines)
+					if (l.strip.length)
+						out_ ~= l.strip;
+		}
+		catch (Exception)
+		{
+		}
+		return out_;
+	}
+
+	private void saveRememberedRelays() nothrow
+	{
+		import std.algorithm : canFind;
+		import std.file : write, rename;
+		import std.path : buildPath;
+		import std.string : indexOf, join;
+
+		try
+		{
+			string[] lines;
+			foreach (_, e; relays)
+				foreach (c; e.circuits)
+				{
+					immutable cut = c.indexOf("/p2p-circuit");
+					// only what the phone's transports dial: plain ip4/ip6 over tcp or quic
+					if (cut <= 0 || c.indexOf("/ws") >= 0 || c.indexOf("/webtransport") >= 0 || c.indexOf("/dns") >= 0)
+						continue;
+					immutable relayAddr = c[0 .. cut];
+					if (!lines.canFind(relayAddr))
+						lines ~= relayAddr;
+				}
+			if (lines.length == 0)
+				return;
+			immutable f = buildPath(cfg.dataDir, "p2p-relays");
+			write(f ~ ".tmp", lines.join("\n") ~ "\n");
+			rename(f ~ ".tmp", f);
+		}
+		catch (Exception)
+		{
+		}
+	}
+
 	private void reserveOnRelays()
 	{
 		import vibe.core.core : runTask, sleep;
+		import vibe.core.task : Task;
 		import core.time : minutes, seconds, MonoTime;
 
 		if (cfg.p2pRelays.length == 0)
@@ -304,7 +360,11 @@ final class Node : Notifiee
 				string[] got;
 				try
 				{
-					auto info = relay.reserve(pe);
+					import libp2p.util.timeout : withTimeout;
+
+					// bounded: a peer that neither grants nor refuses must not hold up the
+					// candidates tried beside it
+					auto info = withTimeout(8.seconds, "relay reserve", () => relay.reserve(pe));
 					foreach (ca; relay.circuitAddrs(pe, info))
 					{
 						immutable s = cleanCircuit(ca.toString);
@@ -316,6 +376,84 @@ final class Node : Notifiee
 				{
 				}
 				return got;
+			}
+
+			// The relays we held before a restart, straight away — before the DHT join
+			// (tens of seconds): reserving on them again brings back the very circuits the
+			// DHT and the phone already know.
+			{
+				auto remembered = loadRememberedRelays();
+				// ONE dial per relay over all its remembered addresses (the swarm races
+				// them): one connection per relay, the one the reservation rides and the
+				// one conns[] holds — several would leave the reserved one unheld
+				PeerId[] rpeers;
+				Multiaddr[][] raddrs;
+				foreach (r; remembered)
+					try
+					{
+						auto pa = splitPeer(r);
+						size_t at = rpeers.length;
+						foreach (i, p_; rpeers)
+							if (p_ == pa.peer)
+								at = i;
+						if (at == rpeers.length)
+						{
+							rpeers ~= pa.peer;
+							raddrs ~= cast(Multiaddr[]) null;
+						}
+						raddrs[at] ~= pa.addr;
+					}
+					catch (Exception)
+					{
+					}
+				Task[] dials;
+				foreach (i, pe; rpeers)
+					try
+						dials ~= runTask((PeerId pp, Multiaddr[] as) nothrow {
+							try
+							{
+								import libp2p.util.timeout : withTimeout;
+
+								withTimeout(8.seconds, "relay redial", { host.connect(pp, as); });
+							}
+							catch (Exception)
+							{
+							}
+						}, pe, raddrs[i]);
+					catch (Exception)
+					{
+					}
+				foreach (t; dials)
+					t.joinUninterruptible();
+				auto got = new string[][](rpeers.length);
+				Task[] ts;
+				foreach (i, pe; rpeers)
+					try
+						ts ~= runTask((size_t idx, PeerId pp) nothrow { got[idx] = reserveOn(pp); }, i, pe);
+					catch (Exception)
+					{
+					}
+				foreach (t; ts)
+					t.joinUninterruptible();
+				foreach (i, g; got)
+				{
+					if (g.length == 0 || relays.length >= maxRelays)
+						continue;
+					try
+					{
+						immutable rp = rpeers[i].toString;
+						auto e = new RelayEntry;
+						e.circuits = g;
+						if (auto cp = rp in conns)
+							e.hold = (*cp).hold();
+						relays[rp] = e;
+						rebuildCircuitList();
+						logInfo("p2p: reachable via public relay: %s (held before the restart)", g[0]);
+					}
+					catch (Exception)
+					{
+					}
+				}
 			}
 
 			for (;;)
@@ -383,42 +521,67 @@ final class Node : Notifiee
 				}
 				rebuildCircuitList();
 
-				// Acquire: no live reservation — try the configured relays first, then
-				// AutoRelay-lite over the public peers the DHT gave us (many go-libp2p nodes
-				// run a limited relay that grants a slot). Stop at the first that sticks; that
-				// relay stays ours (and gets refreshed above) until its connection drops.
+				// Acquire, up to maxRelays: the relays we held before first (a restart
+				// reserves on the SAME relays, so the circuits the DHT and the phone already
+				// know are live again in seconds instead of dead until a new publish lands),
+				// then the configured ones, then AutoRelay-lite over the public peers the
+				// DHT connected. Candidates are tried SEVERAL AT ONCE — one by one, with most
+				// refusing or timing out, the first slot took minutes after a restart.
 				if (relays.length < maxRelays)
 				{
-					try
-						sleep(4.seconds); // let the DHT settle its connections
-					catch (Exception)
-					{
-					}
 					PeerId[] cands;
+					string[] seen;
+					void cand(PeerId pe) nothrow
+					{
+						try
+						{
+							immutable k = pe.toString;
+							if (k in relays || seen.canFind(k))
+								return;
+							seen ~= k;
+							cands ~= pe;
+						}
+						catch (Exception)
+						{
+						}
+					}
+					// the remembered relays were re-dialed (once each) at startup; a later
+					// round only retries those still connected, like any DHT peer
 					foreach (r; cfg.p2pRelays)
 						try
-							cands ~= splitPeer(r).peer;
+							cand(splitPeer(r).peer);
 						catch (Exception)
 						{
 						}
 					foreach (_, pe; dhtPeers)
-						cands ~= pe;
+						cand(pe);
+					enum batch = 6;
+					size_t at;
 					int tried;
-					foreach (pe; cands)
+					while (relays.length < maxRelays && at < cands.length && tried < 40)
 					{
-						if (relays.length >= maxRelays || tried >= 40)
-							break;
-						string rp;
-						try
-							rp = pe.toString;
-						catch (Exception)
-							continue;
-						if (rp in relays)
-							continue;
-						tried++;
-						auto got = reserveOn(pe);
-						if (got.length)
+						auto group = cands[at .. at + batch < cands.length ? at + batch : cands.length];
+						at += group.length;
+						tried += cast(int) group.length;
+						auto results = new string[][](group.length);
+						Task[] ts;
+						foreach (i, pe; group)
+							try
+								ts ~= runTask((size_t idx, PeerId pp) nothrow { results[idx] = reserveOn(pp); }, i, pe);
+							catch (Exception)
+							{
+							}
+						foreach (t; ts)
+							t.joinUninterruptible();
+						foreach (i, got; results)
 						{
+							if (got.length == 0 || relays.length >= maxRelays)
+								continue;
+							string rp;
+							try
+								rp = group[i].toString;
+							catch (Exception)
+								continue;
 							try
 							{
 								auto e = new RelayEntry;
@@ -429,6 +592,7 @@ final class Node : Notifiee
 									e.hold = (*cp).hold();
 								relays[rp] = e;
 								rebuildCircuitList();
+								saveRememberedRelays();
 								logInfo("p2p: reachable via public relay: %s", got[0]);
 							}
 							catch (Exception)

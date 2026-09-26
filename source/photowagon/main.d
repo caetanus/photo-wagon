@@ -114,6 +114,7 @@ private void logToFile(ref Config cfg) nothrow
 			rename(path, path ~ ".1");
 		auto fl = new FileLogger(path);
 		fl.minLevel = cfg.verbose ? LogLevel.diagnostic : LogLevel.info;
+		fl.format = FileLogger.Format.threadTime;   // with the time: a phone's log is matched against it
 		registerLogger(cast(shared) fl);
 	}
 	catch (Exception e)

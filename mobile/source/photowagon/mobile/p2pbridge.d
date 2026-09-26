@@ -724,6 +724,10 @@ final class P2pBridge : Bridge
     /// resume (BOOTTIME keeps counting through suspend; a frozen process sees the gap too).
     /// A restart = bump target.version_: the running session gives way, the libp2p loop
     /// dials again and the hyperswarm loop builds a fresh transport.
+    /// The libp2p host of the running client (vibe thread only): netWatch tells it when the
+    /// network moved, so it drops the dead paths and what was learned about the old one.
+    private Host liveHost;
+
     private void netWatch() nothrow
     {
         import vibe.core.core : sleep;
@@ -756,6 +760,17 @@ final class P2pBridge : Bridge
             sig = cur;
             if (why.length == 0)
                 continue;
+            // libp2p forgets the old network: its dead connections (and their observed
+            // addresses — a phone on 4G kept offering its home Wi-Fi's public IP for the
+            // punch) and the transports' STUN-reflexive addresses
+            if (addrChanged && liveHost !is null)
+                try
+                {
+                    immutable n = liveHost.networkChanged();
+                    plog("p2p: network moved — ", n, " connection(s) on the old network closed, reflexive addresses dropped");
+                }
+                catch (Exception e)
+                    try plog("p2p: network moved — forgetting the old one failed: ", e.msg); catch (Exception) {}
             // A moved network ALWAYS restarts: an earlier bump (a timeout, a new code) cannot
             // have accounted for an address change that came after it, and a restart is cheap.
             // A resume skips only a restart that already followed the wake — one within the
@@ -928,6 +943,9 @@ final class P2pBridge : Bridge
             ? [cast(Transport) new TcpTransport, ws]   // cast: else the literal infers Object[]
             : [cast(Transport) ws];
         auto host = new Host(identity, transports, hc);
+        liveHost = host;   // netWatch tells it when the network moves
+        scope (exit)
+            liveHost = null;
         // The piece protocol, both ways: what arrives from the computer lands in the piece
         // store (resumable in any order); what we have complete — our own camera roll by
         // sha256, and anything already downloaded — we serve to whoever the computer admits
@@ -1598,7 +1616,11 @@ final class P2pBridge : Bridge
         // Roaming: a private-IP (LAN) path outranks a public/relay-punched (WAN) path. A better
         // path preempts the running session — closing the old connection so its pump exits at
         // once — and takes over; an equal/worse duplicate is dropped. Same rule as the hs flavor.
-        immutable myRank = isPrivateIp4(conn.remoteAddr.toString) ? 2 : 1;
+        // Off the LAN, QUIC outranks the other direct paths: native streams and its own flow
+        // control carry a transfer, where a punched webrtc-direct path went mute under one on
+        // 4G. A QUIC path landing after a WebRTC one takes the session over.
+        immutable myRank = isPrivateIp4(conn.remoteAddr.toString) ? 3
+            : conn.remoteAddr.toString.canFind("/quic-v1") ? 2 : 1;
         // The token names who we expect; the IPC auth below is what actually rejects a stranger
         // that answered the same rendezvous (same as hs). Captured once for this session.
         Target t;
@@ -2108,7 +2130,9 @@ final class P2pBridge : Bridge
             // queued behind the data) is alive: that counts as much as a control frame
             if (now - lastRecv >= deadAfter && now - lastPieceAck >= deadAfter)
             {
-                plog("p2p: link silent for ", deadAfter.total!"seconds", "s — dropping to re-dial");
+                plog("p2p: link silent for ", deadAfter.total!"seconds", "s — dropping to re-dial (last from the computer ",
+                    (now - lastRecv).total!"msecs", " ms ago, last piece answer ", (now - lastPieceAck).total!"msecs",
+                    " ms ago, pushed ", pushedBytes / 1024, " KiB since, over ", conn.remoteAddr.toString, ")");
                 break;                                    // no answer to the pings: the link is dead
             }
             sleep(20.msecs);
@@ -2229,6 +2253,8 @@ private enum pushProtocolV2 = "/photowagon/push/2.0.0";
 /// transfer the control stream's pings wait behind the data, and a silent control stream then
 /// does not mean a dead link. Thread-local on purpose: the vibe thread's alone.
 private MonoTime lastPieceAck;
+/// Bytes of pieces handed to the transport since the last answer (the watchdog's report).
+private long pushedBytes;
 
 /// Upload over the piece protocol: tell the computer the manifest, ask which pieces it has,
 /// send the missing ones (each verified on arrival), one stream per request. A drop costs
@@ -2272,45 +2298,85 @@ private void pushPieces(Stream st, string path, string sha, string keptPieces = 
     auto fh = openFile(path, FileMode.read);
     scope (exit)
         fh.close();
-    // Several pieces in flight (the computer answers them in order): the link stays full
-    // instead of idling a round trip per piece. `window` buffers, each reused only once its
-    // piece is answered.
-    enum window = 8;
-    auto bufs = new ubyte[][](window);
-    foreach (ref b; bufs)
-        b = new ubyte[pieceSize];
-    uint[] inflight;   // piece indices sent and not yet answered, oldest first
-    size_t sentCount;
-    void answerOldest()
-    {
-        immutable i = inflight[0];
-        inflight = inflight[1 .. $];
-        if (!pieceAccepted(st))
-            throw new Exception("computer refused piece " ~ i.to!string);
-        lastPieceAck = MonoTime.currTime;   // the computer answered: the link is alive
-    }
+    // Streamed: the pieces go one after another, each marked with its index, without waiting
+    // for any answer — the transport's flow control is the only brake. The computer answers
+    // every piece, in order, with one status byte; a reader alongside takes them as they come
+    // and, when one is refused, the writer stops and the push fails with that piece's number
+    // (the next attempt asks what the computer has and sends only the rest). One buffer: a
+    // stream's write returns only once it has handed the bytes on. Unanswered pieces are
+    // capped at `ahead` (16 MiB, far past any link's bandwidth × delay): a transport without
+    // flow control of its own (the udx mux) would otherwise queue whole videos in memory.
+    import vibe.core.core : runTask;
+    import vibe.core.sync : createManualEvent;
+
+    enum ahead = 16;
+    auto answeredEvent = createManualEvent();
+    uint[] order;   // the pieces to send, in the order they go (and are answered)
+    foreach (i; 0 .. man.count)
+        if (!theirs.has(i))
+            order ~= cast(uint) i;
+    long refused = -1;   // the first piece the computer turned down
+    Exception readFailed;
+    size_t answered;
+    auto reader = runTask(() nothrow {
+        // however it ends (all answered, a refusal, a failure) the writer waiting at the
+        // `ahead` limit must wake and look
+        scope (exit)
+            answeredEvent.emit();
+        try
+            foreach (i; order)
+            {
+                if (!pieceAccepted(st))
+                {
+                    refused = i;
+                    return;
+                }
+                answered++;
+                pushedBytes = 0;
+                answeredEvent.emit();
+                lastPieceAck = MonoTime.currTime;   // the computer answered: the link is alive
+            }
+        catch (Exception e)
+            readFailed = e;
+    });
     immutable t0 = MonoTime.currTime;
     long bytesSent;
-    foreach (i; 0 .. man.count)
+    auto buf = new ubyte[pieceSize];
+    size_t sent;
+    try
+        foreach (i; order)
+        {
+            while (sent - answered >= ahead && refused < 0 && readFailed is null && reader.running)
+            {
+                auto ec = answeredEvent.emitCount;
+                if (sent - answered >= ahead && refused < 0 && readFailed is null && reader.running)
+                    answeredEvent.wait(ec);
+            }
+            if (refused >= 0 || readFailed !is null)
+                break;
+            immutable n = man.lengthOf(i);
+            fh.seek(cast(long) i * pieceSize);
+            fh.read(buf[0 .. n]);
+            if (kept.length && sha256Of(buf[0 .. n]) != man.pieces[i])
+                throw new Exception("file_changed: piece " ~ i.to!string ~ " of " ~ path.baseName
+                    ~ " no longer matches its manifest");
+            sendPiece(st, sha, i, buf[0 .. n]);
+            pushedBytes += n;
+            sent++;
+            bytesSent += n;
+        }
+    catch (Exception e)
     {
-        if (theirs.has(i))
-            continue;
-        if (inflight.length == window)
-            answerOldest();
-        auto buf = bufs[sentCount % window];
-        immutable n = man.lengthOf(i);
-        fh.seek(cast(long) i * pieceSize);
-        fh.read(buf[0 .. n]);
-        if (kept.length && sha256Of(buf[0 .. n]) != man.pieces[i])
-            throw new Exception("file_changed: piece " ~ i.to!string ~ " of " ~ path.baseName
-                ~ " no longer matches its manifest");
-        sendPiece(st, sha, i, buf[0 .. n]);
-        inflight ~= i;
-        sentCount++;
-        bytesSent += n;
+        st.reset();   // the answers will not come now
+        reader.interrupt();   // a local reset does not wake a pending read on every transport (QUIC)
+        reader.join();
+        throw e;
     }
-    while (inflight.length)
-        answerOldest();
+    reader.join();
+    if (readFailed !is null)
+        throw readFailed;
+    if (refused >= 0)
+        throw new Exception("computer refused piece " ~ refused.to!string);
     if (bytesSent > 0)
     {
         immutable ms = (MonoTime.currTime - t0).total!"msecs";

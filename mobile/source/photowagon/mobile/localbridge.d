@@ -68,7 +68,18 @@ final class LocalBridge : Bridge
     private long sent, sendTotal, sendFailed, skipped, declined;
     private long lastRunFailed;   // failures of the last finished run, for the service's summary
     private int manualUploads;    // single-photo Sends in flight (busy, for the notification)
-    private bool sending;
+    private bool sending;              // the legacy (base64) send of one photo is under way
+    // Pushes in flight on the raw-bytes pipe, by photo id → the content (hash) being sent and
+    // the attempt's number (a late answer to an attempt that timed out or was dropped with the
+    // link finds a different number and is ignored). Several at once: one photo at a time
+    // idled the link through every photo's fixed costs (stream + manifest round trips, the
+    // computer landing the file) — measured ~160 ms per photo against ~180 ms of transfer on
+    // loopback, "less than half the speed" on the phone's Wi-Fi.
+    private struct Upload { string hash; long attempt; }
+    private Upload[long] uploads;
+    private long uploadAttempts;
+    private enum sendWindow = 3;
+    private bool busySending() const { return sending || uploads.length > 0; }
     private bool negotiating;         // a library.offer round is in flight
     private QTimer prepPoll;           // watches the preparation thread
     private shared(Prepared)* inflight;
@@ -115,6 +126,7 @@ final class LocalBridge : Bridge
 
     // ---- merged paging state --------------------------------------------------------
     private JSONValue pageParams;      // the filter of the current listing (no offset/limit)
+    private bool refreshing;           // this listing refreshes one already on screen (library.changed)
     private PhoneFilter localFilter;
     private bool remoteOnly;           // album / person / favorites: the phone has no such thing
     private long localOff, remoteOff;
@@ -238,7 +250,7 @@ private bool slowComputer;
         // Background never hurts foreground: while a photo is being pushed to the computer,
         // the indexer's decode slice yields so it can't starve the socket (the video-push
         // drops) or jank the UI. It resumes the instant the push ends.
-        index.shouldYield = () => sending || negotiating;
+        index.shouldYield = () => busySending || negotiating;
         index.onProgress = (long done, long total) {
             emit("index.progress", JSONValue([
                 "rootId": JSONValue(0), "scanned": JSONValue(done), "imported": JSONValue(done),
@@ -283,6 +295,7 @@ private bool slowComputer;
                 syncDeadline.stop();
                 syncRequestSeq++;
                 sending = false;
+                uploads = null;   // their answers, if any ever come, belong to the dead link
                 negotiating = false;
                 publishSync();
             }
@@ -341,6 +354,8 @@ private bool slowComputer;
     {
         facesApiMissing = false;   // another computer: ask it afresh
         facesRetryAt = null;
+        originals = null;          // its photo ids name other photos
+        endpointGen++;
         computer.setEndpoint(host, port);
         emitLink(computer.connected);   // paired now (or not): the UI shows it at once
     }
@@ -481,6 +496,7 @@ private bool slowComputer;
             case "photo.get":       get(num(params, "id"), cb); return;
             case "photo.upload":    upload(num(params, "id"), cb); return;
             case "photo.download":  download(num(params, "id"), cb); return;
+            case "photo.region":    region(params, cb); return;
             case "photo.share":     share(num(params, "id"), cb); return;
             case "core.state":      cb(coreState(), JSONValue(null)); return;
             case "album.list":      albums(cb); return;
@@ -781,6 +797,7 @@ private bool slowComputer;
         if (kindOf(p).length)
             pageParams["kind"] = kindOf(p);
         localFilter = filterOf(p);
+        refreshing = flag(p, "refresh");
         remoteOnly = num(p, "albumId") || num(p, "personId") || flag(p, "favorites");
         localOff = remoteOff = 0;
         remoteTotal = -1;
@@ -860,7 +877,10 @@ private bool slowComputer;
             // at once (2.5 s at most) and, when the computer's page turns up late, the listing
             // is refreshed — the grid reconciles it in place. Later pages keep the long wait
             // (the user is scrolling into them; skipping the computer there loses them).
-            immutable firstPage = remoteOff == 0 && served.length == 0;
+            // (a refresh of the listing on screen waits for the computer: answering with the
+            // phone's photos first would shrink the grid under the user and lose the scroll)
+            immutable firstPage = remoteOff == 0 && served.length == 0 && !refreshing;
+            immutable refreshFirst = remoteOff == 0 && served.length == 0 && refreshing;
             immutable waitMs = firstPage && !slowComputer ? firstPageWaitMs : pageDeadlineMs;
             immutable asked = MonoTime.currTime;
             void merge()
@@ -878,6 +898,15 @@ private bool slowComputer;
                     return;
                 settled = true;
                 timedOut = true;
+                if (refreshFirst)
+                {
+                    // a refresh of the listing on screen: never answer with the phone's photos
+                    // alone (the grid would shrink under the user) — fail it quietly, the UI keeps
+                    // what it shows, and the late reply below triggers another refresh
+                    plog("paging: the computer did not answer a refresh in ", waitMs, " ms — keeping the listing on screen");
+                    finishOp(op, JSONValue(null), error("refresh_timeout", "the computer did not answer in time"));
+                    return;
+                }
                 plog("paging: the computer did not answer library.page in ", waitMs, " ms — listing without it");
                 abandonRemote();
                 try
@@ -893,8 +922,11 @@ private bool slowComputer;
                     // 20 s, so a computer slower than even that cannot keep the listing reloading
                     if (timedOut && firstPage && e.type == JSONType.null_)
                         slowComputer = true;
-                    if (timedOut && firstPage && e.type == JSONType.null_ && r.type == JSONType.object
-                        && "items" in r && r["items"].array.length && MonoTime.currTime - lastLateRefresh > 20.seconds)
+                    // (a refresh's late answer counts even when EMPTY: the listing on screen may be
+                    // holding photos the computer no longer has)
+                    if (timedOut && (firstPage || refreshFirst) && e.type == JSONType.null_ && r.type == JSONType.object
+                        && "items" in r && (refreshFirst || r["items"].array.length)
+                        && MonoTime.currTime - lastLateRefresh > 20.seconds)
                     {
                         lastLateRefresh = MonoTime.currTime;
                         plog("paging: the computer's first page came late — refreshing the listing");
@@ -1834,6 +1866,63 @@ private bool slowComputer;
         return toHexString!(LetterCase.lower)(h.finish()).idup;
     }
 
+    // ---- the zoomed viewer: the visible part of a big photo at full resolution ----------
+    // (the phone's own original, or the computer's fetched raw first — never base64)
+    private string[long] originals;          // computer photo id → its original fetched this run
+    private ResultCb[][string] downloadWaiters; // "<endpoint gen>:<photo id>" → who waits for its pull
+    private long endpointGen;                // bumped by setEndpoint: a pull of the old computer is not the new one's
+    private int regionSeq;
+    private string[] regionFiles;
+    private void region(JSONValue p, ResultCb cb)
+    {
+        import photowagon.mobile.region : Frac, decodeRegion;
+        import qt.quick.qimagereader : QImageReader;
+        import qt.quick.qimage : QImage;
+        import cxxrt : make;
+
+        double f(string k, double def)
+        {
+            if (p.type != JSONType.object || k !in p)
+                return def;
+            return p[k].type == JSONType.float_ ? p[k].floating : p[k].type == JSONType.integer ? cast(double) p[k].integer : def;
+        }
+        immutable id = num(p, "id");
+        auto r = Frac(f("x", 0), f("y", 0), f("w", 1), f("h", 1));
+        immutable maxEdge = cast(int) num(p, "maxEdge", 0);
+        download(id, (d, e) {
+            if (e.type != JSONType.null_)
+                return cb(JSONValue(null), e);
+            try
+            {
+                import std.file : tempDir;
+
+                immutable dir = previewDir.length ? previewDir : tempDir;
+                immutable dst = buildPath(dir, "region-" ~ (++regionSeq).to!string ~ ".jpg");
+                auto reader = make!QImageReader();
+                auto img = new QImage();
+                scope (exit) { destroy(img); destroy(reader); }
+                immutable t0 = MonoTime.currTime;
+                decodeRegion(reader, img, d["path"].str, r, maxEdge);
+                if (!img.save(dst, "JPEG".ptr, 92))
+                    throw new Exception("cannot write the region");
+                plog("region: photo ", id, " ", img.width(), "x", img.height(), " in ",
+                    (MonoTime.currTime - t0).total!"msecs", " ms");
+                // the last few only: the viewer shows one at a time
+                regionFiles ~= dst;
+                while (regionFiles.length > 3)
+                {
+                    try { import std.file : remove; remove(regionFiles[0]); } catch (Exception) {}
+                    regionFiles = regionFiles[1 .. $];
+                }
+                JSONValue out_ = ["id": JSONValue(id), "x": JSONValue(r.x), "y": JSONValue(r.y),
+                    "w": JSONValue(r.w), "h": JSONValue(r.h), "fileUrl": JSONValue(fileUrl(dst))];
+                cb(out_, JSONValue(null));
+            }
+            catch (Exception ex)
+                cb(JSONValue(null), error("io", ex.msg));
+        });
+    }
+
     private void download(long id, ResultCb cb)
     {
         import std.path : extension;
@@ -1849,12 +1938,45 @@ private bool slowComputer;
             cb(JSONValue(["path": JSONValue(ph.path), "fileUrl": JSONValue(fileUrl(ph.path)), "size": JSONValue(0L)]), JSONValue(null));
             return;
         }
+        immutable rid = id - remoteBase;
+        // fetched (and verified) already in this run: the file, at once — a zoomed viewer asks
+        // on every pan, and a second pull of the same file would race the first one's finish
+        if (auto have = rid in originals)
+        {
+            import std.file : exists, getSize;
+
+            if ((*have).exists)
+            {
+                cb(JSONValue(["path": JSONValue(*have), "fileUrl": JSONValue(fileUrl(*have)),
+                    "size": JSONValue(cast(long) getSize(*have))]), JSONValue(null));
+                return;
+            }
+            originals.remove(rid);
+        }
+        // one pull per photo (of this computer): later askers wait for the one running
+        immutable gen = endpointGen;
+        immutable wkey = gen.to!string ~ ":" ~ rid.to!string;
+        if (auto w = wkey in downloadWaiters)
+        {
+            *w ~= cb;
+            return;
+        }
         if (!computer.connected || !computer.canPull())
         {
             cb(JSONValue(null), error("no_computer", "the computer is not reachable for a download"));
             return;
         }
-        immutable rid = id - remoteBase;
+        downloadWaiters[wkey] = [cb];
+        auto askers = cb;
+        cb = (JSONValue d, JSONValue de) {
+            auto all = downloadWaiters.get(wkey, [askers]);
+            downloadWaiters.remove(wkey);
+            // remembered only for the computer it came from
+            if (gen == endpointGen && de.type == JSONType.null_ && d.type == JSONType.object && "path" in d)
+                originals[rid] = d["path"].str;
+            foreach (c; all)
+                c(d, de);
+        };
         JSONValue params = ["id": JSONValue(rid)];
         // the extension comes from the computer's record, so the file opens as what it is
         computer.request("photo.get", params, (r, e) {
@@ -1866,8 +1988,23 @@ private bool slowComputer;
             string ext = ".jpg";
             if (r.type == JSONType.object && "path" in r && r["path"].type == JSONType.string && r["path"].str.extension.length)
                 ext = r["path"].str.extension;
-            immutable dest = buildPath(remoteFileDir, rid.to!string ~ ext);
             immutable sha = r.type == JSONType.object && "hash" in r && r["hash"].type == JSONType.string ? r["hash"].str : "";
+            // named by content as well as id: a kept file is reused only for the very same
+            // photo — another computer (or a changed photo) with the same id names a new file
+            immutable dest = buildPath(remoteFileDir, rid.to!string ~ (sha.length >= 16 ? "-" ~ sha[0 .. 16] : "") ~ ext);
+            {
+                // kept from an earlier run: the same size as the computer's is the same file (it
+                // was verified piece by piece and by its whole hash when it landed)
+                import std.file : exists, getSize;
+
+                if (dest.exists && r.type == JSONType.object && "size" in r && r["size"].type == JSONType.integer
+                    && cast(long) getSize(dest) == r["size"].integer)
+                {
+                    cb(JSONValue(["path": JSONValue(dest), "fileUrl": JSONValue(fileUrl(dest)), "size": r["size"]]),
+                        JSONValue(null));
+                    return;
+                }
+            }
             import photowagon.mobile.p2pbridge : P2pBridge;
             auto p2p = cast(P2pBridge) computer;
             void done(JSONValue d, JSONValue de)
@@ -2118,7 +2255,7 @@ private bool slowComputer;
         sendQueue.length = 0;
             offeredHash = null;
         offeredHash = null;
-        if (!sending)
+        if (!busySending)
         {
             sent = sendTotal = sendFailed = skipped = declined = 0;
             index.saveNow();
@@ -2143,14 +2280,14 @@ private bool slowComputer;
 
     JSONValue syncStatus()
     {
-        immutable pending = index.unsentCount() + (sending ? 0 : 0);
+        immutable pending = index.unsentCount();
         return JSONValue([
             "enabled": JSONValue(autoSync),
             "connected": JSONValue(computer.connected),
-            "active": JSONValue(sending || sendQueue.length > 0),
+            "active": JSONValue(busySending || sendQueue.length > 0),
             // sending work under way (hashing a batch, asking the computer, or pushing): the
             // only time the background service shows a notification
-            "busy": JSONValue(sending || negotiating || sendQueue.length > 0 || manualUploads > 0),
+            "busy": JSONValue(busySending || negotiating || sendQueue.length > 0 || manualUploads > 0),
             // failures of the last finished run (the run's counters are reset when it ends)
             "runFailed": JSONValue(lastRunFailed),
             "pending": JSONValue(pending),
@@ -2203,7 +2340,7 @@ private bool slowComputer;
             return;
         }
         // a step is already in flight; it will carry on to the next batch by itself
-        if (sending || negotiating)
+        if (busySending || negotiating)
             return;
         if (sendTotal == 0 && sendQueue.length == 0)
         {
@@ -2222,7 +2359,7 @@ private bool slowComputer;
     /// off-thread first (onHashed continues here).
     private void negotiateNextBatch()
     {
-        if (sending || negotiating || !computer.connected)
+        if (busySending || negotiating || !computer.connected)
             return;
         if (held())
         {
@@ -2442,8 +2579,10 @@ private bool slowComputer;
 
     private void pumpSend()
     {
-        if (sending)
+        if (sending || uploads.length >= sendWindow)
             return;
+        if (sendQueue.length == 0 && uploads.length)
+            return;   // the last ones are still going: the run ends when they answer
         if (sendQueue.length == 0)
         {
             // the wanted photos of this batch are done; if more remain, offer the next batch
@@ -2471,6 +2610,7 @@ private bool slowComputer;
         if (!computer.connected)
         {
             sendQueue.length = 0;
+            uploads = null;
             offeredHash = null;   // resumes on the next connection (startSync)
             publishSync();
             return;
@@ -2480,6 +2620,8 @@ private bool slowComputer;
             holdRun();
             return;
         }
+        if (uploads.length && !computer.canPush())
+            return;   // the raw pipe went: the old one-at-a-time send waits for those in flight
         immutable id = sendQueue[0];
         sendQueue = sendQueue[1 .. $];
         auto ph = index.get(id);
@@ -2498,10 +2640,8 @@ private bool slowComputer;
             pumpSend();
             return;
         }
-        sending = true;
-        plog("sync: photo ", id, " (", sent + sendFailed + 1, " of ", sendTotal, ") preparing");
+        plog("sync: photo ", id, " (", sent + sendFailed + uploads.length + 1, " of ", sendTotal, ") preparing");
         emit("upload.progress", JSONValue(["done": JSONValue(sent + sendFailed), "total": JSONValue(sendTotal), "id": JSONValue(id)]));
-        publishSync();
         // Raw-bytes pipe (libp2p): stream the file on its own stream, no base64 and no giant
         // JSON line; the metadata rides the normal request with a ticket the desktop pairs up.
         if (computer.canPush())
@@ -2529,13 +2669,33 @@ private bool slowComputer;
                 facesInPayload[id] = true;
             }
             plog("sync: photo ", id, " pushing ", ph.path.baseName);
-            inflightId = id;
-            inflightHash = phash;
-            syncRequest(uploadTimeoutMs, (cb) { computer.uploadFile(ticket, ppath, meta, cb); }, (r2, e2) {
+            immutable attempt = ++uploadAttempts;
+            uploads[id] = Upload(phash, attempt);
+            publishSync();
+            bool current() { auto u = id in uploads; return u !is null && u.attempt == attempt; }
+            // its own deadline, sized to the file: several pushes share the link, and on a
+            // slow uplink (4G at ~100 KiB/s per push) a fixed 5 min cut a 100 MB video that
+            // was moving fine — and the reconnect below took the whole link down with it. A
+            // link that is really dead is the watchdog's (15 s of silence), not this.
+            immutable long sizeHint = ph.digestSize > 0 ? ph.digestSize : 0;
+            immutable long deadlineMs = uploadTimeoutMs + sizeHint / 16;   // + 1 s per 16 KiB
+            later(deadlineMs > int.max ? int.max : cast(int) deadlineMs, () {
+                if (!current())
+                    return;
+                plog("sync: no answer from the computer in time for photo ", id, " — reconnecting");
+                finish(id, false, "timeout", phash, false);
+                computer.reconnect();
+            });
+            computer.uploadFile(ticket, ppath, meta, (r2, e2) {
+                if (!current())
+                    return;   // timed out, or went with a dropped link
                 finish(id, e2.type == JSONType.null_, e2.type == JSONType.null_ ? null : e2.toString(), phash, imported(r2));
             });
+            pumpSend();   // the next one goes beside it (up to sendWindow)
             return;
         }
+        sending = true;
+        publishSync();
         // read + hash + base64 on a thread: 15 MB files would stall the UI here
         auto pr = new shared(Prepared);
         pr.id = id;
@@ -2707,7 +2867,7 @@ private bool slowComputer;
     {
         // held (paused, or data saver on a metered network): faces wait with the photos —
         // resume / Wi-Fi calls startSync, whose run ends in pumpFaces again
-        if (facesInFlight || facesApiMissing || sending || negotiating || !computer.connected || held())
+        if (facesInFlight || facesApiMissing || busySending || negotiating || !computer.connected || held())
             return;
         immutable now = MonoTime.currTime;
         long id = -1;
@@ -2790,7 +2950,10 @@ private bool slowComputer;
 
     private void finish(long id, bool ok, string error, string hash, bool importedHere)
     {
-        sending = false;
+        if (id in uploads)
+            uploads.remove(id);
+        else
+            sending = false;
         plog("sync: photo ", id, ok ? " sent" : " failed");
         immutable facesWent = (id in facesInPayload) !is null;
         facesInPayload.remove(id);

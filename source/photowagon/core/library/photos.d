@@ -353,14 +353,17 @@ final class PhotoRepo
 	/// date, size, kind, heart, video length, stack, thumbnail, path, the classifiers' words
 	/// shown on hover). The grid lays out every photo from this at once and loads only the
 	/// thumbnails on screen (9080 photos: ~40 ms, ~1.7 MB). Same order as page().
-	JSONValue[] skeleton(Filter f)
+	/// `hashes`: also the start of each content hash and the file size (the phone leaves out
+	/// the computer's copies of its own photos by them).
+	JSONValue[] skeleton(Filter f, bool hashes = false)
 	{
 		auto w = whereClause(f);
 		auto s = db.prepare(`SELECT p.id, p.taken_ts, p.width, p.height, p.kind, p.favorite, p.duration_ms,
 			p.stack_id, p.thumb_hash, p.path, p.origin_peer,
 			(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'scene' AND t.tag <> ''),
 			(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'holiday' AND t.tag <> ''),
-			(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'weather' AND t.tag <> '')
+			(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'weather' AND t.tag <> ''),
+			p.hash, p.size
 			FROM photos p` ~ w.joins ~ w.where
 				~ (f.albumId ? " ORDER BY ap.position ASC" : " ORDER BY p.taken_ts DESC, p.id DESC"));
 		w.bind(s);
@@ -383,6 +386,12 @@ final class PhotoRepo
 			j["remote"] = !s.isNull(10);
 			foreach (k, name; ["scene", "holiday", "weather"])
 				j[name] = s.isNull(cast(int)(11 + k)) ? JSONValue(null) : JSONValue(s.getString(cast(int)(11 + k)));
+			if (hashes)
+			{
+				immutable h = s.getString(14);
+				j["hash16"] = h.length > 16 ? h[0 .. 16] : h;
+				j["size"] = s.getLong(15);
+			}
 			out_ ~= j;
 		}
 		return out_;

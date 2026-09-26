@@ -102,7 +102,8 @@ import photowagon.core.jobs.scheduler : jobs;
 	// the same filter as library.page, the whole listing at once, lean (PhotoRepo.skeleton):
 	// → {total, items}
 	r.add("library.skeleton", (JSONValue p) {
-		auto items = photos.skeleton(filterOf(p));
+		immutable hashes = p.type == JSONType.object && "hashes" in p && p["hashes"].type == JSONType.true_;
+		auto items = photos.skeleton(filterOf(p), hashes);
 		return JSONValue(["total": JSONValue(items.length), "items": JSONValue(items)]);
 	});
 

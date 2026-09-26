@@ -213,7 +213,12 @@ Item {
             // soft; the sharp decode on top, requested once the scroll is not a fast fling
             readonly property string url: cell.modelData.thumbUrl || ""
             property bool sharp: false
-            Component.onCompleted: sharp = !grid.fast
+            // a computer photo whose thumbnail the phone has not fetched yet: ask for it now it
+            // is on screen (the listing holds every photo; thumbnails come only for these)
+            readonly property int pid: cell.modelData.pid || 0
+            function askThumb() { if (!url && cell.modelData.remote === true && pid) library.wantThumb(pid) }
+            Component.onCompleted: { sharp = !grid.fast; askThumb() }
+            onPidChanged: askThumb()
             onUrlChanged: sharp = !grid.fast
             Connections { target: grid; function onFastChanged() { if (!grid.fast) cell.sharp = true } }
             Image {

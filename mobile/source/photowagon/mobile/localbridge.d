@@ -157,6 +157,7 @@ final class LocalBridge : Bridge
         ResultCb cb;
         bool neighbours;   // photo.neighbours: may page further until it finds the photo
         bool search;       // search.combined: a fixed result that becomes the listing
+        bool skeleton;     // library.skeleton: the whole listing at once
     }
     private QueuedPage[] pageQueue;
     private PageOp curOp;
@@ -361,6 +362,11 @@ private bool slowComputer;
         facesApiMissing = false;   // another computer: ask it afresh
         facesRetryAt = null;
         originals = null;          // its photo ids name other photos
+        remoteSkel = null;         // (so do its listings)
+        remoteSkelSig = null;
+        remoteSkelOrder = null;
+        computerNoSkeleton = false;
+        thumbQueue = null;
         endpointGen++;
         computer.setEndpoint(host, port);
         emitLink(computer.connected);   // paired now (or not): the UI shows it at once
@@ -368,6 +374,15 @@ private bool slowComputer;
 
     private void emitLink(bool up)
     {
+        // a batch in flight on a link that went down may never report back: start over
+        if (!up)
+        {
+            thumbGen++;
+            thumbBatches = 0;
+            thumbInFlight = null;
+        }
+        else
+            pumpThumbs();
         emit("computer.link", JSONValue(["connected": JSONValue(up), "endpoint": JSONValue(computer.endpoint),
             "paired": JSONValue(computer.paired)]));
     }
@@ -493,6 +508,13 @@ private bool slowComputer;
             switch (method)
             {
             case "library.page":    enqueuePage(params, cb, false); return;
+            // the whole listing at once (the grid lays it all out, thumbnails load on screen)
+            case "library.skeleton":
+                supersedePaging("superseded", "a new listing started", [QueuedPage(params, cb, false, false, true)]);
+                pumpPages();
+                return;
+            // the grid's visible tiles whose computer thumbnail is not here yet
+            case "library.wantThumbs": wantThumbs(params); cb(JSONValue.emptyObject, JSONValue(null)); return;
             case "photo.neighbours": enqueuePage(params, cb, true); return;
             case "search.combined": supersedePaging("superseded", "a new listing started",
                     [QueuedPage(params, cb, false, true)]);
@@ -685,7 +707,9 @@ private bool slowComputer;
             curOp = op;
             try
             {
-                if (q.search)
+                if (q.skeleton)
+                    skeletonOp(q.params, op);
+                else if (q.search)
                     search(q.params, op);
                 else if (q.neighbours)
                     neighbours(q.params, op);
@@ -739,6 +763,234 @@ private bool slowComputer;
                 finishOp(op, JSONValue(["total": JSONValue(total), "offset": JSONValue(end), "items": JSONValue(out_)]), JSONValue(null));
             });
         });
+    }
+
+    // ---- the whole listing at once --------------------------------------------------------
+
+    // the computer's lean listing per filter, the last one it gave: answered from at once,
+    // brought up to date in the background (a change then refreshes the grid)
+    private JSONValue[][string] remoteSkel;
+    private string[string] remoteSkelSig;   // what the computer said, as it said it (a change test)
+    private string[] remoteSkelOrder;       // oldest first: at most skelCacheMax listings kept
+    private enum skelCacheMax = 4;
+    private bool computerNoSkeleton;        // an older computer: the UI pages instead
+
+    /// library.skeleton: every photo of the listing, the phone's own and the computer's
+    /// (its copies of the phone's photos left out), newest first — lean items for the grid
+    /// to lay out whole. The computer's part comes from its last answer when there is one
+    /// (instant), else the phone waits for it up to firstPageWaitMs and then shows its own
+    /// photos; the computer's late answer is kept and refreshes the listing (from it, then).
+    private void skeletonOp(JSONValue p, PageOp op)
+    {
+        if (computerNoSkeleton && computer.connected)
+        {
+            finishOp(op, JSONValue(null), error("unknown_method", "the computer has no library.skeleton"));
+            return;
+        }
+        resetPaging(p);
+        immutable key = pageParams.toString();
+        immutable gen = pageGen;
+        JSONValue[] local;
+        if (!remoteOnly)
+            foreach (ref ph; index.page(localFilter, 0, long.max))
+                local ~= ph.toJson();
+        bool answered;
+        void answer(JSONValue[] remote)
+        {
+            answered = true;
+            auto merged = mergeWhole(local, remote);
+            served = merged;
+            localOff = cast(long) local.length;
+            remoteDone = true;
+            finishOp(op, JSONValue(["total": JSONValue(merged.length), "items": JSONValue(merged)]), JSONValue(null));
+        }
+        if (!computer.connected)
+        {
+            answer(null);   // the phone's photos (as the paged listing does offline)
+            return;
+        }
+        if (auto cached = key in remoteSkel)
+            answer(*cached);
+        else
+            armPageDeadline(() {
+                if (answered || op.done || curOp !is op)
+                    return;
+                plog("skeleton: the computer did not answer in ", firstPageWaitMs, " ms — the phone's photos now");
+                answer(null);
+            }, firstPageWaitMs);
+        JSONValue params = pageParams;
+        params["hashes"] = true;
+        immutable asked = MonoTime.currTime;
+        immutable eg = endpointGen;
+        computer.request("library.skeleton", params, (r, e) {
+            if (eg != endpointGen)
+                return;   // another computer since: this answer is about the old one's photos
+            if (e.type != JSONType.null_)
+            {
+                immutable unknown = e.type == JSONType.object && "code" in e && e["code"].type == JSONType.string
+                    && e["code"].str == "unknown_method";
+                if (unknown && !computerNoSkeleton)
+                {
+                    computerNoSkeleton = true;
+                    if (answered)   // it went out with the phone's photos only: page it instead
+                    {
+                        emit("library.changed", JSONValue.emptyObject);
+                        return;
+                    }
+                }
+                if (answered || op.done || curOp !is op)
+                    return;
+                pageDeadline.stop();
+                onPageDeadline = null;
+                // a computer from before library.skeleton: the UI pages instead
+                if (e.type == JSONType.object && "code" in e && e["code"].type == JSONType.string && e["code"].str == "unknown_method")
+                {
+                    answered = true;
+                    finishOp(op, JSONValue(null), error("unknown_method", "the computer has no library.skeleton"));
+                    return;
+                }
+                answer(null);
+                return;
+            }
+            immutable sig = r["items"].toString();
+            immutable changed = (key in remoteSkelSig) is null || remoteSkelSig[key] != sig;
+            JSONValue[] remote;
+            foreach (it; r["items"].array)
+                remote ~= toPhoneItem(it);
+            if ((key in remoteSkel) is null)
+            {
+                remoteSkelOrder ~= key;
+                if (remoteSkelOrder.length > skelCacheMax)
+                {
+                    remoteSkel.remove(remoteSkelOrder[0]);
+                    remoteSkelSig.remove(remoteSkelOrder[0]);
+                    remoteSkelOrder = remoteSkelOrder[1 .. $];
+                }
+            }
+            remoteSkel[key] = remote;
+            remoteSkelSig[key] = sig;
+            plog("skeleton: ", remote.length, " of the computer's in ", (MonoTime.currTime - asked).total!"msecs", " ms",
+                answered ? (changed ? " (changed since: refreshing)" : " (as cached)") : "");
+            if (!answered && !op.done && curOp is op)
+            {
+                pageDeadline.stop();
+                onPageDeadline = null;
+                answer(remote);
+                return;
+            }
+            // the listing went out without it (late) or from an older copy of it: refresh, the
+            // next listing takes it from the cache at once
+            if (changed && gen == pageGen)
+                emit("library.changed", JSONValue.emptyObject);
+        });
+    }
+
+    /// The phone's photos and the computer's, newest first, the computer's copies of the
+    /// phone's own photos left out (by content hash, or name and size); thumbnails the phone
+    /// already has filled in.
+    private JSONValue[] mergeWhole(JSONValue[] local, JSONValue[] remote)
+    {
+        bool[string] localH16;
+        foreach (h, _; localHashes)
+            localH16[h.length > 16 ? h[0 .. 16] : h] = true;
+        JSONValue[] rem;
+        rem.reserve(remote.length);
+        foreach (it; remote)
+        {
+            if (!remoteOnly)
+            {
+                immutable h16 = "hash16" in it && it["hash16"].type == JSONType.string ? it["hash16"].str : "";
+                immutable key = ("path" in it && it["path"].type == JSONType.string ? it["path"].str.baseName : "")
+                    ~ "|" ~ ("size" in it && it["size"].type == JSONType.integer ? it["size"].integer.to!string : "");
+                if ((h16.length && h16 in localH16) || key in localKeys)
+                    continue;   // the local copy stands for it
+            }
+            it = JSONValue(it.object.dup);   // (the cached copy stays as the computer gave it)
+            immutable rid = it["id"].integer - remoteBase;
+            if (auto t = rid in thumbCache)
+                it["thumbUrl"] = *t;
+            else if (remoteThumbDir.length)
+            {
+                immutable fp = buildPath(remoteThumbDir, rid.to!string ~ ".jpg");
+                if (fp.exists)
+                {
+                    thumbCache[rid] = fileUrl(fp);
+                    it["thumbUrl"] = thumbCache[rid];
+                }
+            }
+            rem ~= it;
+        }
+        JSONValue[] out_;
+        out_.reserve(local.length + rem.length);
+        size_t a, b;
+        while (a < local.length || b < rem.length)
+        {
+            immutable takeLocal = b >= rem.length
+                || (a < local.length && local[a]["takenTs"].integer >= rem[b]["takenTs"].integer);
+            out_ ~= takeLocal ? local[a++] : rem[b++];
+        }
+        return out_;
+    }
+
+    // ---- the computer's thumbnails, for the tiles on screen ------------------------------
+
+    private bool[long] thumbInFlight;   // asked of the computer, not landed yet
+    private long[] thumbQueue;          // waiting, the most recently wanted first
+    private int thumbBatches;           // batches on the wire (at most thumbBatchMax)
+    private enum thumbBatchMax = 3;
+    private long thumbGen;              // bumped when the link drops: older batches no longer count
+    private int[long] thumbTries;       // failed fetches per photo (given up after thumbTriesMax)
+    private enum thumbTriesMax = 2;
+
+    /// {ids: [the phone's ids of computer photos]}: the grid's visible tiles still without a
+    /// thumbnail. The most recent ones first (a fast scroll asks for many; the last are the
+    /// ones on screen), in batches; each lands on disk and is announced in thumbs.ready.
+    private void wantThumbs(JSONValue p)
+    {
+        if (!computer.connected || p.type != JSONType.object || !("ids" in p) || p["ids"].type != JSONType.array)
+            return;
+        // the newly wanted go to the front (the last asked are the ones on screen now); none is
+        // dropped — a tile that stays on screen does not ask twice
+        long[] front;
+        bool[long] seen;
+        foreach_reverse (v; p["ids"].array)
+        {
+            if (v.type != JSONType.integer || v.integer < remoteBase)
+                continue;
+            immutable rid = v.integer - remoteBase;
+            if (rid in thumbCache || rid in thumbInFlight || rid in seen)
+                continue;
+            seen[rid] = true;
+            front ~= rid;
+        }
+        long[] rest;
+        foreach (rid; thumbQueue)
+            if (rid !in seen)
+                rest ~= rid;
+        thumbQueue = front ~ rest;
+        pumpThumbs();
+    }
+
+    private void pumpThumbs()
+    {
+        enum batch = 24;
+        while (thumbBatches < thumbBatchMax && thumbQueue.length && computer.connected)
+        {
+            JSONValue[] want;
+            while (want.length < batch && thumbQueue.length)
+            {
+                immutable rid = thumbQueue[0];
+                thumbQueue = thumbQueue[1 .. $];
+                if (rid in thumbCache || rid in thumbInFlight)
+                    continue;
+                thumbInFlight[rid] = true;
+                want ~= JSONValue(rid);
+            }
+            if (!want.length)
+                break;
+            thumbBatches++;
+            fetchThumbs(want, true, thumbGen);
+        }
     }
 
     /// The photos before and after `id` in the current listing. Pages further (without
@@ -1356,7 +1608,8 @@ private bool slowComputer;
             fetchThumbs(want[at .. (at + batch < want.length ? at + batch : want.length)]);
     }
 
-    private void fetchThumbs(JSONValue[] want)
+    /// `queued`: a batch of pumpThumbs (the next ones go out when it lands).
+    private void fetchThumbs(JSONValue[] want, bool queued = false, long tgen = 0)
     {
         immutable gen = pageGen;   // the cache outlives a listing; patching `served` may not
         long[] ids;
@@ -1389,14 +1642,41 @@ private bool slowComputer;
             plog("thumbs: ", received, "/", ids.length, " via pieces, ", rawBytes, " bytes raw (no base64)");
             if (Thread.getThis() !is owner)
                 plog("BUG: thumbnail batch completed off the Qt thread");
+            // only the queued batch that set the marks clears them (a legacy page fetch sets none;
+            // a batch from before the link dropped had its marks cleared already, and a newer
+            // batch's may stand in their place)
+            if (queued && tgen == thumbGen)
+                foreach (rid; ids)
+                    thumbInFlight.remove(rid);
+            if (queued && tgen == thumbGen)
+            {
+                thumbBatches--;
+                // the ones that did not come: again later (a few times — some photos have none)
+                foreach (rid; ids)
+                    if (rid !in thumbCache)
+                    {
+                        immutable tries = thumbTries.get(rid, 0) + 1;
+                        thumbTries[rid] = tries;
+                        if (tries <= thumbTriesMax)
+                            thumbQueue ~= rid;
+                    }
+                pumpThumbs();
+            }
             // patch what was already served, so a reload / the viewer see the thumbs
             if (gen == pageGen)
                 foreach (ref it; served)
                     if (it["id"].integer >= remoteBase && it["thumbUrl"].type == JSONType.null_)
                         if (auto t = (it["id"].integer - remoteBase) in thumbCache)
                             it["thumbUrl"] = *t;
+            // which ones landed: the grid patches those tiles (no reload of the listing)
             if (got)
-                emit("library.changed", JSONValue.emptyObject);
+            {
+                JSONValue ready = JSONValue.emptyObject;
+                foreach (rid; ids)
+                    if (auto t = rid in thumbCache)
+                        ready[(rid + remoteBase).to!string] = *t;
+                emit("thumbs.ready", JSONValue(["urls": ready]));
+            }
         });
     }
 

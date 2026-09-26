@@ -2121,6 +2121,27 @@ version (WithUi)
             loadDates();
             reload(0, pageLimit);
             break;
+        case "thumbs.ready":
+            // the phone core fetched the computer's thumbnails the grid asked for (wantThumb):
+            // patch those photos' tiles — no reload of the listing
+            if (data.type == JSONType.object && "urls" in data && data["urls"].type == JSONType.object)
+            {
+                auto urls = data["urls"].object;
+                bool any;
+                foreach (ref it; items)
+                    if (auto u = it["id"].integer.to!string in urls)
+                    {
+                        it["thumbUrl"] = *u;
+                        any = true;
+                    }
+                if (any && gridRows !is null)
+                    gridRows.update(items);
+                if (any)
+                    refreshStrip();
+                if (!skeletonOk)
+                    refreshTimeline();   // the paged listing reloads for them, as it did
+            }
+            break;
         case "library.changed":
             // While a scan runs this fires for every batch of files; refreshing the whole
             // timeline (page string + date tree + stats) each time re-published a huge page and
@@ -2646,6 +2667,38 @@ version (WithUi)
             out_ ~= j;
         }
         return JSONValue(out_);
+    }
+
+    // ---- the computer's thumbnails the phone grid shows, asked for as tiles come on screen
+    private long[] thumbWanted;
+    private bool[long] thumbWantedSet;
+    private QTimer thumbWantTimer;
+
+    /// A tile on screen has no thumbnail yet (a computer photo on the phone): ask the phone
+    /// core for it — gathered for a moment; it fetches the most recently asked first.
+    @Slot void wantThumb(int pid)
+    {
+        if (pid in thumbWantedSet)
+            return;
+        thumbWantedSet[pid] = true;
+        thumbWanted ~= pid;
+        if (thumbWantTimer is null)
+        {
+            thumbWantTimer = new QTimer(cast(cppq.QObject) null);
+            thumbWantTimer.setSingleShot(true);
+            thumbWantTimer.setInterval(60);
+            thumbWantTimer.connectTimeout(() {
+                // all of them, in the order asked (the phone core fetches the last asked first)
+                JSONValue[] arr;
+                foreach (id; thumbWanted)
+                    arr ~= JSONValue(id);
+                thumbWanted = null;
+                thumbWantedSet = null;
+                client.request("library.wantThumbs", JSONValue(["ids": JSONValue(arr)]), (r, e) {});
+            });
+        }
+        if (!thumbWantTimer.isActive())
+            thumbWantTimer.start();
     }
 
     Signal!() stripChanged;

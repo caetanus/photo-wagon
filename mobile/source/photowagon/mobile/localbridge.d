@@ -521,7 +521,7 @@ private bool slowComputer;
                     [QueuedPage(params, cb, false, true)]);
                 pumpPages();
                 return;
-            case "library.dates":   timed("library.dates", 30, { dates(cb); }); return;
+            case "library.dates":   timed("library.dates", 30, { dates(params, cb); }); return;
             case "photo.get":       get(num(params, "id"), cb); return;
             case "photo.upload":    upload(num(params, "id"), cb); return;
             case "photo.download":  download(num(params, "id"), cb); return;
@@ -806,7 +806,7 @@ private bool slowComputer;
             remoteDone = true;
             finishOp(op, JSONValue(["total": JSONValue(merged.length), "items": JSONValue(merged)]), JSONValue(null));
         }
-        if (!computer.connected)
+        if (!computer.connected || onlyUnsent())
         {
             answer(null);   // the phone's photos (as the paged listing does offline)
             return;
@@ -1072,7 +1072,7 @@ private bool slowComputer;
         remoteOnly = num(p, "albumId") || num(p, "personId") || flag(p, "favorites");
         localOff = remoteOff = 0;
         remoteTotal = -1;
-        remoteDone = !computer.connected;
+        remoteDone = !computer.connected || onlyUnsent();
         localBuf.length = 0;
         remoteBuf.length = 0;
         served = null;   // a fresh array: slices held by pending thumbnail fetches stay theirs
@@ -1091,6 +1091,14 @@ private bool slowComputer;
             if (ph.hash.length)
                 localHashes[ph.hash] = true;
         }
+    }
+
+    /// "Hide imported photos": the timeline is then what is left to send — the phone's
+    /// photos the computer does not have yet, none of the computer's own. (A collection that
+    /// only the computer has — an album, a person, favorites — still shows its photos.)
+    private bool onlyUnsent() const
+    {
+        return localFilter.hideSent && !remoteOnly;
     }
 
     /// Whether the listing can still grow: buffered items, phone photos not read yet, or a
@@ -1685,10 +1693,12 @@ private bool slowComputer;
         });
     }
 
-    private void dates(ResultCb cb)
+    private void dates(JSONValue p, ResultCb cb)
     {
-        auto local = index.dates();
-        if (!computer.connected)
+        // "Hide imported photos" on the timeline: what is left to send, the phone's own only
+        immutable onlyUnsent = flag(p, "hideSent") && !(num(p, "albumId") || num(p, "personId") || flag(p, "favorites"));
+        auto local = index.dates(onlyUnsent);
+        if (!computer.connected || onlyUnsent)
         {
             cb(local, JSONValue(null));
             return;

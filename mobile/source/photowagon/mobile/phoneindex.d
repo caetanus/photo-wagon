@@ -1183,7 +1183,7 @@ final class PhoneIndex
     }
 
     /// Same shape as the core's library.dates.
-    JSONValue dates() const
+    JSONValue dates(bool hideSent = false) const
     {
         JSONValue[] years;
         int curY = -1, curM = -1, curD = -1;
@@ -1191,6 +1191,8 @@ final class PhoneIndex
         {
             if (p.kind == "meme")
                 continue;   // the grid hides these (matches()): the date tree must agree
+            if (hideSent && p.sent)
+                continue;   // so does "Hide imported photos"
             auto d = localDate(p.takenTs);
             if (d[0] != curY)
             {

@@ -1352,6 +1352,8 @@ version (WithUi)
     }
 
     /// The years → months → days tree of the current person/album/root/favourites/kind view.
+    private long datesGen;   // the latest loadDates: older answers are dropped
+
     @Slot void loadDates()
     {
         JSONValue params = JSONValue.emptyObject;
@@ -1364,7 +1366,10 @@ version (WithUi)
         if (fPlace.length) { params["place"] = fPlace; if (fCountry.length) params["country"] = fCountry; }
         if (fTag.length && fTagGroup.length) params[fTagGroup] = fTag;
         if (fKeyword.length) params["keyword"] = fKeyword;
+        if (hideSent) params["hideSent"] = true;
+        immutable gen = ++datesGen;
         client.request("library.dates", params, (r, e) {
+            if (gen != datesGen) return;   // a newer request (another filter) answers instead
             if (e.type != JSONType.null_) { report("dates", e); return; }
             dates = r.toString();
             datesChanged.emit();
@@ -1385,6 +1390,7 @@ version (WithUi)
             return;
         hideSent = on;
         reload(0, pageLimit);
+        loadDates();   // the date navigator counts the same photos the grid shows
     }
 
     /// Phone: how many of its photos (and how many bytes) the computer already has → `imported`.

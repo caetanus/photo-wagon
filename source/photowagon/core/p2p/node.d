@@ -234,11 +234,12 @@ final class Node : Notifiee
 		// that connects arrives on onConnection as a raw byte stream, where the
 		// desktop serve() runs the framing (auth + IPC + push) and the DeviceRepo
 		// admission gate. The libp2p node above still runs during the transition.
-		// Parked unless PW_HS=1: the hyperswarm path's relayed hole punch never passed live
-		// acceptance, and the sync pipe is the direct libp2p connection (QUIC/TCP) instead.
+		// On by default since 2026-09-26 (the phone's transport is hyperswarm now); the
+		// libp2p node keeps running beside it for phones still on a libp2p build.
+		// PW_NO_HS=1 turns it off.
 		import std.process : environment;
 
-		if (environment.get("PW_HS", "") == "1")
+		if (environment.get("PW_NO_HS", "") != "1")
 		try
 		{
 			import std.file : read;

@@ -14,8 +14,10 @@ Item {
     property bool paired: false
     property var sync: ({ active: false, done: 0, total: 0, pending: 0, enabled: false })
     readonly property int failures: (page.sync.failedPhotos || 0)
-    // "libp2p 12D3KooW…" says nothing to a person: the computer, and a short id for support
+    // "libp2p 12D3KooW…" / "hyperswarm d84434e7…" says nothing to a person: the computer, and
+    // a short id for support
     readonly property string computerId: {
+        if (page.endpoint.startsWith("hyperswarm ")) return page.endpoint.substring(11, 19)
         const i = page.endpoint.indexOf("12D3Koo")
         return i >= 0 ? "…" + page.endpoint.substring(page.endpoint.length - 6) : page.endpoint
     }

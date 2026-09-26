@@ -162,15 +162,24 @@ fi
 # facade.d's hsuv_* libuv shim + hyperswarm/dht/noise + the Connection surface). Linked
 # inside the start-group so the shim and the core resolve each other; the nm pre-flight
 # below aborts on any hsuv_*/udx_* left unresolved.
-# PW_HS=1 builds the udx/hyperdht/hyperswarm FLAVOR in (a selectable second transport; at
-# runtime it is chosen by files/settings/hs-flavor). It adds -d-version=PwHyperswarm, the
-# transport source (hswarm.d), the mux + piece protocol, the d-hyperswarm include path, and
-# links the two archives. PW_UDX is the old alias.
+# The udx/hyperdht/hyperswarm transport is built in by default (the phone's transport since
+# 2026-09-26) whenever the two archives are there; PW_NO_HS=1 leaves it out (then the app is
+# libp2p/QUIC only). Built in, it is also what runs, unless files/settings/quic-flavor exists.
+# It adds -d-version=PwHyperswarm, the transport source (hswarm.d), the mux + piece protocol,
+# the d-hyperswarm include path, and links the two archives. PW_HS=1 / PW_UDX=1 still force it
+# (and fail loudly when the archives are missing).
 UDX_LIBS=""
 HS_VERSION=""
 HS_SOURCES=""
 HS_INCLUDES=""
-if [ -n "${PW_HS:-}${PW_UDX:-}" ]; then
+HS_WANTED="${PW_HS:-}${PW_UDX:-}"
+if [ "${PW_NO_HS:-}" = 1 ]; then
+    HS_WANTED=""   # PW_NO_HS=1 wins over PW_HS / PW_UDX
+elif [ -e "$HERE/toolchain/android-libs/$ABI_DIR/libhsudx-android.a" ] \
+    && [ -e "$HERE/toolchain/android-libs/$ABI_DIR/libhsdswarm-android.a" ]; then
+    HS_WANTED=1
+fi
+if [ -n "$HS_WANTED" ]; then
     for a in libhsudx-android.a libhsdswarm-android.a; do
         [ -e "$HERE/toolchain/android-libs/$ABI_DIR/$a" ] || { echo "PW_HS: $a missing for $ABI_DIR (run d-hyperswarm ARCH=$ABI_DIR build scripts)" >&2; exit 1; }
         UDX_LIBS="$UDX_LIBS -L=$HERE/toolchain/android-libs/$ABI_DIR/$a"

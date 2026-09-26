@@ -239,7 +239,11 @@ final class P2pBridge : Bridge
 
     override bool connected() const { return p2pUp || tcp.connected; }
     override bool remote() const { return true; }
-    override string endpoint() const { return p2pUp ? "libp2p " ~ p2pWith[0 .. 12] ~ "…" : tcp.endpoint; }
+    override string endpoint() const
+    {
+        return p2pUp ? (usingHs ? "hyperswarm " : "libp2p ") ~ p2pWith[0 .. 12] ~ "…" : tcp.endpoint;
+    }
+    private bool usingHs;   // the hyperswarm transport runs (not libp2p/QUIC)
     /// Paired: a pairing code was adopted (the libp2p target), or a plain TCP endpoint set.
     override bool paired()
     {
@@ -882,17 +886,15 @@ final class P2pBridge : Bridge
         {
             import std.process : environment;
             import std.file : exists;
-            // hyperswarm flavor selected by PW_HS=1 (desktop/tests), the settings file
-            // files/settings/hs-flavor (real phone toggle), or compiled as the default
-            // (-d-version=PwHsDefault) for the no-root Waydroid rig, where neither env
-            // injection nor run-as writes to app-private storage reach the app.
-            version (PwHsDefault) enum bool hsDefault = true; else enum bool hsDefault = false;
-            immutable bool wantQuic = environment.get("PW_QUIC", "") == "1";
-            if (!wantQuic && (hsDefault
-                    || environment.get("PW_HS", "") == "1"
-                    || buildPath(settingsDir, "hs-flavor").exists))
+            // The phone's transport is hyperswarm (udx/hyperdht) whenever it is built in (since
+            // 2026-09-26); the libp2p/QUIC flavor stays selectable: PW_QUIC=1 (desktop/tests)
+            // or the settings file files/settings/quic-flavor (on the phone).
+            immutable bool wantQuic = environment.get("PW_QUIC", "") == "1"
+                || buildPath(settingsDir, "quic-flavor").exists;
+            if (!wantQuic)
             {
                 plog("p2p: udx/hyperdht/hyperswarm flavor selected");
+                usingHs = true;
                 hsClient();
                 return;
             }

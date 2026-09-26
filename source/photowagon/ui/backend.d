@@ -41,6 +41,12 @@ version (WithUi)
     Signal!() toolsThumbsChanged;
     Signal!() toolsJunkChanged;
     Signal!() mediaReadyChanged;
+    Signal!() revealRowChanged;
+    Signal!() navTargetChanged;
+    /// After navigatePhoto: the photo the arrow key leads to (0: none).
+    @Property("navTargetChanged") int navTarget = 0;
+    /// After revealPhoto: the grid row holding that photo (-1: not loaded).
+    @Property("revealRowChanged") int revealRow = -1;
     /// Desktop: the video backend finished its start-up probe; a MediaPlayer created before
     /// would block the window until it does (the viewer shows the poster meanwhile).
     @Property("mediaReadyChanged") bool mediaReady = false;
@@ -2490,6 +2496,45 @@ version (WithUi)
             anchorRow = gridRows.rowOf(anchorPid);
             anchorRowChanged.emit();
         }
+    }
+
+    /// The widest grid still laid out as a mosaic (the desktop's zoom goes wider than the phone's).
+    @Slot void setGridMosaicMax(int m)
+    {
+        if (gridRows !is null)
+            gridRows.setMosaicMax(m);
+    }
+
+    /// Bring the row holding photo `pid` into view (the desktop's keyboard cursor): its row
+    /// lands in `revealRow`.
+    @Slot void revealPhoto(int pid)
+    {
+        if (gridRows is null)
+            return;
+        revealRow = gridRows.rowOf(pid);
+        revealRowChanged.emit();
+    }
+
+    /// Day headers in the grid on or off (on while selecting: they carry "select the day");
+    /// `anchorPid` stays in view (its new row lands in `anchorRow`).
+    @Slot void setGridHeaders(bool on, int anchorPid)
+    {
+        if (gridRows is null)
+            return;
+        gridRows.setHeaders(on);
+        if (anchorPid > 0)
+        {
+            anchorRow = gridRows.rowOf(anchorPid);
+            anchorRowChanged.emit();
+        }
+    }
+
+    /// The desktop's arrow keys over the mosaic: from photo `pid` towards `dir` (0 left,
+    /// 1 right, 2 up, 3 down); the answer lands in `navTarget` (0: none).
+    @Slot void navigatePhoto(int pid, int dir)
+    {
+        navTarget = gridRows is null ? 0 : cast(int) gridRows.navigate(pid, dir);
+        navTargetChanged.emit();
     }
 
     private void publishPage()

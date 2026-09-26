@@ -1,8 +1,10 @@
 import QtQuick
 import QtQuick.Controls
 
-// The photo grid: square thumbnails packed with a 2 px gap, sized by the zoom
-// slider. "all" is one continuous grid; "days" adds a header per day.
+// The photo grid: square thumbnails packed edge to edge with a 2 px gap, sized by the zoom
+// slider. "all" is one continuous mosaic the way Google Photos lays it out (a big tile beside
+// small ones; the rows are built and reconciled in D, library.rows), the day of the top row
+// floating in a pill while it scrolls; "days" adds a header per day.
 // Click selects, ⌘/Ctrl-click extends, double-click opens; hover shows the
 // heart; keyboard arrows move the selection, Return opens.
 Item {
@@ -49,7 +51,6 @@ Item {
     }
     onModeChanged: syncModels()
 
-    ListModel { id: allModel; dynamicRoles: true }
     ListModel { id: daysModel; dynamicRoles: true }
 
     // Keyed reconcile: in place when the signature changed, MOVED when it sits later in
@@ -102,11 +103,8 @@ Item {
                 const js = JSON.stringify(d.items)
                 return { _k: d.key, _s: d.title + js, title: d.title, n: d.items.length, itemsJson: js }
             }))
-            if (allModel.count) allModel.clear()
-        } else {
-            reconcile(allModel, items.map(it => ({ _k: String(it.id), _s: JSON.stringify(it), photo: it })))
-            if (daysModel.count) daysModel.clear()
-        }
+        } else if (daysModel.count) daysModel.clear()
+        // ("all" reads library.rows, which the backend reconciles with every page itself)
         lastItems = items
         // (from `items` itself: the indexOfId binding has not caught up with the page yet)
         const at = id => { for (let i = 0; i < items.length; i++) if (items[i].id === id) return i; return -1 }
@@ -115,8 +113,17 @@ Item {
     }
 
     readonly property int gap: 2
-    readonly property int columns: Math.max(1, Math.floor((width - 16) / (cellSize + gap)))
-    readonly property int cell: Math.floor((width - 16 - (columns - 1) * gap) / columns)
+    // dragging the scroll bar through thousands of photos: only the quick decodes
+    readonly property bool fast: allBar.pressed
+    readonly property int columns: Math.max(1, Math.floor((width + gap) / (cellSize + gap)))
+    readonly property int cell: Math.floor((width - (columns - 1) * gap) / columns)
+    // the D row model follows this grid's columns; a mosaic up to 8 across (denser zooms plain)
+    onColumnsChanged: library.setGridColumns(columns, 0)
+    Component.onCompleted: { library.setGridHeaders(false, 0); library.setGridMosaicMax(8); library.setGridColumns(columns, 0) }
+    Connections {
+        target: library
+        function onRevealRowChanged() { if (library.revealRow >= 0) allView.positionViewAtIndex(library.revealRow, ListView.Contain) }
+    }
 
     function requestMore() {
         if (requesting || !hasMore) return
@@ -164,9 +171,27 @@ Item {
         let i = cursor < 0 ? 0 : Math.max(0, Math.min(it.length - 1, cursor + delta))
         cursor = i
         selectOnly(it[i].id)
-        if (mode === "all") allView.positionViewAtIndex(i, GridView.Contain)
+        if (mode === "all") library.revealPhoto(it[i].id)
     }
 
+    property bool _navExtend: false
+    function nav(dir, extend) {
+        const it = page.items
+        if (!it.length) return
+        if (cursor < 0) { moveCursor(0); anchor = cursor; return }
+        _navExtend = extend
+        library.navigatePhoto(it[cursor].id, dir)
+    }
+    Connections {
+        target: library
+        function onNavTargetChanged() {
+            const i = library.navTarget > 0 ? grid.indexOf(library.navTarget) : -1
+            if (i < 0) return
+            if (grid._navExtend) { if (grid.anchor < 0) grid.anchor = Math.max(0, grid.cursor); grid.selectRange(i) }
+            else { grid.cursor = i; grid.selectOnly(library.navTarget); grid.anchor = i }
+            library.revealPhoto(library.navTarget)
+        }
+    }
     Keys.onPressed: (event) => {
         const extend = event.modifiers & Qt.ShiftModifier
         const step = (d) => { if (extend) { if (anchor < 0) anchor = Math.max(0, cursor); selectRange(Math.max(0, Math.min(page.items.length - 1, (cursor < 0 ? 0 : cursor) + d))) } else { moveCursor(d); anchor = cursor } }
@@ -181,10 +206,11 @@ Item {
         case Qt.Key_PageDown: view.contentY = Math.min(maxY, view.contentY + view.height * 0.9); if (view.contentY - view.originY > view.contentHeight - view.height * 3) requestMore(); break
         case Qt.Key_PageUp: view.contentY = Math.max(minY, view.contentY - view.height * 0.9); break
         case Qt.Key_A: if (event.modifiers & Qt.ControlModifier) { anchor = 0; selectRange(page.items.length - 1); break } return
-        case Qt.Key_Left: step(-1); break
-        case Qt.Key_Right: step(1); break
-        case Qt.Key_Up: step(-columns); break
-        case Qt.Key_Down: step(columns); break
+        // the mosaic ("all"): the arrows follow its tiles (the backend answers in navTarget)
+        case Qt.Key_Left: if (mode === "all") nav(0, extend); else step(-1); break
+        case Qt.Key_Right: if (mode === "all") nav(1, extend); else step(1); break
+        case Qt.Key_Up: if (mode === "all") nav(2, extend); else step(-columns); break
+        case Qt.Key_Down: if (mode === "all") nav(3, extend); else step(columns); break
         case Qt.Key_Return: case Qt.Key_Enter: case Qt.Key_Space:
             if (cursor >= 0 && cursor < page.items.length) grid.open(page.items[cursor].id); break
         case Qt.Key_Escape: clearSelection(); break
@@ -197,19 +223,39 @@ Item {
     component Cell: Item {
         id: cell
         required property var photo
+        property int cw: 1   // its size in cells (a mosaic's big tile is 2×2)
+        property int ch: 1
         readonly property int cellIndex: grid.indexOfId[photo.id] !== undefined ? grid.indexOfId[photo.id] : -1
-        width: grid.cell
-        height: grid.cell
+        width: cw * grid.cell + (cw - 1) * grid.gap
+        height: ch * grid.cell + (ch - 1) * grid.gap
         readonly property bool isSelected: grid.selected[photo.id] === true
         Rectangle { anchors.fill: parent; color: theme.tile }
+        // progressive: a 64 px decode first (the JPEG thumbnail decoded at 1/8, almost free),
+        // then the sharp one on top — not while the scroll bar is being dragged through
+        readonly property string url: cell.photo.thumbUrl || ""
+        property bool sharp: false
+        Component.onCompleted: sharp = !grid.fast
+        onUrlChanged: sharp = !grid.fast
+        Connections { target: grid; function onFastChanged() { if (!grid.fast) cell.sharp = true } }
         Image {
             anchors.fill: parent
-            source: cell.photo.thumbUrl || ""
+            source: cell.url
+            visible: status === Image.Ready && hi.status !== Image.Ready
             asynchronous: true
             cache: true
             fillMode: Image.PreserveAspectCrop
-            sourceSize.width: Math.min(512, grid.cell * 2)
-            sourceSize.height: Math.min(512, grid.cell * 2)
+            sourceSize.width: 64; sourceSize.height: 64
+            smooth: true
+        }
+        Image {
+            id: hi
+            anchors.fill: parent
+            source: cell.sharp ? cell.url : ""
+            asynchronous: true
+            cache: true
+            fillMode: Image.PreserveAspectCrop
+            sourceSize.width: Math.min(1024, cell.width * 2)
+            sourceSize.height: Math.min(1024, cell.height * 2)
             smooth: true
         }
         // video: a play glyph in the middle and the running time in the corner
@@ -309,27 +355,69 @@ Item {
         }
     }
 
-    // ---- "all": one GridView -------------------------------------------------------
-    GridView {
+    // ---- "all": the mosaic, one band of rows per model row -------------------------------
+    ListView {
         id: allView
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        anchors.left: parent.left
-        anchors.leftMargin: 8
-        anchors.topMargin: 8
-        width: grid.columns * (grid.cell + grid.gap)   // exact multiple: no column lost to rounding
+        anchors.fill: parent
         visible: grid.mode === "all"
         clip: true
-        cellWidth: grid.cell + grid.gap
-        cellHeight: grid.cell + grid.gap
-        model: allModel
-        cacheBuffer: cellHeight * 6
-        ScrollBar.vertical: ScrollBar { }
-        delegate: Cell { }
+        model: library.rows
+        reuseItems: true
+        cacheBuffer: Math.max(0, (grid.cell + grid.gap) * 6)
+        ScrollBar.vertical: ScrollBar { id: allBar }
+        delegate: Item {
+            id: band
+            required property string tiles   // JSON: the row's photos with their x, y, w, h (cells)
+            required property string label
+            required property int span
+            readonly property var tileList: JSON.parse(tiles)
+            width: allView.width
+            height: span * (grid.cell + grid.gap)
+            Repeater {
+                model: band.tileList
+                delegate: Cell {
+                    required property var modelData
+                    // the full photo from the page (heart, tags, path), the row only knows its id
+                    photo: grid.indexOfId[modelData.pid] !== undefined ? grid.page.items[grid.indexOfId[modelData.pid]] : ({ id: modelData.pid, thumbUrl: modelData.thumbUrl })
+                    cw: modelData.w || 1
+                    ch: modelData.h || 1
+                    x: (modelData.x || 0) * (grid.cell + grid.gap)
+                    y: (modelData.y || 0) * (grid.cell + grid.gap)
+                }
+            }
+        }
         onAtYEndChanged: if (atYEnd && count > 0) grid.requestMore()
-        onContentYChanged: if (count > 0 && contentY - originY > contentHeight - height * 3) grid.requestMore()
+        onContentYChanged: {
+            if (count > 0 && contentY - originY > contentHeight - height * 3) grid.requestMore()
+            const it = itemAtIndex(indexAt(8, contentY + 8))
+            if (it && it.label) grid.topDay = it.label
+        }
+        onMovingChanged: if (moving) { grid.pillShown = true; pillHide.stop() } else pillHide.restart()
         footer: Item { width: 1; height: 24 }
-        WheelHandler { acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad; onWheel: (ev) => grid.wheel(allView, ev) }
+        WheelHandler { acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad; onWheel: (ev) => { grid.wheel(allView, ev); grid.pillShown = true; pillHide.restart() } }
+    }
+
+    // the day of the top row, floating while the mosaic scrolls
+    property string topDay: ""
+    property bool pillShown: false
+    Timer { id: pillHide; interval: 1200; onTriggered: grid.pillShown = false }
+    Rectangle {
+        anchors.top: parent.top; anchors.topMargin: 12
+        anchors.horizontalCenter: parent.horizontalCenter
+        visible: grid.mode === "all" && opacity > 0.01 && grid.topDay.length > 0
+        opacity: grid.pillShown ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: 220 } }
+        height: 34; radius: 17
+        width: pillText.implicitWidth + 30
+        color: Qt.rgba(theme.window.r, theme.window.g, theme.window.b, 0.92)
+        border.color: theme.separator
+        Label {
+            id: pillText
+            anchors.centerIn: parent
+            text: grid.topDay
+            color: theme.text
+            font.pixelSize: 14; font.weight: Font.DemiBold
+        }
     }
 
     // ---- "days": sections with a date header ---------------------------------------
@@ -362,8 +450,6 @@ Item {
     ListView {
         id: daysView
         anchors.fill: parent
-        anchors.leftMargin: 8
-        anchors.rightMargin: 8
         visible: grid.mode === "days"
         clip: true
         model: daysModel
@@ -381,7 +467,7 @@ Item {
                 height: 44
                 Label {
                     anchors.left: parent.left
-                    anchors.leftMargin: 4
+                    anchors.leftMargin: 12
                     anchors.bottom: parent.bottom
                     anchors.bottomMargin: 8
                     text: section.title

@@ -2,9 +2,10 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
 
-// A date-grouped photo timeline, the way Google Photos / Apple Photos read: photos
-// under a per-day header ("Today", "Sat, Sep 20"), square tiles edge to edge, one
-// seamless scroll. `page` is the parsed library.page {total, offset, items}; every
+// A date-ordered photo timeline, the way Google Photos reads: a mosaic of square tiles edge
+// to edge (a big one beside small ones, a landscape photo across the width), one seamless
+// scroll, the day in a floating pill while scrolling (day headers only while selecting,
+// where they select a whole day). `page` is the parsed library.page {total, offset, items}; every
 // item already carries `takenTs` (the merge that builds the page sorts on it), so the
 // grouping is done here with no backend change.
 //
@@ -29,6 +30,9 @@ Item {
     property bool scrubbing: false
     property bool _scrubActive: false
     property string scrubText: ""
+    // a fast fling or a scrub: tiles show only their quick 64 px decode; the sharp one follows
+    // when the scroll slows (Google Photos' progressive load)
+    readonly property bool fast: scrubbing || (view.moving && Math.abs(view.verticalVelocity) > 2500)
 
     // three across on a phone, more on a tablet; square cells, flush to the edges.
     // Pinch sets `density` (columns); 0 = the width-based default.
@@ -105,7 +109,18 @@ Item {
     // the rows are built and reconciled in D (library.rows, a QAbstractListModel): a rotation,
     // a width change or a pinch only tells it the column count
     onColsChanged: { library.setGridColumns(cols, pendingAnchor); pendingAnchor = 0 }
-    Component.onCompleted: library.setGridColumns(cols, 0)
+    Component.onCompleted: { library.setGridColumns(cols, 0); library.setGridHeaders(selecting, 0) }
+    // headers come and go with selection mode: keep the photo at the top where it was
+    onSelectingChanged: {
+        // (the first row of photos from the top: a day header there has none)
+        let pid = 0
+        for (let i = view.indexAt(4, view.contentY + 6); i >= 0 && i < view.count && !pid; i++) {
+            const it = view.itemAtIndex(i)
+            if (!it) break
+            if (it.tileList && it.tileList.length) pid = it.tileList[0].pid
+        }
+        library.setGridHeaders(selecting, pid)
+    }
 
     // ---- day grouping -----------------------------------------------------------
     // taken_ts is Unix SECONDS (the backend stores it with 'unixepoch'); JS Date wants
@@ -153,19 +168,42 @@ Item {
         component Tile: Item {
             id: cell
             required property var modelData
-            width: grid.cellSize
-            height: grid.cellSize
+            // its place in the row, in cells (a big tile is 2×2, a wide photo spans the row)
+            readonly property int cw: modelData.w || 1
+            readonly property int ch: modelData.h || 1
+            x: (modelData.x || 0) * (grid.cellSize + grid.gap)
+            y: (modelData.y || 0) * (grid.cellSize + grid.gap)
+            width: cw * grid.cellSize + (cw - 1) * grid.gap
+            height: ch * grid.cellSize + (ch - 1) * grid.gap
             Rectangle { anchors.fill: parent; color: theme.panelAlt }
+            // progressive: a 64 px decode first (a JPEG decoded at 1/8, almost free), stretched
+            // soft; the sharp decode on top, requested once the scroll is not a fast fling
+            readonly property string url: cell.modelData.thumbUrl || ""
+            property bool sharp: false
+            Component.onCompleted: sharp = !grid.fast
+            onUrlChanged: sharp = !grid.fast
+            Connections { target: grid; function onFastChanged() { if (!grid.fast) cell.sharp = true } }
             Image {
                 anchors.fill: parent
-                source: cell.modelData.thumbUrl
+                source: cell.url
+                visible: status === Image.Ready && hi.status !== Image.Ready
+                asynchronous: true; cache: true
+                fillMode: Image.PreserveAspectCrop
+                sourceSize.width: 64; sourceSize.height: 64
+                smooth: true
+            }
+            Image {
+                id: hi
+                anchors.fill: parent
+                source: cell.sharp ? cell.url : ""
                 // paint only once decoded — a still-loading, missing or corrupt thumbnail
                 // (common while offline) otherwise flashed as GPU noise; the panelAlt
                 // rectangle behind stays as a clean placeholder until then.
                 visible: status === Image.Ready
                 asynchronous: true; cache: true
                 fillMode: Image.PreserveAspectCrop
-                sourceSize.width: 384; sourceSize.height: 384
+                // a big or wide tile gets a sharper decode than a small one
+                sourceSize.width: cell.cw > 1 ? 768 : 384; sourceSize.height: cell.cw > 1 ? 768 : 384
                 smooth: true
             }
             Rectangle {
@@ -226,16 +264,17 @@ Item {
             }
         }
 
-        // a row: a day header, or up to `cols` tiles
+        // a row: a day header (while selecting), or a band of the mosaic `span` cells tall
         delegate: Item {
             id: rowItem
             required property string kind
             required property string key
-            required property string tiles     // JSON: the row's photos
+            required property string tiles     // JSON: the row's photos, each with its x, y, w, h
             required property string label
+            required property int span
             readonly property var tileList: kind === "r" ? JSON.parse(tiles) : []
             width: view.width
-            height: kind === "h" ? 46 : grid.cellSize + grid.gap
+            height: kind === "h" ? 46 : span * grid.cellSize + span * grid.gap
 
             // ---- day header
             Label {
@@ -267,10 +306,10 @@ Item {
                 }
                 TapHandler { onTapped: grid.toggleDay(parent.dayKey_) }
             }
-            // ---- tile row
-            Row {
+            // ---- tile band
+            Item {
                 visible: rowItem.kind === "r"
-                spacing: grid.gap
+                width: parent.width; height: parent.height
                 Repeater {
                     model: rowItem.tileList
                     delegate: Tile { }
@@ -304,6 +343,27 @@ Item {
         width: parent.width - 48; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap
     }
 
+    // ---- the day of the top row, in a pill floating over the grid while it scrolls ------
+    property string topDay: ""
+    Rectangle {
+        id: dayPill
+        anchors.top: parent.top; anchors.topMargin: 10
+        anchors.horizontalCenter: parent.horizontalCenter
+        visible: opacity > 0.01 && grid.topDay.length > 0 && !grid.selecting
+        opacity: grid._scrubActive || grid.scrubbing ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: 220 } }
+        height: 36; radius: 18
+        width: dayText.implicitWidth + 32
+        color: Qt.rgba(grid.theme.panel.r, grid.theme.panel.g, grid.theme.panel.b, 0.92)
+        border.color: grid.theme.border
+        Label {
+            id: dayText; anchors.centerIn: parent
+            text: grid.topDay
+            color: grid.theme.text
+            font.pixelSize: 15; font.weight: Font.DemiBold
+        }
+    }
+
     // ---- fast-scroll date scrubber (right edge, Google-Photos style) --------------
     Timer { id: scrubHide; interval: 1100; onTriggered: grid._scrubActive = false }
     Connections {
@@ -315,6 +375,9 @@ Item {
         function onContentYChanged() {
             if (view.moving || grid.scrubbing) grid._scrubActive = true
             grid.scrubText = grid.computeScrubDate()
+            const idx = view.indexAt(4, view.contentY + 6)
+            const it = idx >= 0 ? view.itemAtIndex(idx) : null
+            if (it && it.label) grid.topDay = it.label
         }
     }
     // the month + year of the row at the top of the viewport

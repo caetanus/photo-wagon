@@ -288,6 +288,12 @@ ApplicationWindow {
             AppMenuItem { action: actFullScreen }
         }
         ThemedMenu {
+            title: "Tools"
+            AppMenuItem { text: "Remove Thumbnails…"; onTriggered: toolsDialog.openAt(0) }
+            AppMenuItem { text: "Similar Photos…"; onTriggered: toolsDialog.openAt(1) }
+            AppMenuItem { text: "Unnamed Faces…"; onTriggered: toolsDialog.openAt(2) }
+        }
+        ThemedMenu {
             title: "Window"
             AppMenuItem { action: actMinimize }
             AppMenuItem { action: actZoomWindow }
@@ -773,6 +779,10 @@ ApplicationWindow {
                 AppMenuItem { action: actPeers }
                 AppMenuItem { action: actSettings }
                 MenuSeparator {}
+                AppMenuItem { text: "Remove Thumbnails…"; onTriggered: toolsDialog.openAt(0) }
+                AppMenuItem { text: "Similar Photos…"; onTriggered: toolsDialog.openAt(1) }
+                AppMenuItem { text: "Unnamed Faces…"; onTriggered: toolsDialog.openAt(2) }
+                MenuSeparator {}
                 AppMenuItem { action: actMinimize }
                 AppMenuItem { action: actZoomWindow }
                 AppMenuItem { action: actAbout }
@@ -1031,6 +1041,12 @@ ApplicationWindow {
         onCreateNew: (name, ids) => library.createAlbum(name, JSON.stringify(ids))
     }
 
+    ToolsDialog {
+        id: toolsDialog
+        theme: root.theme
+        icons: root.icons
+    }
+
     SettingsDialog {
         id: settingsDialog
         theme: root.theme
@@ -1238,7 +1254,8 @@ ApplicationWindow {
         onTriggered: {
             if (applied) return
             applied = true
-            if (library.shotView === "people") root.pickSource("people")
+            if (library.shotView.startsWith("tools")) toolsDialog.openAt(Number(library.shotView.substring(5)) || 0)
+            else if (library.shotView === "people") root.pickSource("people")
             else if (library.shotView === "places") root.pickSource("places")
             else if (library.shotView === "memories") root.pickSource("memories")
             else if (library.shotView.startsWith("memory:")) root.openMemory(library.shotView.substring(7))
@@ -1310,8 +1327,8 @@ ApplicationWindow {
     }
     Timer {
         running: library.shotPath.length > 0
-        interval: 3500
-        onTriggered: (library.shotView === "overlay" ? Overlay.overlay : library.shotSend ? phonePanel.body : library.shotView.startsWith("name:") ? viewer.namerBody : library.shotView === "menu" ? photoMenu.contentItem : library.shotView === "facemenu" ? viewer.faceMenuBody : shell).grabToImage(function (r) {
+        interval: library.shotView.startsWith("tools") ? 15000 : 3500
+        onTriggered: (library.shotView.startsWith("tools") ? root.contentItem.Window.contentItem : library.shotView === "overlay" ? Overlay.overlay : library.shotSend ? phonePanel.body : library.shotView.startsWith("name:") ? viewer.namerBody : library.shotView === "menu" ? photoMenu.contentItem : library.shotView === "facemenu" ? viewer.faceMenuBody : shell).grabToImage(function (r) {
             r.saveToFile(library.shotPath)
             console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length, "source", root.source, "filter", library.filter)
             library.quit()

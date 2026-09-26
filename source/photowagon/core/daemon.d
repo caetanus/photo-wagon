@@ -33,6 +33,7 @@ import photowagon.core.api.peernames_api : registerPeerNamesApi;
 import photowagon.core.api.pairing_api : registerPairingApi, ServerControl;
 import photowagon.core.api.places_api : registerPlacesApi;
 version (PW_NoVision) {} else import photowagon.core.api.tags_api : registerTagsApi;
+version (PW_NoVision) {} else import photowagon.core.api.tools_api : registerToolsApi;
 import std.json : JSONValue;
 import photowagon.core.config : Config;
 import photowagon.core.db.schema : migrate;
@@ -233,6 +234,7 @@ final class Daemon : ServerControl
 		indexer.onFileSubjects = (long id, string[] subjects) { applyFileSubjects(db, id, subjects); };
 		version (PW_NoVision) {} else registerTagsApi(registry, scenes, keywords, photos, fileTags);
 		version (PW_NoVision) {} else registerSearchApi(registry, photos, db);
+		version (PW_NoVision) {} else registerToolsApi(registry, db, photos, scenes, store, own);
 		registerEditApi(registry, cfg, photos, store, events, (string path) {
 			import std.string : startsWith;
 			foreach (root; roots.list())

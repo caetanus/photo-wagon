@@ -35,6 +35,15 @@ version (WithUi)
     Signal!() pageChanged;
     Signal!() rowsChanged;
     Signal!() anchorRowChanged;
+    Signal!() toolsSimilarChanged;
+    Signal!() toolsThumbsChanged;
+    Signal!() toolsFaceChanged;
+    /// Tools (desktop): the similar-photos scan {running, done, progress, total, groups?}
+    @Property("toolsSimilarChanged") string toolsSimilar = `{}`;
+    /// Tools: {scanned, redundant: [{photo, keep}], orphans: [photo]}
+    @Property("toolsThumbsChanged") string toolsThumbs = `{}`;
+    /// Tools: {offset, total, clusters, loose, item?, candidates: [person]}
+    @Property("toolsFaceChanged") string toolsFace = `{}`;
     /// The phone grid's rows (a QAbstractListModel built in D, updated by key on every page:
     /// the delegates on screen survive) — `ListView { model: library.rows }`.
     @Property("rowsChanged") cppq.QObject rows;
@@ -2251,6 +2260,181 @@ version (WithUi)
             if (e.type != JSONType.null_) return;
             peerNames = ("names" in r) ? r["names"].toString() : `{}`;
             peerNamesChanged.emit();
+        });
+    }
+
+    // ---- Tools (desktop) ----------------------------------------------------------
+
+    /// Groups the library's near-identical photos (a background job: poll with pollSimilar).
+    @Slot void startSimilarScan(double minSimilarity)
+    {
+        client.request("tools.similar.start", JSONValue(["minSimilarity": JSONValue(minSimilarity)]), (r, e) {
+            if (e.type != JSONType.null_) { report("tools", e); return; }
+            pollSimilar();
+        });
+    }
+
+    @Slot void pollSimilar()
+    {
+        client.request("tools.similar.status", JSONValue.emptyObject, (r, e) {
+            if (e.type != JSONType.null_) { report("tools", e); return; }
+            toolsSimilar = r.toString();
+            toolsSimilarChanged.emit();
+        });
+    }
+
+    @Slot void loadThumbTool()
+    {
+        client.request("tools.thumbnails", JSONValue.emptyObject, (r, e) {
+            if (e.type != JSONType.null_) { report("tools", e); return; }
+            toolsThumbs = r.toString();
+            toolsThumbsChanged.emit();
+        });
+    }
+
+    /// Moves these photos (a JSON array of ids) to the trash, then refreshes the tools and
+    /// the timeline.
+    @Slot void trashPhotos(string idsJson)
+    {
+        JSONValue ids;
+        try
+            ids = parseJSON(idsJson);
+        catch (Exception)
+            return;
+        if (ids.type != JSONType.array || ids.array.length == 0)
+            return;
+        client.request("photo.delete", JSONValue(["ids": ids]), (r, e) {
+            if (e.type != JSONType.null_) { report("delete", e); return; }
+            pollSimilar();
+            loadThumbTool();
+            refreshTimeline();
+        });
+    }
+
+    /// The unidentified face (group or single face) at `offset`, with who it may be.
+    @Slot void loadUnidentified(int offset)
+    {
+        client.request("tools.unidentified", JSONValue(["offset": JSONValue(offset)]), (r, e) {
+            if (e.type != JSONType.null_)
+            {
+                report("tools", e);
+                // still an answer: the dialog lets go of its "busy" and asks again
+                toolsFace = JSONValue(["offset": JSONValue(offset)]).toString();
+                toolsFaceChanged.emit();
+                return;
+            }
+            auto out_ = r;
+            out_["offset"] = offset;
+            out_["candidates"] = JSONValue.emptyArray;
+            void publish()
+            {
+                toolsFace = out_.toString();
+                toolsFaceChanged.emit();
+            }
+            if (!("item" in r))
+                return publish();
+            auto item = r["item"];
+            // who it may be: the people closest to the item's (best) face — named ones only
+            // (people.similar is stricter and often has nothing for a new group)
+            JSONValue faceId = item["type"].str == "cluster"
+                ? (item["faces"].array.length ? item["faces"].array[0]["faceId"] : JSONValue(0))
+                : item["faceId"];
+            client.request("face.candidates", JSONValue(["id": faceId]), (c, ce) {
+                if (ce.type == JSONType.null_ && "people" in c)
+                {
+                    JSONValue[] named;
+                    foreach (pj; c["people"].array)
+                        if ("name" in pj && pj["name"].type == JSONType.string && pj["name"].str.length
+                            && !(item["type"].str == "cluster" && "id" in pj && pj["id"] == item["personId"]))
+                            named ~= pj;
+                    out_["candidates"] = JSONValue(named.length > 6 ? named[0 .. 6] : named);
+                }
+                publish();
+            });
+        });
+    }
+
+    /// The unidentified group `personId` IS person `intoId` (merged) — or, `intoId` 0, a new
+    /// person called `name`.
+    /// `excludedJson`: faces of the group the user said are NOT this person — let go first
+    /// (they come back as single faces), so a mixed automatic group is not named wholesale.
+    @Slot void resolveCluster(int personId, int intoId, string name, int offset, string excludedJson)
+    {
+        import std.string : strip;
+
+        long[] excluded;
+        try
+            foreach (v; parseJSON(excludedJson).array)
+                excluded ~= v.integer;
+        catch (Exception)
+        {
+        }
+        void act()
+        {
+            auto next = () { loadUnidentified(offset); loadPeople(); };
+            if (intoId > 0)
+                client.request("people.merge", JSONValue(["id": JSONValue(personId), "into": JSONValue(intoId)]),
+                    (r, e) { if (e.type != JSONType.null_) report("merge", e); next(); });
+            else if (name.strip.length)
+                client.request("people.rename", JSONValue(["id": JSONValue(personId), "name": JSONValue(name.strip)]),
+                    (r, e) { if (e.type != JSONType.null_) report("rename", e); next(); });
+        }
+        // one at a time, then the group's decision
+        void detach(size_t i)
+        {
+            if (i >= excluded.length)
+                return act();
+            client.request("face.setPerson", JSONValue(["faceId": JSONValue(excluded[i]), "personId": JSONValue(0)]),
+                (r, e) { if (e.type != JSONType.null_) report("face", e); detach(i + 1); });
+        }
+        detach(0);
+    }
+
+    /// The automatic group `personId` mixes people up: break it up — its faces stay, each
+    /// on its own again (they come back one by one, with their own suggestions).
+    @Slot void dissolveCluster(int personId, int offset)
+    {
+        client.request("people.remove", JSONValue(["id": JSONValue(personId)]), (r, e) {
+            if (e.type != JSONType.null_) report("people", e);
+            loadUnidentified(offset);
+            loadPeople();
+        });
+    }
+
+    /// The group `personId` is not faces: its detections are deleted.
+    @Slot void dismissCluster(int personId, int offset)
+    {
+        client.request("people.delete", JSONValue(["id": JSONValue(personId)]), (r, e) {
+            if (e.type != JSONType.null_) report("delete", e);
+            loadUnidentified(offset);
+        });
+    }
+
+    /// A loose face is person `personId` — or, `personId` 0, a new person called `name`.
+    @Slot void resolveFace(int faceId, int personId, string name, int offset)
+    {
+        import std.string : strip;
+
+        JSONValue p = ["faceId": JSONValue(faceId)];
+        if (personId > 0)
+            p["personId"] = personId;
+        else if (name.strip.length)
+            p["name"] = name.strip;
+        else
+            return;
+        client.request("face.setPerson", p, (r, e) {
+            if (e.type != JSONType.null_) report("face", e);
+            loadUnidentified(offset);
+            loadPeople();
+        });
+    }
+
+    /// A loose "face" that is not one: deleted.
+    @Slot void dismissFace(int faceId, int offset)
+    {
+        client.request("face.delete", JSONValue(["faceId": JSONValue(faceId)]), (r, e) {
+            if (e.type != JSONType.null_) report("face", e);
+            loadUnidentified(offset);
         });
     }
 

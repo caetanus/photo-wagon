@@ -127,6 +127,12 @@ final class LocalBridge : Bridge
     // ---- merged paging state --------------------------------------------------------
     private JSONValue pageParams;      // the filter of the current listing (no offset/limit)
     private bool refreshing;           // this listing refreshes one already on screen (library.changed)
+    // A refresh's stand-in for a slow computer: its photos the previous listing had served.
+    // Answered with the phone's photos read NOW, a refresh neither shrinks the grid nor holds
+    // back a photo just taken; the computer's late answer refreshes again.
+    private JSONValue[] prevRemote;
+    private string prevFilterKey;      // the previous listing's filter, as text (pageParams is later
+                                       // shared with the requests, which add offset/limit to it)
     private PhoneFilter localFilter;
     private bool remoteOnly;           // album / person / favorites: the phone has no such thing
     private long localOff, remoteOff;
@@ -797,6 +803,17 @@ private bool slowComputer;
         if (kindOf(p).length)
             pageParams["kind"] = kindOf(p);
         localFilter = filterOf(p);
+        {
+            // same listing refreshed: keep the computer's photos it showed (see prevRemote)
+            immutable filterKey = pageParams.toString();
+            JSONValue[] kept;
+            if (flag(p, "refresh") && filterKey == prevFilterKey)
+                foreach (it; served)
+                    if (it.type == JSONType.object && "remote" in it && it["remote"].type == JSONType.true_)
+                        kept ~= it;
+            prevRemote = kept;
+            prevFilterKey = filterKey;
+        }
         refreshing = flag(p, "refresh");
         remoteOnly = num(p, "albumId") || num(p, "personId") || flag(p, "favorites");
         localOff = remoteOff = 0;
@@ -881,11 +898,12 @@ private bool slowComputer;
             // phone's photos first would shrink the grid under the user and lose the scroll)
             immutable firstPage = remoteOff == 0 && served.length == 0 && !refreshing;
             immutable refreshFirst = remoteOff == 0 && served.length == 0 && refreshing;
-            immutable waitMs = firstPage && !slowComputer ? firstPageWaitMs : pageDeadlineMs;
+            immutable waitMs = (firstPage || (refreshFirst && prevRemote.length)) && !slowComputer
+                ? firstPageWaitMs : pageDeadlineMs;
             immutable asked = MonoTime.currTime;
             void merge()
             {
-                if (firstPage && !timedOut && MonoTime.currTime - asked < firstPageWaitMs.msecs)
+                if ((firstPage || refreshFirst) && !timedOut && MonoTime.currTime - asked < firstPageWaitMs.msecs)
                     slowComputer = false;
                 if (firstPage)
                     plog("paging: first page after ", (MonoTime.currTime - asked).total!"msecs", " ms",
@@ -898,11 +916,37 @@ private bool slowComputer;
                     return;
                 settled = true;
                 timedOut = true;
+                if (refreshFirst && prevRemote.length)
+                {
+                    // a refresh of the listing on screen: the phone's photos as they are now
+                    // (a photo just taken included) beside the computer's the listing already
+                    // had — the grid neither shrinks nor waits; the late reply refreshes again
+                    plog("paging: the computer did not answer a refresh in ", waitMs,
+                        " ms — the phone's photos now, the computer's from before");
+                    // (through the same de-duplication as a fresh answer: one of them may have
+                    // been downloaded to the phone since, and its local copy now stands for it)
+                    remoteBuf = null;
+                    foreach (it; prevRemote)
+                    {
+                        immutable key = ("path" in it && it["path"].type == JSONType.string ? it["path"].str.baseName : "")
+                            ~ "|" ~ ("size" in it && it["size"].type == JSONType.integer ? it["size"].integer.to!string : "");
+                        immutable hash = "hash" in it && it["hash"].type == JSONType.string ? it["hash"].str : "";
+                        if (!remoteOnly && ((hash.length && hash in localHashes) || key in localKeys))
+                            continue;
+                        remoteBuf ~= it;
+                    }
+                    remoteOff = remoteTotal = cast(long) remoteBuf.length;
+                    remoteDone = true;
+                    try
+                        merge();
+                    catch (Exception ex)
+                        finishOp(op, JSONValue(null), error("internal", ex.msg));
+                    return;
+                }
                 if (refreshFirst)
                 {
-                    // a refresh of the listing on screen: never answer with the phone's photos
-                    // alone (the grid would shrink under the user) — fail it quietly, the UI keeps
-                    // what it shows, and the late reply below triggers another refresh
+                    // a refresh with nothing of the computer's kept (a listing that had none):
+                    // fail it quietly, the UI keeps what it shows, the late reply refreshes again
                     plog("paging: the computer did not answer a refresh in ", waitMs, " ms — keeping the listing on screen");
                     finishOp(op, JSONValue(null), error("refresh_timeout", "the computer did not answer in time"));
                     return;
@@ -920,8 +964,8 @@ private bool slowComputer;
                     // refresh the listing so its photos join — that refresh (and the next first
                     // pages) wait the long deadline, so it is not cut off again; at most every
                     // 20 s, so a computer slower than even that cannot keep the listing reloading
-                    if (timedOut && firstPage && e.type == JSONType.null_)
-                        slowComputer = true;
+                    if (timedOut && (firstPage || refreshFirst) && e.type == JSONType.null_)
+                        slowComputer = true;   // the next listings give it the long wait: its data, not a stand-in
                     // (a refresh's late answer counts even when EMPTY: the listing on screen may be
                     // holding photos the computer no longer has)
                     if (timedOut && (firstPage || refreshFirst) && e.type == JSONType.null_ && r.type == JSONType.object

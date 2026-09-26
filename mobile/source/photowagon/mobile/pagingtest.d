@@ -41,6 +41,12 @@ final class PagingTest
     void onIndexed()
     {
         indexed = true;
+        if (mode == "refresh" && rescanPending)
+        {
+            rescanPending = false;
+            refreshStep2();
+            return;
+        }
         go();
     }
 
@@ -56,6 +62,8 @@ final class PagingTest
             laterDeadline();
         else if (mode == "slow")
             slowComputer();
+        else if (mode == "refresh")
+            refreshTest();
         else
             overlap();
     }
@@ -304,6 +312,77 @@ final class PagingTest
                 });
             });
             wait.start();
+        });
+    }
+
+    // PW_TEST_PAGE_DELAY==4000@2: the computer answers the first listing at once and a
+    // refresh 4 s late. A photo taken meanwhile must be in the refresh within ~3 s, beside
+    // the computer's photos the listing already had — not held back until the computer
+    // answers, and without the grid shrinking.
+    private bool rescanPending;
+    private long remoteBefore;
+    private string newPhoto;
+    private void refreshTest()
+    {
+        import std.process : environment;
+        import std.file : dirEntries, SpanMode, copy, append;
+        import std.path : buildPath;
+        import std.string : split, endsWith;
+
+        core.request("library.page", pg(0, 60), (r, e) {
+            check(e.type == JSONType.null_, "refresh: the first listing answered");
+            remoteBefore = remotesIn(r);
+            check(remoteBefore > 0, "refresh: the first listing has the computer's photos");
+            // a photo "taken" now: a copy of one of the phone's, made unique
+            immutable dir = environment.get("PW_PHONE_ROOTS", "").split(":")[0];
+            foreach (f; dirEntries(dir, SpanMode.shallow))
+                if (f.name.endsWith(".jpg"))
+                {
+                    newPhoto = buildPath(dir, "refresh-test-new.jpg");
+                    copy(f.name, newPhoto);
+                    append(newPhoto, cast(const(ubyte)[]) "refresh-test");
+                    break;
+                }
+            rescanPending = true;
+            core.request("library.rescan", JSONValue(null), (r2, e2) {});
+        });
+    }
+
+    private void refreshStep2()
+    {
+        import core.time : MonoTime, seconds, msecs;
+        import std.algorithm : canFind;
+        import std.file : remove;
+
+        auto params = pg(0, 61);   // one more than before: the new photo takes a place of its own
+        params["refresh"] = true;
+        immutable t0 = MonoTime.currTime;
+        core.request("library.page", params, (r, e) {
+            immutable took = MonoTime.currTime - t0;
+            void cleanup() nothrow
+            {
+                try
+                    remove(newPhoto);
+                catch (Exception)
+                {
+                }
+            }
+            scope (exit)
+                cleanup();
+            check(e.type == JSONType.null_, "refresh answered (" ~ e.toString() ~ ")");
+            if (e.type != JSONType.null_)
+                return finish();
+            check(took < 3500.msecs, "refresh answered before the slow computer (" ~ took.toString() ~ ")");
+            check(remotesIn(r) == remoteBefore, "refresh kept the computer's photos ("
+                ~ remotesIn(r).to!string ~ " of " ~ remoteBefore.to!string ~ ")");
+            bool found;
+            foreach (it; r["items"].array)
+                if ("fileUrl" in it && it["fileUrl"].type == JSONType.string && it["fileUrl"].str.canFind("refresh-test-new"))
+                    found = true;
+            check(found, "refresh has the photo just taken");
+            plog("paging-test: refresh after ", took, ": ", r["items"].array.length, " items, ",
+                remotesIn(r), " computer photos, new photo ", found ? "in" : "MISSING");
+            finish();
         });
     }
 

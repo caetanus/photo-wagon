@@ -1370,6 +1370,29 @@ final class PhoneIndex
         save();
     }
 
+    /// The computer no longer has this photo (its photos from phones were removed there): back
+    /// to the queue — sent again on the next sync. Only if it still IS that content. Its faces
+    /// keep their state: already handed over (embeddings dropped here) → the computer detects
+    /// them itself on arrival; not yet → they go with the upload.
+    bool unmarkSent(long id, string hash)
+    {
+        bool changed;
+        foreach (ref p; photos)
+            if (p.id == id && p.sent && hash.length && p.hash == hash)
+            {
+                p.sent = false;
+                p.tries = 0;
+                byPath[p.path] = p;
+                changed = true;
+            }
+        if (changed)
+        {
+            dirty = true;
+            save();
+        }
+        return changed;
+    }
+
     /// A send failed: remember, so a broken file does not block the queue forever.
     void markFailed(long id, string hash = null)
     {

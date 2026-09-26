@@ -235,6 +235,9 @@ private bool slowComputer;
         syncDeadline = new QTimer(cast(cppq.QObject) null);
         syncDeadline.setSingleShot(true);
         syncDeadline.connectTimeout(&onSyncTimeout);
+        verifyLater = new QTimer(cast(cppq.QObject) null);
+        verifyLater.setSingleShot(true);
+        verifyLater.connectTimeout({ requestReverify(); });
         // the network's metered flag follows Android (CoreService writes it): 4G → hold,
         // Wi-Fi → go on, without the user doing anything
         meteredPoll = new QTimer(cast(cppq.QObject) null);
@@ -273,12 +276,14 @@ private bool slowComputer;
         };
         computer.onPairingChanged = () { emitLink(computer.connected); };
         computer.onConnected = (bool ok) {
+            linkGen++;
             emitLink(ok);
             emit("library.changed", JSONValue.emptyObject); // the merged timeline changed shape
             if (ok)
             {
                 emit("people.changed", JSONValue.emptyObject);   // the open photo's faces, now reachable
                 startSync();
+                requestReverify();   // photos removed on the computer since: queued again
                 facesApiMissing = false;   // a (re)connection may be another computer, or one with vision now
                 pumpFaces();
                 // PW_TEST_DOWNLOAD=<computer photo id>: the desktop test build downloads that
@@ -309,7 +314,10 @@ private bool slowComputer;
         };
         computer.onEvent = (string ev, JSONValue data) {
             if (ev == "library.changed" || ev == "index.done")
+            {
                 emit("library.changed", JSONValue.emptyObject);
+                requestReverify();   // e.g. the computer's "Remove photos from phones"
+            }
             else if (ev == "people.changed" || ev == "faces.done")
                 emit(ev, data);   // the UI reloads people; a face named on the computer shows here
             else if (ev == "pairing.code")
@@ -2869,6 +2877,113 @@ private bool slowComputer;
             catch (Exception e)
                 plog("sync: cannot write status: ", e.msg);
         }
+    }
+
+    // ---- the sent photos, checked again --------------------------------------------------
+    //
+    // A photo marked sent is never offered again. When the computer loses it (the user removed
+    // the photos from phones there, to have them sent again), the mark is stale: on every
+    // connection, and after the computer says its library changed (at most every
+    // reverifyEveryMs), the sent photos' hashes are put to library.holds and those it does
+    // not hold go back to the queue. Any failure (link lost, an error, an older computer
+    // without library.holds) leaves every mark as it was.
+
+    private QTimer verifyLater;
+    private bool verifying;
+    private bool verifyAgain;   // asked while a run was on: once more when it ends
+    private long linkGen;   // bumped on every connection change
+    private MonoTime lastVerify;
+    private enum reverifyEveryMs = 30_000;
+
+    private void requestReverify()
+    {
+        if (!computer.connected)
+            return;
+        if (verifying)
+        {
+            verifyAgain = true;   // this run may have read the computer before the change
+            return;
+        }
+        immutable since = (MonoTime.currTime - lastVerify).total!"msecs";
+        if (since < reverifyEveryMs)
+        {
+            if (!verifyLater.isActive())
+            {
+                verifyLater.setInterval(cast(int) (reverifyEveryMs - since));
+                verifyLater.start();
+            }
+            return;
+        }
+        reverifySent();
+    }
+
+    private void reverifySent()
+    {
+        if (verifying || !computer.connected)
+            return;
+        struct Mark { long id; string hash; }
+        Mark[] marks;
+        foreach (ref ph; index.onComputer())
+            marks ~= Mark(ph.id, ph.hash);
+        lastVerify = MonoTime.currTime;
+        if (marks.length == 0)
+            return;
+        verifying = true;
+        immutable eg = endpointGen, lg = linkGen;
+        bool[string] have;
+        void done(bool ok)
+        {
+            verifying = false;
+            lastVerify = MonoTime.currTime;
+            if (verifyAgain)
+            {
+                verifyAgain = false;
+                requestReverify();   // after the usual pause (a timer)
+            }
+            if (!ok)
+                return;
+            long back;
+            foreach (ref m; marks)
+                if (m.hash !in have && index.unmarkSent(m.id, m.hash))
+                    back++;
+            if (back == 0)
+                return;
+            plog("sync: ", back, " photos the computer no longer has — sending them again");
+            emit("library.changed", JSONValue.emptyObject);
+            startSync();
+        }
+        void ask(size_t from)
+        {
+            if (eg != endpointGen || lg != linkGen || !computer.connected)
+            {
+                done(false);   // another link (or none): its answers are not about these photos
+                return;
+            }
+            if (from >= marks.length)
+            {
+                done(true);
+                return;
+            }
+            import std.algorithm : min;
+
+            immutable to = min(marks.length, from + offerBatchN);
+            JSONValue[] batch;
+            foreach (ref m; marks[from .. to])
+                batch ~= JSONValue(m.hash);
+            computer.request("library.holds", JSONValue(["hashes": JSONValue(batch)]), (r, e) {
+                if (e.type != JSONType.null_ || r.type != JSONType.object || "have" !in r
+                    || r["have"].type != JSONType.array)
+                {
+                    done(false);   // an older computer (no library.holds), or an error: keep the marks
+                    return;
+                }
+                foreach (h; r["have"].array)
+                    if (h.type == JSONType.string)
+                        have[h.str] = true;
+                ask(to);
+            });
+        }
+        ask(0);
     }
 
     /// Queue what is missing on the computer and start, if allowed and connected.

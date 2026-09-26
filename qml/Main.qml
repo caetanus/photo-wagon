@@ -304,6 +304,7 @@ ApplicationWindow {
             AppMenuItem { text: "Similar Photos…"; onTriggered: toolsDialog.openAt(1) }
             AppMenuItem { text: "Unnamed Faces…"; onTriggered: toolsDialog.openAt(2) }
             AppMenuItem { text: "Screenshots & Memes…"; onTriggered: toolsDialog.openAt(3) }
+            AppMenuItem { text: "Photos from Phones…"; onTriggered: toolsDialog.openAt(4) }
         }
         ThemedMenu {
             title: "Window"
@@ -801,6 +802,7 @@ ApplicationWindow {
                 AppMenuItem { text: "Similar Photos…"; onTriggered: toolsDialog.openAt(1) }
                 AppMenuItem { text: "Unnamed Faces…"; onTriggered: toolsDialog.openAt(2) }
                 AppMenuItem { text: "Screenshots & Memes…"; onTriggered: toolsDialog.openAt(3) }
+                AppMenuItem { text: "Photos from Phones…"; onTriggered: toolsDialog.openAt(4) }
                 MenuSeparator {}
                 AppMenuItem { action: actMinimize }
                 AppMenuItem { action: actZoomWindow }

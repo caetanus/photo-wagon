@@ -265,3 +265,31 @@ unittest
 	assert(freePath(d, "a.jpg") == buildPath(d, "a-2.jpg"));
 	assert(freePath(d, "b.jpg") == buildPath(d, "b.jpg"));
 }
+
+/// `library.removeImports` — the photos the phones sent (everything under `<data dir>/imports/`)
+/// leave this computer, so a phone sends them again: {dryRun: true} → {count, bytes};
+/// otherwise → {removed, failed}. The files go to the desktop's trash (recoverable), the rows
+/// leave the library, and — unlike photo.delete — their hashes are NOT turned away (a decline
+/// is lifted), so the phone's next sync is asked for them. The resumable-push spool
+/// (imports/.pieces, .partial) is kept: it is keyed by sha256 and verified piece by piece, so
+/// a re-send may only go faster from it; its files are not photos and are never listed.
+void registerImportsCleanup(Registry r, Config cfg, PhotoRepo photos, void delegate() changed)
+{
+	immutable importsRoot = buildPath(cfg.dataDir, "imports");
+
+	r.add("library.removeImports", (JSONValue p) {
+		import photowagon.core.library.trash : moveToTrash;
+
+		immutable dry = p.type == JSONType.object && "dryRun" in p && p["dryRun"].type == JSONType.true_;
+		if (dry)
+		{
+			auto n = photos.countUnder(importsRoot);
+			return JSONValue(["count": JSONValue(n[0]), "bytes": JSONValue(n[1])]);
+		}
+		auto res = photos.removeUnder(importsRoot, (string path) { moveToTrash(path); });
+		logInfo("imports: %d photos from phones removed (%d could not go to the trash)", res[0], res[1]);
+		if (res[0] && changed !is null)
+			changed();
+		return JSONValue(["removed": JSONValue(res[0]), "failed": JSONValue(res[1])]);
+	});
+}

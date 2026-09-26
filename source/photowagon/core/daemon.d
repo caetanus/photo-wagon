@@ -21,7 +21,7 @@ import photowagon.core.api.device_api : registerDeviceApi;
 import photowagon.core.api.edit_api : registerEditApi;
 version (PW_NoVision) {} else import photowagon.core.api.face_api : registerFaceApi;
 version (PW_NoVision) {} else import photowagon.core.api.search_api : registerSearchApi;
-import photowagon.core.api.import_api : registerImportApi;
+import photowagon.core.api.import_api : registerImportApi, registerImportsCleanup;
 import photowagon.core.api.usb_api : registerUsbApi;
 import photowagon.core.api.cast_api : registerCastApi;
 import photowagon.core.api.library_api : registerLibraryApi;
@@ -220,6 +220,10 @@ version (PW_NoVision) {} else private StackService stacks;
 		else
 			registerImportApi(registry, cfg, roots, photos, indexer, blobStash, partials, pieces,
 				(long photoId, JSONValue fj) => facesService.acceptFromDevice(photoId, fj));
+		registerImportsCleanup(registry, cfg, photos, () {
+			events.emit("library.changed", JSONValue.emptyObject);
+			events.emit("people.changed", JSONValue.emptyObject);
+		});
 		version (PW_NoVision) {} else registerFaceApi(registry, faceRepo, facesService, store, events);
 		registerAlbumApi(registry, albums, photos, sharing);
 		registerMemoriesApi(registry, memories, photos);

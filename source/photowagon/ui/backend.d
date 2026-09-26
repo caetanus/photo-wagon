@@ -40,6 +40,7 @@ version (WithUi)
     Signal!() toolsSimilarChanged;
     Signal!() toolsThumbsChanged;
     Signal!() toolsJunkChanged;
+    Signal!() toolsImportsChanged;
     Signal!() mediaReadyChanged;
     Signal!() revealRowChanged;
     Signal!() navTargetChanged;
@@ -58,6 +59,8 @@ version (WithUi)
     /// the screenshots or memes grouped by where they came from (tools.junk)
     @Property("toolsJunkChanged") string toolsJunk = `{}`;
     private string junkKind;
+    /// Tools: the photos the phones sent {count, bytes}, then {removed, failed} once removed
+    @Property("toolsImportsChanged") string toolsImports = `{}`;
     /// Tools: {offset, total, clusters, loose, item?, candidates: [person]}
     @Property("toolsFaceChanged") string toolsFace = `{}`;
     /// The phone grid's rows (a QAbstractListModel built in D, updated by key on every page:
@@ -2491,6 +2494,30 @@ version (WithUi)
                 return;   // an answer for the other kind, asked before a switch
             toolsJunk = r.toString();
             toolsJunkChanged.emit();
+        });
+    }
+
+    /// Tools: how many photos the phones sent here (library.removeImports, dry run).
+    @Slot void loadImports()
+    {
+        client.request("library.removeImports", JSONValue(["dryRun": JSONValue(true)]), (r, e) {
+            if (e.type != JSONType.null_) { report("tools", e); return; }
+            toolsImports = r.toString();
+            toolsImportsChanged.emit();
+        });
+    }
+
+    /// Tools: the photos the phones sent leave this computer (to the trash) — the phones send
+    /// them again on their next sync. The answer {removed, failed} lands in toolsImports.
+    @Slot void removeImports()
+    {
+        client.request("library.removeImports", JSONValue.emptyObject, (r, e) {
+            if (e.type != JSONType.null_) { report("tools", e); loadImports(); return; }
+            JSONValue j = r;
+            j["done"] = true;
+            toolsImports = j.toString();
+            toolsImportsChanged.emit();
+            refreshTimeline();
         });
     }
 

@@ -197,6 +197,114 @@ final class PhotoRepo
 		return s.step();
 	}
 
+	/// Welcome a declined file back: a phone offering it is asked to send it again.
+	void undecline(string hash)
+	{
+		if (!hash.length)
+			return;
+		auto s = db.prepare("DELETE FROM declined_hashes WHERE hash = ?");
+		s.bind(1, hash);
+		s.run();
+	}
+
+	/// The photos whose file lies under `dir` (the phones' imports folder): how many, and their
+	/// bytes on record.
+	long[2] countUnder(string dir)
+	{
+		long n, bytes;
+		foreach (ref row; rowsUnder(dir))
+		{
+			n++;
+			bytes += row.size;
+		}
+		return [n, bytes];
+	}
+
+	/// Every photo whose file lies under `dir` leaves the library: its file goes through
+	/// `dispose` (the trash), then its row (faces and album entries follow by cascade). Unlike
+	/// photo.delete the hash is NOT turned away — any decline is lifted — so the phone that sent
+	/// it may send it again. A file `dispose` could not move keeps its row (it is still here).
+	/// Returns [removed, failed].
+	long[2] removeUnder(string dir, void delegate(string path) dispose)
+	{
+		import std.file : exists;
+
+		long removed, failed;
+		foreach (ref row; rowsUnder(dir))
+		{
+			try
+			{
+				if (row.path.exists)
+					dispose(row.path);
+			}
+			catch (Exception)
+			{
+				failed++;
+				continue;
+			}
+			remove(row.id);
+			undecline(row.hash);
+			removed++;
+		}
+		return [removed, failed];
+	}
+
+	private struct UnderRow { long id; string path, hash; long size; }
+
+	/// The rows under `dir` by what the paths ARE, not how they are spelled: the data folder
+	/// may be reached through a symlink now and was not when the photos landed (or the other
+	/// way round), so a stored path is inside when its folder resolves inside `dir`'s real
+	/// place — or, for a file gone from disk, when it is spelled inside `dir`. Candidates are
+	/// the rows with the folder's name in their path.
+	private UnderRow[] rowsUnder(string dir)
+	{
+		import std.algorithm : startsWith;
+		import std.path : baseName, dirName;
+
+		immutable spelled = dirPrefix(dir);
+		immutable real_ = dirPrefix(realPathOr(dir));
+		immutable needle = "/" ~ baseName(dir.length > 1 && dir[$ - 1] == '/' ? dir[0 .. $ - 1] : dir) ~ "/";
+		string[string] resolved;   // a folder → its real place (one lookup per folder)
+		UnderRow[] rows;
+		auto s = db.prepare("SELECT id, path, hash, size FROM photos WHERE path IS NOT NULL AND instr(path, ?) > 0");
+		s.bind(1, needle);
+		while (s.step())
+		{
+			auto row = UnderRow(s.getLong(0), s.getString(1), s.isNull(2) ? null : s.getString(2), s.getLong(3));
+			bool inside = row.path.startsWith(spelled) || row.path.startsWith(real_);
+			if (!inside)
+			{
+				immutable folder = dirName(row.path);
+				auto r = folder in resolved;
+				immutable where = r ? *r : (resolved[folder] = dirPrefix(realPathOr(folder)));
+				inside = where.startsWith(real_);
+			}
+			if (inside)
+				rows ~= row;
+		}
+		return rows;
+	}
+
+	/// The real place of `path` (symlinks resolved), or `path` itself when it cannot be had.
+	private static string realPathOr(string path)
+	{
+		import core.stdc.stdlib : free;
+		import core.sys.posix.stdlib : realpath;
+		import std.string : fromStringz, toStringz;
+
+		auto r = realpath(path.toStringz, null);
+		if (r is null)
+			return path;
+		scope (exit)
+			free(r);
+		return r.fromStringz.idup;
+	}
+
+	private static string dirPrefix(string dir)
+	{
+		return dir.length && dir[$ - 1] == '/' ? dir : dir ~ "/";
+	}
+
 	long insert(ref Photo p)
 	{
 		auto s = db.prepare(`INSERT INTO photos (hash, path, root_id, size, mtime_ms, taken_ts, taken_at,
@@ -797,4 +905,70 @@ unittest
 	assert(repo.hasHash("h2") && !repo.holdsHash("h2"));   // a row, no file
 	assert(!repo.holdsHash("h3"));                          // a file, not the size recorded
 	assert(!repo.holdsHash("nope"));
+}
+
+unittest
+{
+	// removeUnder: the imports folder's photos leave (files through dispose, rows gone), their
+	// hashes are welcomed back (not declined), photos elsewhere and in a look-alike folder stay
+	import photowagon.core.db.schema : migrate;
+	import std.file : tempDir, write, exists, mkdirRecurse, rmdirRecurse;
+	import std.path : buildPath;
+
+	auto db = new Database(":memory:");
+	scope (exit)
+		db.close();
+	migrate(db);
+	immutable dir = buildPath(tempDir, "pw-rmimports-ut");
+	if (dir.exists)
+		rmdirRecurse(dir);
+	immutable imports = buildPath(dir, "imports"), twin = buildPath(dir, "imports-other");
+	mkdirRecurse(buildPath(imports, "2026-09"));
+	mkdirRecurse(twin);
+	scope (exit)
+		rmdirRecurse(dir);
+	immutable p1 = buildPath(imports, "2026-09", "a.jpg"), p2 = buildPath(imports, "b.jpg"),
+		p3 = buildPath(twin, "c.jpg"), p4 = buildPath(imports, "stuck.jpg");
+	foreach (f; [p1, p2, p3, p4])
+		write(f, "12345");
+	auto repo = new PhotoRepo(db, new ContentStore(buildPath(dir, "store")));
+	Photo a = {hash: "i1", path: p1, size: 5, takenAt: "x"};
+	Photo b = {hash: "i2", path: p2, size: 7, takenAt: "x"};
+	Photo c = {hash: "o1", path: p3, size: 5, takenAt: "x"};
+	Photo d = {hash: "i3", path: p4, size: 5, takenAt: "x"};
+	repo.insert(a);
+	repo.insert(b);
+	repo.insert(c);
+	repo.insert(d);
+	repo.decline("i2");   // turned away earlier: must be welcomed back
+	assert(repo.countUnder(imports) == [3L, 17L]);
+	string[] disposed;
+	auto r = repo.removeUnder(imports ~ "/", (string path) {
+		if (path == p4)
+			throw new Exception("trash refused");
+		disposed ~= path;
+	});
+	assert(r == [2L, 1L]);
+	assert(disposed.length == 2);
+	assert(!repo.hasHash("i1") && !repo.hasHash("i2"));
+	assert(repo.hasHash("i3"));                          // its file could not go: kept
+	assert(repo.hasHash("o1"));                          // "imports-other" is not under imports/
+	assert(!repo.isDeclined("i1") && !repo.isDeclined("i2"));
+	assert(repo.countUnder(imports) == [1L, 5L]);
+
+	// the data folder reached through a symlink now: the stored (real) paths still count
+	import std.file : symlink;
+
+	immutable alias_ = buildPath(dir, "alias");
+	symlink(dir, alias_);
+	assert(repo.countUnder(buildPath(alias_, "imports")) == [1L, 5L]);
+	// and the other way round: stored through the alias, asked by the real path
+	immutable p5 = buildPath(alias_, "imports", "e.jpg");
+	write(p5, "123");
+	Photo e = {hash: "i5", path: p5, size: 3, takenAt: "x"};
+	repo.insert(e);
+	assert(repo.countUnder(imports) == [2L, 8L]);
+	auto r2 = repo.removeUnder(imports, (string path) {});
+	assert(r2 == [2L, 0L]);   // e.jpg and stuck.jpg (dispose does not refuse now)
+	assert(!repo.hasHash("i5") && repo.hasHash("o1"));
 }

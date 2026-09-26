@@ -11,7 +11,7 @@ Dialog {
     id: dlg
     required property QtObject theme
     required property QtObject icons
-    property int section: 0               // 0 Thumbnails · 1 Similar photos · 2 Unnamed faces · 3 Screenshots & memes
+    property int section: 0               // 0 Thumbnails · 1 Similar photos · 2 Unnamed faces · 3 Screenshots & memes · 4 From phones
 
     function openAt(s) { section = s; open() }
 
@@ -19,6 +19,7 @@ Dialog {
     readonly property var thumbs: { try { return JSON.parse(library.toolsThumbs) } catch (e) { return ({}) } }
     readonly property var face: { try { return JSON.parse(library.toolsFace) } catch (e) { return ({}) } }
     readonly property var junk: { try { return JSON.parse(library.toolsJunk) } catch (e) { return ({}) } }
+    readonly property var imports: { try { return JSON.parse(library.toolsImports) } catch (e) { return ({}) } }
     property string junkKind: "screenshot"
 
     title: "Tools"
@@ -39,6 +40,7 @@ Dialog {
         if (section === 0) library.loadThumbTool()
         if (section === 2) library.loadUnidentified(Math.max(0, face.offset || 0))
         if (section === 3) library.loadJunk(junkKind)
+        if (section === 4) library.loadImports()
     }
     onJunkKindChanged: if (opened && section === 3) library.loadJunk(junkKind)
 
@@ -157,6 +159,7 @@ Dialog {
                 NavRow { index: 1; label: "Similar photos"; hint: dlg.similar.done ? (dlg.similar.groups.length + " groups") : "Near-identical photos" }
                 NavRow { index: 2; label: "Unnamed faces"; hint: dlg.face.total !== undefined ? (dlg.face.total + " to go") : "Name them quickly" }
                 NavRow { index: 3; label: "Screenshots & memes"; hint: dlg.junk.total !== undefined ? (dlg.junk.total + (dlg.junk.kind === "meme" ? " memes" : " screenshots")) : "Remove them by group" }
+                NavRow { index: 4; label: "From phones"; hint: dlg.imports.count !== undefined ? (dlg.imports.count + " photos") : "Photos the phones sent" }
                 Item { Layout.fillHeight: true }
                 Button { text: "Close"; Layout.fillWidth: true; onClicked: dlg.close() }
             }
@@ -600,6 +603,63 @@ Dialog {
                         color: dlg.theme.muted
                     }
                 }
+            }
+
+            // ================= Photos the phones sent =================
+            ColumnLayout {
+                id: importsTool
+                spacing: 12
+                property bool armed: false
+                property bool busy: false
+                Connections {
+                    target: library
+                    function onToolsImportsChanged() { importsTool.busy = false }
+                }
+                function mb(b) {
+                    return b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : b >= 1e6 ? Math.round(b / 1e6) + " MB"
+                        : Math.max(1, Math.round(b / 1e3)) + " KB"
+                }
+
+                Label { text: "Photos from phones"; color: dlg.theme.text; font.pixelSize: 20; font.weight: Font.DemiBold }
+                Label {
+                    Layout.fillWidth: true; wrapMode: Text.WordWrap; color: dlg.theme.muted; font.pixelSize: 13
+                    text: "Everything the phones sent to this computer. Removing them moves the files to the Trash and takes them out of the library; the phones then send them again on their next sync."
+                }
+                Label {
+                    color: dlg.theme.text; font.pixelSize: 15
+                    text: dlg.imports.done === true
+                        ? (dlg.imports.removed + " photos moved to the Trash"
+                           + (dlg.imports.failed > 0 ? " · " + dlg.imports.failed + " could not be moved and stay" : "")
+                           + ". The phones will send them again.")
+                        : dlg.imports.count === undefined ? "Counting…"
+                        : dlg.imports.count === 0 ? "No photos from phones on this computer."
+                        : dlg.imports.count + " photos · " + importsTool.mb(dlg.imports.bytes || 0)
+                }
+                RowLayout {
+                    spacing: 8
+                    visible: dlg.imports.done !== true && (dlg.imports.count || 0) > 0
+                    Button {
+                        text: importsTool.busy ? "Removing…"
+                            : importsTool.armed ? "Confirm: move " + dlg.imports.count + " photos to the Trash"
+                            : "Remove from this computer…"
+                        highlighted: importsTool.armed
+                        enabled: !importsTool.busy
+                        onClicked: {
+                            if (!importsTool.armed) { importsTool.armed = true; return }
+                            importsTool.armed = false
+                            importsTool.busy = true
+                            library.removeImports()
+                        }
+                    }
+                    Button { text: "Cancel"; visible: importsTool.armed; onClicked: importsTool.armed = false }
+                    Timer { running: importsTool.armed; interval: 8000; onTriggered: importsTool.armed = false }
+                }
+                Label {
+                    visible: importsTool.armed
+                    Layout.fillWidth: true; wrapMode: Text.WordWrap; color: dlg.theme.muted; font.pixelSize: 12
+                    text: "They can be restored from the Trash. Albums, favorites and names given to faces on these photos are lost."
+                }
+                Item { Layout.fillHeight: true }
             }
         }
     }

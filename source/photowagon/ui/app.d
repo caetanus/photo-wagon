@@ -32,6 +32,14 @@ extern (C)
     void pw_css_load_string(void* theme, const(char)* css);
     void pw_css_viewport(void* theme, double w, double h);
 }
+
+// Qt Multimedia warm-up (csrc/media_prewarm.h): the FFmpeg backend's hardware-decoder probe
+// runs on a worker thread at start-up instead of freezing the window on the first video.
+extern (C)
+{
+    void pw_media_prewarm();
+    void pw_media_prewarm_join();
+}
 import photowagon.ui.bridge : CoreBridge;
 import photowagon.core.config : Config;
 import photowagon.core.ipc.link : InProcessLink;
@@ -59,6 +67,9 @@ int runUi(Config cfg, InProcessLink link)
         environment["QSG_RENDER_LOOP"] = "basic";
 
     cast(void) createApp(APP_ID);
+    pw_media_prewarm();
+    scope (exit)
+        pw_media_prewarm_join();
     QCoreApplication.setOrganizationName("PhotoWagon");
     QCoreApplication.setApplicationName(APP_ID);
     QCoreApplication.setApplicationVersion(APP_VERSION);

@@ -14,6 +14,7 @@ Item {
     property var photo: null            // parsed library.current
     property var items: []              // the page's items, for the filmstrip
     property var faces: []
+    property bool arrowHot: false        // the pointer on a prev/next arrow (keeps a video's controls up)
     property var people: []
     property bool infoOpen: false
     /// parsed library.photoTags: {id, scene, mood, by, scores: {scene: [{tag, prob}], mood: […]}}
@@ -320,10 +321,24 @@ Item {
         // move to a still (which stops playback).
         Loader {
             id: videoLoader
-            active: stage.isVideo
+            // not before the video backend's start-up probe is done: a player created during it
+            // waits for it on the GUI thread (the poster below shows meanwhile)
+            active: stage.isVideo && library.mediaReady
             x: image.x; y: image.y
             width: image.width; height: image.height
             sourceComponent: videoComp
+        }
+        Timer {
+            interval: 100; repeat: true
+            running: stage.isVideo && !library.mediaReady
+            onTriggered: library.checkMedia()
+        }
+        Image {   // the poster while the video backend gets ready (a second at most, right after start)
+            anchors.fill: videoLoader
+            visible: stage.isVideo && !library.mediaReady
+            source: visible && viewer.photo ? (viewer.photo.thumbUrl || "") : ""
+            fillMode: Image.PreserveAspectFit
+            asynchronous: true
         }
         Component {
             id: videoComp
@@ -335,6 +350,18 @@ Item {
                     return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2)
                 }
                 // A crisp filled play triangle (the "▶" glyph rendered thin and off-centre).
+                // While it plays, the controls fade away; a mouse move brings them back for 1 s.
+                // Paused, or with the pointer on a control, they stay.
+                property bool awake: true
+                readonly property bool playing: mp.playbackState === MediaPlayer.PlayingState
+                readonly property bool idle: playing && !awake && !barHover.hovered && !speedHover.hovered && !scrub.pressed && !viewer.arrowHot
+                function wake() { awake = true; idleTimer.restart() }
+                onPlayingChanged: wake()
+                Timer { id: idleTimer; interval: 1000; onTriggered: vplayer.awake = false }
+                HoverHandler {
+                    cursorShape: vplayer.idle ? Qt.BlankCursor : Qt.ArrowCursor
+                    onPointChanged: vplayer.wake()
+                }
                 readonly property string playGlyph: "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#ffffff"><path d="M8 5v14l11-7z"/></svg>')
                 MediaPlayer {
                     id: mp
@@ -372,6 +399,9 @@ Item {
                     anchors.top: parent.top; anchors.right: parent.right; anchors.margins: 14
                     spacing: 6
                     visible: mp.duration > 0
+                    opacity: vplayer.idle ? 0 : 1
+                    Behavior on opacity { NumberAnimation { duration: 300 } }
+                    HoverHandler { id: speedHover }
                     Repeater {
                         model: [0.5, 1, 2, 3]
                         Rectangle {
@@ -396,10 +426,14 @@ Item {
                     radius: 8
                     color: Qt.rgba(0, 0, 0, 0.5)
                     visible: mp.duration > 0
+                    opacity: vplayer.idle ? 0 : 1
+                    Behavior on opacity { NumberAnimation { duration: 300 } }
+                    HoverHandler { id: barHover }
                     RowLayout {
                         anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12; spacing: 10
                         Label { text: vplayer.fmt(mp.position); color: "white"; font.pixelSize: 12 }
                         Slider {
+                            id: scrub
                             Layout.fillWidth: true
                             from: 0; to: Math.max(1, mp.duration)
                             value: mp.position
@@ -569,8 +603,10 @@ Item {
             width: 44; height: 44; radius: 22
             color: Qt.rgba(0, 0, 0, 0.45)
             visible: enabledArrow
-            opacity: stageHover.hovered ? 0.95 : 0.35
-            Behavior on opacity { NumberAnimation { duration: 120 } }
+            // a playing video's controls faded out: the arrows go with them
+            opacity: (videoLoader.item && videoLoader.item.idle) ? 0 : (stageHover.hovered ? 0.95 : 0.35)
+            HoverHandler { onHoveredChanged: viewer.arrowHot = hovered }
+            Behavior on opacity { NumberAnimation { duration: 300 } }
             Image { anchors.centerIn: parent; source: icons.tint(icon, "white"); sourceSize.width: 22; sourceSize.height: 22 }
         }
         Arrow {

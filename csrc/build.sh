@@ -38,7 +38,7 @@ elif [ ! -f "$QMLCSS/build/libqmlcssengine.a" ]; then
 fi
 
 fresh=1
-for f in face_opencv.cpp face_opencv.h clip_opencv.cpp clip_opencv.h ocr_tesseract.cpp ocr_tesseract.h sqlite-vec.c sqlite-vec.h clipboard_qt.cpp clipboard_qt.h; do
+for f in face_opencv.cpp face_opencv.h clip_opencv.cpp clip_opencv.h ocr_tesseract.cpp ocr_tesseract.h sqlite-vec.c sqlite-vec.h clipboard_qt.cpp clipboard_qt.h media_prewarm.cpp media_prewarm.h; do
     [ libface_opencv.a -nt "$f" ] || fresh=0
 done
 [ $fresh = 1 ] && exit 0
@@ -58,10 +58,13 @@ fi
 ${CC:-gcc} -std=gnu11 -O2 -DSQLITE_CORE -fPIC -c sqlite-vec.c -o sqlite-vec.o
 rm -f libface_opencv.a
 ar rcs libface_opencv.a face_opencv.o clip_opencv.o sqlite-vec.o $([ -f ocr_tesseract.o ] && echo ocr_tesseract.o)
-# the clipboard shim needs Qt: a separate archive, linked by the "app" configuration only
-if pkg-config --exists Qt6Gui; then
+# the clipboard shim and the multimedia warm-up need Qt: a separate archive, linked by the
+# "app" configuration only (which needs Qt Multimedia anyway: the viewer plays videos)
+if pkg-config --exists Qt6Gui Qt6Multimedia; then
     ${CXX:-g++} -std=c++17 -O2 -fPIC $(pkg-config --cflags Qt6Gui Qt6Core) -c clipboard_qt.cpp -o clipboard_qt.o
+    # (and the Qt Multimedia warm-up, media_prewarm.h)
+    ${CXX:-g++} -std=c++17 -O2 -fPIC $(pkg-config --cflags Qt6Multimedia Qt6Core) -c media_prewarm.cpp -o media_prewarm.o
     rm -f libclipboard_qt.a
-    ar rcs libclipboard_qt.a clipboard_qt.o
+    ar rcs libclipboard_qt.a clipboard_qt.o media_prewarm.o
 fi
 echo "csrc: built libface_opencv.a"

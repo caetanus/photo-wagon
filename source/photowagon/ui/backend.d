@@ -28,6 +28,8 @@ version (WithUi)
 	/// csrc/clipboard_qt.h: the QMimeData is created in C++ so the clipboard is its only owner.
 	/// Desktop only: the phone client (no WithUi) has no file clipboard.
 	private extern (C) int pw_clipboard_set_files(const char* uris, const char* gnome, const char* text);
+	/// csrc/media_prewarm.h: 1 once Qt Multimedia's start-up probe (run off the GUI thread) is done.
+	private extern (C) int pw_media_ready();
 }
 
 @QObject class Library
@@ -38,6 +40,10 @@ version (WithUi)
     Signal!() toolsSimilarChanged;
     Signal!() toolsThumbsChanged;
     Signal!() toolsJunkChanged;
+    Signal!() mediaReadyChanged;
+    /// Desktop: the video backend finished its start-up probe; a MediaPlayer created before
+    /// would block the window until it does (the viewer shows the poster meanwhile).
+    @Property("mediaReadyChanged") bool mediaReady = false;
     Signal!() toolsFaceChanged;
     /// Tools (desktop): the similar-photos scan {running, done, progress, total, groups?}
     @Property("toolsSimilarChanged") string toolsSimilar = `{}`;
@@ -2296,6 +2302,19 @@ version (WithUi)
             toolsThumbs = r.toString();
             toolsThumbsChanged.emit();
         });
+    }
+
+    /// Polled by the viewer (while false) until the video backend is ready.
+    @Slot void checkMedia()
+    {
+        bool r = true;
+        version (WithUi)
+            r = pw_media_ready() != 0;
+        if (r != mediaReady)
+        {
+            mediaReady = r;
+            mediaReadyChanged.emit();
+        }
     }
 
     /// The screenshots ("screenshot") or memes ("meme"), grouped by app or month.

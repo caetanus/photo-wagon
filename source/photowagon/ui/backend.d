@@ -2498,6 +2498,13 @@ version (WithUi)
         }
     }
 
+    /// Stacks of near-identical photos as one tile, or every photo on its own (Settings).
+    @Slot void setGridStacks(bool on)
+    {
+        if (gridRows !is null)
+            gridRows.setStacks(on);
+    }
+
     /// The widest grid still laid out as a mosaic (the desktop's zoom goes wider than the phone's).
     @Slot void setGridMosaicMax(int m)
     {

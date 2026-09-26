@@ -67,6 +67,7 @@ import photowagon.core.library.photos : PhotoRepo;
 import photowagon.core.library.places : Geocoder, PlaceService;
 version (PW_NoVision) {} else import photowagon.core.library.scenes : SceneService;
 version (PW_NoVision) {} else import photowagon.core.library.ocr : OcrService;
+version (PW_NoVision) {} else import photowagon.core.library.stacks : StackService;
 version (PW_NoVision) {} else import photowagon.core.library.placemodel : PlaceModel;
 import photowagon.core.library.keywords : KeywordService;
 import photowagon.core.metadata.filetags : FileTagWriter, applyFileSubjects;
@@ -106,6 +107,7 @@ final class Daemon : ServerControl
 	private PlaceService places;
 	version (PW_NoVision) {} else private SceneService scenes;
 	version (PW_NoVision) {} else private OcrService ocr;
+version (PW_NoVision) {} else private StackService stacks;
 	version (PW_NoVision) {} else private PlaceModel placeModel;
 	private FileTagWriter fileTags;
 	private Node node;
@@ -175,9 +177,11 @@ final class Daemon : ServerControl
 		{
 			placeModel = new PlaceModel(db, events);
 			ocr = new OcrService(cfg, db, photos, store, events);
+			stacks = new StackService(db, events);
 			// scenes run after kinds, so by onDone both `kind` and the 'Text' scene tag are
 			// known — exactly what OCR needs to pick screenshots/memes/documents.
-			scenes.onDone = () { placeModel.start(); ocr.start(); };
+			// stacks compare neighbouring photos' embeddings: current once the scenes pass is done
+			scenes.onDone = () { placeModel.start(); ocr.start(); stacks.start(); };
 		}
 
 		if (cfg.p2p)
@@ -529,6 +533,8 @@ final class Daemon : ServerControl
 				scenes.close();
 			if (ocr)
 				ocr.close();
+			if (stacks)
+				stacks.close();
 			if (placeModel)
 				placeModel.close();
 		}

@@ -32,6 +32,8 @@ ApplicationWindow {
     // tiling WM with no title bars looks cleaner without a bar of its own). The GTK theme's
     // headerbar always folds it.
     property bool menuInButton: false
+    // Settings → View → Stack similar photos (bursts of near-identical photos as one tile)
+    property bool stacksOn: true
     readonly property bool hamburger: root.csd || root.menuInButton
     readonly property bool dark: Application.styleHints.colorScheme === Qt.ColorScheme.Dark
     SystemPalette { id: sysPalette; colorGroup: SystemPalette.Active }
@@ -79,6 +81,7 @@ ApplicationWindow {
         root._ui.zoom = root.zoom
         root._ui.startupView = root.startupView
         root._ui.menuButton = root.menuInButton
+        root._ui.stacks = root.stacksOn
         library.saveUiState(JSON.stringify(root._ui))
     }
     Component.onCompleted: {
@@ -86,6 +89,8 @@ ApplicationWindow {
         if (["mac","system","gtk"].indexOf(root._ui.theme) >= 0) root.themeMode = root._ui.theme
         if (typeof root._ui.zoom === "number" && root._ui.zoom >= 72 && root._ui.zoom <= 320) root.zoom = root._ui.zoom
         if (typeof root._ui.menuButton === "boolean") root.menuInButton = root._ui.menuButton
+        if (typeof root._ui.stacks === "boolean") root.stacksOn = root._ui.stacks
+        library.setGridStacks(root.stacksOn)
         if (["years", "months", "days", "all"].indexOf(root._ui.startupView) >= 0) { root.startupView = root._ui.startupView; root.mode = root.startupView }
         library.refreshSystemAccent()
         const w = root._ui.win
@@ -832,6 +837,7 @@ ApplicationWindow {
                 onPick: (y, m) => { library.filterDate(y, m, 0); root.mode = "days" }
             }
             PhotoGrid {
+                stacks: root.stacksOn
                 id: grid
                 anchors.fill: parent
                 visible: !root.viewing && root.browsing && (root.mode === "days" || root.mode === "all")
@@ -1071,6 +1077,8 @@ ApplicationWindow {
         thumbSize: root.zoom
         startupView: root.startupView
         menuInButton: root.menuInButton
+        stacks: root.stacksOn
+        onPickStacks: (on) => { root.stacksOn = on; library.setGridStacks(on); root._scheduleSaveUi() }
         onPickTheme: (m) => { root.themeMode = m; root._scheduleSaveUi() }
         onPickMenuInButton: (on) => { root.menuInButton = on; root._scheduleSaveUi() }
         onPickThumbSize: (z) => { root.zoom = z; root._scheduleSaveUi() }

@@ -43,6 +43,7 @@ struct GridRow
     int cols = 4;
     bool headers = false;   // day headers (while selecting)
     int mosaicMax = 4;      // the widest grid still laid out as a mosaic (phone 4, desktop 8)
+    bool stacks = true;     // near-identical photos taken together as one tile
     private JSONValue[] lastItems;
 
     // ---- the model ----------------------------------------------------------------
@@ -86,7 +87,16 @@ struct GridRow
     void update(JSONValue[] items)
     {
         lastItems = items;
-        reconcile(build(items, cols, headers, mosaicMax));
+        reconcile(build(items, cols, headers, mosaicMax, stacks));
+    }
+
+    /// Stacks on or off (Settings: "Stack similar photos").
+    void setStacks(bool on)
+    {
+        if (on == stacks)
+            return;
+        stacks = on;
+        reconcile(build(lastItems, cols, headers, mosaicMax, stacks));
     }
 
     /// The widest grid (in columns) still laid out as a mosaic; wider ones are plain.
@@ -95,7 +105,7 @@ struct GridRow
         if (m == mosaicMax)
             return;
         mosaicMax = m;
-        reconcile(build(lastItems, cols, headers, mosaicMax));
+        reconcile(build(lastItems, cols, headers, mosaicMax, stacks));
     }
 
     /// Day headers on or off (the grid shows them while selecting).
@@ -104,7 +114,7 @@ struct GridRow
         if (on == headers)
             return;
         headers = on;
-        reconcile(build(lastItems, cols, headers, mosaicMax));
+        reconcile(build(lastItems, cols, headers, mosaicMax, stacks));
     }
 
     /// The column count changed (a pinch, a rotation): re-chunk the same photos.
@@ -113,7 +123,7 @@ struct GridRow
         if (c < 1 || c == cols)
             return;
         cols = c;
-        reconcile(build(lastItems, cols, headers, mosaicMax));
+        reconcile(build(lastItems, cols, headers, mosaicMax, stacks));
     }
 
     /// The row holding photo `pid` (a re-chunk keeps it in view), or -1.
@@ -395,7 +405,7 @@ private uint pick(long id)
 /// before each day, whose rows then end with it; without headers the mosaic runs on across
 /// days, as Google Photos' does (no half-empty last row per day), each row labelled with
 /// the day of its first photo.
-GridRow[] build(JSONValue[] items, int cols, bool headers = false, int mosaicMax = 4)
+GridRow[] build(JSONValue[] items, int cols, bool headers = false, int mosaicMax = 4, bool stacks = true)
 {
     import std.conv : to;
 
@@ -411,12 +421,34 @@ GridRow[] build(JSONValue[] items, int cols, bool headers = false, int mosaicMax
         if (headers)
             out_ ~= GridRow("h", dayOfSegment, dayLabel(ts), "[]", 0, null);
         JSONValue[] day;   // the segment: one day with headers, everything without
+        long[][] members;  // per entry of `day`: the photos it stands for (a stack: all of them)
         while (i < items.length && (!headers || dayKey(num(items[i], "takenTs")) == dayOfSegment))
-            day ~= items[i++];
+        {
+            // a stack: the photos in a row that share one show as its first (the newest)
+            immutable st = stacks ? num(items[i], "stack") : 0;
+            if (st && day.length && num(day[$ - 1], "stack") == st)
+                members[$ - 1] ~= num(items[i], "id");
+            else
+            {
+                day ~= items[i];
+                members ~= [num(items[i], "id")];
+            }
+            i++;
+        }
 
+        size_t[long] entryOf;   // photo id → its index in `day` (its members)
+        foreach (k, ref d; day)
+            entryOf[num(d, "id")] = k;
         JSONValue tile(JSONValue it, int x, int y, int w, int h)
         {
             JSONValue t = JSONValue.emptyObject;
+            if (auto k = num(it, "id") in entryOf)
+                if (members[*k].length > 1)
+                {
+                    t["stack"] = cast(long) members[*k].length;
+                    t["stackId"] = num(it, "stack");
+                    t["members"] = JSONValue(members[*k]);
+                }
             t["pid"] = num(it, "id");
             t["thumbUrl"] = str(it, "thumbUrl");
             t["sent"] = flag(it, "sent");
@@ -431,9 +463,11 @@ GridRow[] build(JSONValue[] items, int cols, bool headers = false, int mosaicMax
         }
         void emit(JSONValue[] tiles, JSONValue[] src, int span, string shape)
         {
-            string[] pids;
+            string[] pids;   // every photo it stands for, stacked ones too (finding one)
             foreach (it; src)
-                pids ~= num(it, "id").to!string;
+                if (auto k = num(it, "id") in entryOf)
+                    foreach (m; members[*k])
+                        pids ~= m.to!string;
             immutable first = num(src[0], "id");
             immutable firstTs = num(src[0], "takenTs");
             // keyed by its day, first photo and shape: a row keeps its delegate while photos
@@ -498,6 +532,18 @@ unittest
             assert(r.span == 1);
         its[0] = parseJSON(`{"id":1,"takenTs":1700000000,"kind":"photo","favorite":true}`);
         assert(build(its, 3)[0].span == 2);
+    }
+    // a stack: three photos sharing one show as one tile standing for all three
+    {
+        JSONValue[] its;
+        foreach (id; [9, 8, 7, 6])
+            its ~= parseJSON(`{"id":` ~ (cast(char)('0' + id)) ~ `,"takenTs":1700000000`
+                ~ (id >= 7 ? `,"stack":7` : ``) ~ `}`);
+        auto r = build(its, 3);
+        auto t = parseJSON(r[0].tiles).array;
+        assert(t.length == 2 && t[0]["stack"].integer == 3 && t[0]["members"].array.length == 3);
+        assert(r[0].pids.length == 4);
+        assert(parseJSON(build(its, 3, false, 4, false)[0].tiles).array.length == 3);   // stacks off
     }
     // headers on, 2 columns (plain): header, 2 rows of the day, header undated, 1 row
     auto rows = build(items, 2, true);

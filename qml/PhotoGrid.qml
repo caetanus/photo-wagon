@@ -48,8 +48,10 @@ Item {
     onPageChanged: {
         requesting = false
         syncModels()
+        const c = closedOverStacks(selected)   // a page brought more of a selected stack
+        if (c) { selected = c; selectionChanged() }
     }
-    onModeChanged: syncModels()
+    onModeChanged: { syncModels(); selectedChanged() }   // (re-close the selection over stacks)
 
     ListModel { id: daysModel; dynamicRoles: true }
 
@@ -131,7 +133,47 @@ Item {
         loadMore()
     }
 
+    // A stack's photos are selected together, however the selection was made (a click, the
+    // arrows, a Shift range, Select All) and also when a later page brings more of a stack
+    // in: the selection is always closed over the loaded stacks. (Off with stacks off.)
+    property bool stacks: true
+    property bool _closing: false
+    function closedOverStacks(sel) {
+        if (!stacks || mode !== "all") return null   // (Days shows every photo on its own)
+        const byStack = {}
+        for (const it of page.items) if (it.stack) (byStack[it.stack] = byStack[it.stack] || []).push(it.id)
+        let out = null
+        for (const k in byStack) {
+            const ids = byStack[k]
+            if (ids.some(id => sel[id]) && !ids.every(id => sel[id])) {
+                out = out || Object.assign({}, sel)
+                for (const id of ids) out[id] = true
+            }
+        }
+        return out
+    }
+    onSelectedChanged: if (!_closing) { const c = closedOverStacks(selected); if (c) { _closing = true; selected = c; _closing = false } }
+    onStacksChanged: selectedChanged()
+
     function selectOnly(id) { selected = ({ [id]: true }); selectionChanged() }
+    /// A stack's tile stands for all its photos: selecting it selects them all.
+    function selectIds(ids) { const s = {}; for (const id of ids) s[id] = true; selected = s; selectionChanged() }
+    // every loaded photo of the stacks these belong to (a stack a video splits in two tiles)
+    function stackMates(ids) {
+        if (!stacks || mode !== "all") return ids
+        const st = {}
+        for (const it of page.items) if (it.stack && ids.indexOf(it.id) >= 0) st[it.stack] = true
+        const out = ids.slice()
+        for (const it of page.items) if (it.stack && st[it.stack] && out.indexOf(it.id) < 0) out.push(it.id)
+        return out
+    }
+    function toggleIds(ids) {
+        ids = stackMates(ids)
+        const s = Object.assign({}, selected)
+        const on = !s[ids[0]]
+        for (const id of ids) { if (on) s[id] = true; else delete s[id] }
+        selected = s; selectionChanged()
+    }
     function toggle(id) {
         const s = Object.assign({}, selected)
         if (s[id]) delete s[id]; else s[id] = true
@@ -225,6 +267,8 @@ Item {
         required property var photo
         property int cw: 1   // its size in cells (a mosaic's big tile is 2×2)
         property int ch: 1
+        property var members: []   // a stack: every photo it stands for (the cover first)
+        readonly property var ids: members.length ? members : [photo.id]
         readonly property int cellIndex: grid.indexOfId[photo.id] !== undefined ? grid.indexOfId[photo.id] : -1
         width: cw * grid.cell + (cw - 1) * grid.gap
         height: ch * grid.cell + (ch - 1) * grid.gap
@@ -277,6 +321,28 @@ Item {
                 text: Math.floor(cell.photo.duration / 60000) + ":" + ("0" + Math.floor(cell.photo.duration / 1000) % 60).slice(-2)
                 color: "white"; font.pixelSize: 10
             }
+        }
+        // a stack of near-identical photos: its count, top right (as Google Photos shows it)
+        Rectangle {
+            visible: cell.members.length > 1
+            anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 6
+            width: stackRow.implicitWidth + 12; height: 22; radius: 11
+            color: Qt.rgba(0, 0, 0, 0.55)
+            Row {
+                id: stackRow
+                anchors.centerIn: parent
+                spacing: 5
+                Item {   // two offset squares: "a stack"
+                    width: 12; height: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                    Rectangle { x: 3; y: 0; width: 9; height: 9; radius: 1.5; color: "transparent"; border.color: "white"; border.width: 1.2 }
+                    Rectangle { x: 0; y: 3; width: 9; height: 9; radius: 1.5; color: Qt.rgba(0, 0, 0, 0.55); border.color: "white"; border.width: 1.2 }
+                }
+                Label { text: cell.members.length; color: "white"; font.pixelSize: 11; font.bold: true }
+            }
+            ToolTip.visible: stackHover.hovered
+            ToolTip.text: cell.members.length + " similar photos — open to see them all"
+            HoverHandler { id: stackHover }
         }
         // selection: white inner line + accent ring, check badge
         Rectangle {
@@ -334,12 +400,12 @@ Item {
         HoverHandler { id: cellHover }
         TapHandler {
             acceptedModifiers: Qt.NoModifier
-            onTapped: { grid.cursor = cell.cellIndex; grid.anchor = cell.cellIndex; grid.selectOnly(cell.photo.id); grid.forceActiveFocus() }
+            onTapped: { grid.cursor = cell.cellIndex; grid.anchor = cell.cellIndex; grid.selectIds(cell.ids); grid.forceActiveFocus() }
             onDoubleTapped: grid.open(cell.photo.id)
         }
         TapHandler {
             acceptedModifiers: Qt.ControlModifier
-            onTapped: { grid.cursor = cell.cellIndex; grid.anchor = cell.cellIndex; grid.toggle(cell.photo.id); grid.forceActiveFocus() }
+            onTapped: { grid.cursor = cell.cellIndex; grid.anchor = cell.cellIndex; grid.toggleIds(cell.ids); grid.forceActiveFocus() }
         }
         TapHandler {
             acceptedModifiers: Qt.ShiftModifier
@@ -348,7 +414,7 @@ Item {
         TapHandler {
             acceptedButtons: Qt.RightButton
             onTapped: {
-                if (!cell.isSelected) { grid.cursor = cell.cellIndex; grid.selectOnly(cell.photo.id) }
+                if (!cell.isSelected) { grid.cursor = cell.cellIndex; grid.selectIds(cell.ids) }
                 grid.forceActiveFocus()
                 grid.contextMenu(grid.selectedIds(), cell.photo.path || "", cell.photo.favorite === true)
             }
@@ -381,6 +447,7 @@ Item {
                     photo: grid.indexOfId[modelData.pid] !== undefined ? grid.page.items[grid.indexOfId[modelData.pid]] : ({ id: modelData.pid, thumbUrl: modelData.thumbUrl })
                     cw: modelData.w || 1
                     ch: modelData.h || 1
+                    members: modelData.members || []
                     x: (modelData.x || 0) * (grid.cell + grid.gap)
                     y: (modelData.y || 0) * (grid.cell + grid.gap)
                 }

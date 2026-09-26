@@ -16,12 +16,14 @@ Dialog {
     property string startupView: "all"    // "years" | "months" | "days" | "all"
     property int thumbSize: 176           // 72..320
     property bool menuInButton: false     // the menu bar folded into a ☰ button
+    property bool stacks: true            // near-identical photos as one tile
 
     // ---- choices reported back to the window ------------------------------------
     signal pickTheme(string mode)
     signal pickView(string v)
     signal pickThumbSize(int z)
     signal pickMenuInButton(bool on)
+    signal pickStacks(bool on)
     signal manageComputers()
 
     property int section: 0               // 0 Appearance · 1 View · 2 Sharing
@@ -226,6 +228,22 @@ Dialog {
                             text: "The grid remembers this size between sessions."
                             color: theme.muted; font.pixelSize: 12
                         }
+                    }
+
+                    Rectangle { Layout.fillWidth: true; height: 1; color: theme.separator }
+
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 12
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 4
+                            Label { text: "Stack similar photos"; font.pixelSize: 15; font.bold: true; color: theme.text }
+                            Label {
+                                text: "Near-identical photos taken together (a burst) show as one tile with a count; open it to see them all."
+                                color: theme.muted; font.pixelSize: 12
+                                wrapMode: Text.WordWrap; Layout.fillWidth: true
+                            }
+                        }
+                        Switch { checked: dlg.stacks; onToggled: dlg.pickStacks(checked) }
                     }
 
                     Rectangle { Layout.fillWidth: true; height: 1; color: theme.separator }

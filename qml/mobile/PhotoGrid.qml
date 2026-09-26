@@ -77,12 +77,41 @@ Item {
     readonly property int selectedCount: { selVersion; return Object.keys(selected).length }
     readonly property bool selecting: selectMode || selectedCount > 0
     function isSelected(pid) { selVersion; return selected[pid] !== undefined }
+    // (a stack's tile stands for all its photos: they go in and out together — every loaded
+    // photo of that stack, also the part a day header split into another tile)
+    function stackMates(ids) {
+        const items = (page && page.items) ? page.items : []
+        const stacksOf = {}
+        for (const it of items) if (ids.indexOf(it.id) >= 0 && it.stack) stacksOf[it.stack] = true
+        const out = ids.slice()
+        for (const it of items) if (it.stack && stacksOf[it.stack] && out.indexOf(it.id) < 0) out.push(it.id)
+        return out
+    }
     function toggleSelected(tile) {
-        if (selected[tile.pid] !== undefined) delete selected[tile.pid]
-        else selected[tile.pid] = { id: tile.pid, remote: tile.remote === true, sent: tile.sent === true }
+        const ids = stackMates(tile.members && tile.members.length ? tile.members : [tile.pid])
+        const on = selected[tile.pid] === undefined
+        for (const id of ids) {
+            if (!on) delete selected[id]
+            else selected[id] = { id: id, remote: tile.remote === true, sent: tile.sent === true }
+        }
         selVersion++
     }
     function clearSelection() { selected = ({}); selectMode = false; selVersion++ }
+    // a stack's photos go in and out together, also when a later page brings more of a
+    // selected stack in: the selection is closed over the loaded stacks
+    function closeStacks() {
+        const items = (page && page.items) ? page.items : []
+        const byStack = {}
+        for (const it of items) if (it.stack) (byStack[it.stack] = byStack[it.stack] || []).push(it)
+        let added = false
+        for (const k in byStack) {
+            const its = byStack[k]
+            if (its.some(it => selected[it.id] !== undefined))
+                for (const it of its)
+                    if (selected[it.id] === undefined) { selected[it.id] = { id: it.id, remote: it.remote === true, sent: it.sent === true }; added = true }
+        }
+        if (added) selVersion++
+    }
     function selectedIds() { return Object.keys(selected).map(k => Number(k)) }
     function selectedItems() { return Object.keys(selected).map(k => selected[k]) }
     // a whole day at once (the loaded photos of it): all on, or all off when already all on
@@ -98,14 +127,18 @@ Item {
     function toggleDay(key) {
         const day = dayItems(key)
         const on = !dayAllSelected(key)
-        for (const it of day) {
-            if (on) selected[it.id] = { id: it.id, remote: it.remote === true, sent: it.sent === true }
-            else delete selected[it.id]
+        const byId = {}
+        for (const it of (page && page.items) ? page.items : []) byId[it.id] = it
+        // (a stack reaching into the next day goes along whole)
+        for (const id of stackMates(day.map(it => it.id))) {
+            const it = byId[id]
+            if (on) selected[id] = { id: id, remote: it && it.remote === true, sent: it && it.sent === true }
+            else delete selected[id]
         }
         selVersion++
     }
 
-    onPageChanged: requesting = false
+    onPageChanged: { requesting = false; if (selectedCount > 0) closeStacks() }
     // the rows are built and reconciled in D (library.rows, a QAbstractListModel): a rotation,
     // a width change or a pinch only tells it the column count
     onColsChanged: { library.setGridColumns(cols, pendingAnchor); pendingAnchor = 0 }
@@ -226,6 +259,25 @@ Item {
                     id: vdur; anchors.centerIn: parent
                     text: Math.floor(cell.modelData.duration / 60000) + ":" + ("0" + Math.floor(cell.modelData.duration / 1000) % 60).slice(-2)
                     color: "white"; font.pixelSize: 9
+                }
+            }
+            // a stack of near-identical photos: its count, top right (as Google Photos shows it)
+            Rectangle {
+                visible: (cell.modelData.stack || 0) > 1
+                anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 6
+                width: stackRow.implicitWidth + 10; height: 20; radius: 10
+                color: Qt.rgba(0, 0, 0, 0.55)
+                Row {
+                    id: stackRow
+                    anchors.centerIn: parent
+                    spacing: 4
+                    Item {   // two offset squares: "a stack"
+                        width: 11; height: 11
+                        anchors.verticalCenter: parent.verticalCenter
+                        Rectangle { x: 3; y: 0; width: 8; height: 8; radius: 1.5; color: "transparent"; border.color: "white"; border.width: 1.2 }
+                        Rectangle { x: 0; y: 3; width: 8; height: 8; radius: 1.5; color: Qt.rgba(0, 0, 0, 0.55); border.color: "white"; border.width: 1.2 }
+                    }
+                    Text { text: cell.modelData.stack || ""; color: "white"; font.pixelSize: 11; font.weight: Font.DemiBold }
                 }
             }
             // "on the computer" is the quiet default for nearly every tile, so show it as a

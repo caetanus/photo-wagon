@@ -45,6 +45,7 @@ struct Photo
 	string editedHash; // the rendered result in the store
 	long durationMs;   // > 0 for a video (kind = 'video'); its running time
 	string ocrText;    // text read from the picture (OCR); null = not scanned or nothing found
+	long stackId;      // its stack of near-identical photos (core/library/stacks.d); 0 = none
 }
 
 /// Restricts a page or a count. Zero means "no restriction" for every field.
@@ -459,6 +460,7 @@ final class PhotoRepo
 			"video": JSONValue(p.kind == "video"),
 			"duration": JSONValue(p.durationMs),
 			"ocrText": JSONValue(p.ocrText),
+			"stack": p.stackId ? JSONValue(p.stackId) : JSONValue(null),
 		];
 		return j;
 	}
@@ -482,7 +484,7 @@ final class PhotoRepo
 		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'weather' AND t.tag <> ''),
 		(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'holiday' AND t.tag <> ''),
 		(SELECT group_concat(k.keyword, char(31)) FROM (SELECT keyword FROM photo_keywords WHERE photo_id = p.id ORDER BY keyword) k),
-		p.edits, p.edited_hash, p.duration_ms, p.ocr_text`;
+		p.edits, p.edited_hash, p.duration_ms, p.ocr_text, p.stack_id`;
 
 	private static Photo readRow(ref Statement s)
 	{
@@ -526,6 +528,7 @@ final class PhotoRepo
 		p.editedHash = s.getString(28);
 		p.durationMs = s.getLong(29);
 		p.ocrText = s.getString(30);
+		p.stackId = s.isNull(31) ? 0 : s.getLong(31);
 		return p;
 	}
 

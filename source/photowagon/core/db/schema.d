@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 19;
+enum currentVersion = 20;
 
 void migrate(Database db)
 {
@@ -60,6 +60,8 @@ void migrate(Database db)
 			migrateV18(db);
 		if (have < 19)
 			db.exec(schemaV19);
+		if (have < 20)
+			db.exec(schemaV20);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -286,6 +288,13 @@ CREATE TABLE photo_digest (
     pieces       BLOB NOT NULL,
     size         INTEGER NOT NULL
 );
+`;
+
+// Stacks (core/library/stacks.d): near-identical photos taken together show as one tile.
+// NULL = not in a stack; else the stack's smallest photo id.
+private enum schemaV20 = `
+ALTER TABLE photos ADD COLUMN stack_id INTEGER;
+CREATE INDEX photos_stack ON photos(stack_id) WHERE stack_id IS NOT NULL;
 `;
 
 private void migrateV18(Database db)

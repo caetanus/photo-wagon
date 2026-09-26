@@ -286,6 +286,7 @@ struct PhoneFilter
 {
     int year, month, day;
     string kind;   // "" any · "video" · "screenshot" · "photo" (neither)
+    bool hideSent; // leave out the photos the computer already has ("Hide imported photos")
 }
 
 enum thumbEdge = 512;
@@ -1100,6 +1101,8 @@ final class PhoneIndex
         // the grid hides stickers & banners (classified 'meme'); photos and screenshots stay
         if (p.kind == "meme")
             return false;
+        if (f.hideSent && p.sent)
+            return false;
         if (f.kind == "video" && !p.isVideo)
             return false;
         if (f.kind == "screenshot" && p.kind != "screenshot")
@@ -1147,6 +1150,17 @@ final class PhoneIndex
     }
 
     /// prev = the newer neighbour in display order, next = the older one; 0 = none.
+    /// The photos the computer has (delivered, by content hash): what "Free up space" may
+    /// delete from the phone. Every kind, whatever the grid shows.
+    const(PhonePhoto)[] onComputer() const
+    {
+        const(PhonePhoto)[] out_;
+        foreach (ref p; photos)
+            if (p.sent && p.hash.length)
+                out_ ~= p;
+        return out_;
+    }
+
     long[2] neighbours(long id, PhoneFilter f) const
     {
         long prev, next;

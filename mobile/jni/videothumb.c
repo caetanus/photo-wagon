@@ -139,3 +139,20 @@ int pw_share_image(void* env_, const char* path, const char* mime) {
     DEL(jmime); DEL(jpath); DEL(cls);
     return 0;
 }
+
+/* pw_delete_media — ask Android to delete these files (paths one per line) by calling the
+   static MainActivity.deleteMedia(String): it finds them in the MediaStore and shows the
+   system's own confirmation (MediaStore.createDeleteRequest). Returns 0 once dispatched, -1
+   if the class/method is missing. */
+int pw_delete_media(void* env_, const char* paths) {
+    JNIEnv* env = (JNIEnv*) env_;
+    jclass cls = (*env)->FindClass(env, "org/photowagon/mobile/MainActivity");
+    if (!cls) { failed(env); return -1; }
+    jmethodID mid = (*env)->GetStaticMethodID(env, cls, "deleteMedia", "(Ljava/lang/String;)V");
+    if (!mid) { failed(env); DEL(cls); return -1; }
+    jstring jpaths = (*env)->NewStringUTF(env, paths ? paths : "");
+    (*env)->CallStaticVoidMethod(env, cls, mid, jpaths);
+    if (failed(env)) {}   /* swallow any pending exception before returning to D */
+    DEL(jpaths); DEL(cls);
+    return 0;
+}

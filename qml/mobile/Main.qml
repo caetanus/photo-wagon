@@ -127,6 +127,16 @@ ApplicationWindow {
         library.showAll()
     }
     readonly property bool paired: library.computerPaired
+    // "Hide imported photos": the photos the computer already has left out of the grid; kept
+    // in the UI's remembered state (the backend applies it to every listing from startup)
+    readonly property bool hideImported: { try { return JSON.parse(library.uiState).hideImported === true } catch (e) { return false } }
+    function setHideImported(on) {
+        let st = {}
+        try { st = JSON.parse(library.uiState) || {} } catch (e) {}
+        st.hideImported = on
+        library.saveUiState(JSON.stringify(st))
+        library.setHideImported(on)
+    }
     function showToast(text) {
         toast.text = text
         toast.opacity = 1
@@ -285,6 +295,13 @@ ApplicationWindow {
                 visible: root.tab === 0 && (root.pageData.items || []).length > 0
                 icon_: icons.check
                 onClicked: grid.selectMode = true
+            }
+            // the Photos tab's own options: hide what the computer has, free up space
+            BarButton {
+                id: photosMenuButton
+                visible: root.tab === 0
+                icon_: icons.more
+                onClicked: photosMenu.popup(photosMenuButton, photosMenuButton.width - photosMenu.width, photosMenuButton.height)
             }
             // the computer link, top right (nothing until the phone core has told us its state)
             ToolButton {
@@ -718,6 +735,105 @@ ApplicationWindow {
             console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length)
             library.quit()
         })
+    }
+
+    Menu {
+        id: photosMenu
+        Material.background: theme.panel
+        MenuItem {
+            text: "Hide imported photos"
+            checkable: true
+            checked: root.hideImported
+            onToggled: root.setHideImported(checked)
+        }
+        MenuItem {
+            text: "Free up space…"
+            onTriggered: { library.importedInfo(); freeUpDialog.open() }
+        }
+    }
+
+    // "Free up space": our count first, then Android's own confirmation (it deletes)
+    Dialog {
+        id: freeUpDialog
+        readonly property var info: { try { return JSON.parse(library.imported) } catch (e) { return { count: -1, bytes: 0 } } }
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(340, root.width - 48)
+        title: "Free up space"
+        standardButtons: info.count > 0 ? Dialog.Yes | Dialog.No : Dialog.Close
+        Material.background: theme.panel
+        onAccepted: {
+            freeUp.before = info.count
+            freeUp.asked = false; freeUp.left = false
+            library.freeUpSpace()
+        }
+        contentItem: Label {
+            text: freeUpDialog.info.count < 0 ? "Counting the photos already on the computer…"
+                : freeUpDialog.info.count === 0 ? "No photo on this phone is on the computer yet."
+                : freeUpDialog.info.count + (freeUpDialog.info.count === 1 ? " photo" : " photos")
+                  + " (" + (freeUpDialog.info.bytes / 1048576).toFixed(freeUpDialog.info.bytes < 10485760 ? 1 : 0) + " MB)"
+                  + (freeUpDialog.info.count === 1 ? " is" : " are") + " already on the computer. Delete them from this phone?"
+            color: theme.muted; font.pixelSize: 13; wrapMode: Text.WordWrap
+        }
+    }
+    // Android's confirmation takes the app out of the foreground; back in it, the phone is
+    // rescanned and the count asked again until it drops (or a while passes: declined). If
+    // the confirmation never comes up (Android refused the request), a watchdog says so.
+    QtObject {
+        id: freeUp
+        property bool asked: false
+        property int before: 0
+        property bool left: false
+        property int tries: 0
+    }
+    Connections {
+        target: Qt.application
+        function onStateChanged() {
+            if (!freeUp.asked) return
+            if (Qt.application.state !== Qt.ApplicationActive) { freeUp.left = true; return }
+            if (!freeUp.left) return
+            freeUp.asked = false; freeUp.left = false
+            freeUp.tries = 0
+            library.rescanPhotos()
+            freeUpCheck.restart()
+        }
+    }
+    Connections {
+        target: library
+        function onFreeUpChanged() {
+            let res = { asked: 0 }
+            try { res = JSON.parse(library.freeUpResult) } catch (e) {}
+            if (res.asked > 0) { freeUp.asked = true; freeUp.left = false; freeUpWatchdog.restart() }
+        }
+    }
+    Timer {
+        id: freeUpWatchdog
+        interval: 5000
+        onTriggered: if (freeUp.asked && !freeUp.left) {
+            freeUp.asked = false
+            root.showToast("Android did not open the delete confirmation: nothing deleted")
+        }
+    }
+    Timer {
+        id: freeUpCheck
+        interval: 1500; repeat: true
+        onTriggered: {
+            freeUp.tries++
+            library.importedInfo()
+            if (freeUp.tries >= 8) { stop(); root.showToast("Nothing was deleted") }
+        }
+    }
+    Connections {
+        target: library
+        function onImportedChanged() {
+            if (!freeUpCheck.running) return
+            const n = freeUpDialog.info.count
+            if (n >= 0 && n < freeUp.before) {
+                freeUpCheck.stop()
+                const gone = freeUp.before - n
+                root.showToast(gone + (gone === 1 ? " photo" : " photos") + " deleted from this phone")
+            }
+        }
     }
 
     Component.onCompleted: library.loadDates()

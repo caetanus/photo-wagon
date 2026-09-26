@@ -22,6 +22,8 @@ version (Android)
 {
     // mobile/jni/videothumb.c: ACTION_SEND through MainActivity.shareImage
     private extern (C) int pw_share_image(void* env, const char* path, const char* mime);
+    // mobile/jni/videothumb.c: MediaStore.createDeleteRequest through MainActivity.deleteMedia
+    private extern (C) int pw_delete_media(void* env, const char* paths);
 }
 
 /// The UI's application object, as the QGuiApplication it is (set by main.d; holding it
@@ -278,18 +280,68 @@ final class UiBridge : Bridge
             });
             return;
         }
+        if (method == "phone.freeUp")
+        {
+            // the photos the computer has, handed to Android: it confirms with the user itself
+            // (and deletes); the core's next rescan drops them from the index
+            // verified: hashed again and confirmed by the computer (see LocalBridge.importedFiles)
+            inner.request("library.importedFiles", JSONValue(["verify": JSONValue(true)]), (JSONValue r, JSONValue e) {
+                if (e.type != JSONType.null_)
+                {
+                    cb(r, e);
+                    return;
+                }
+                // one file per line: path <TAB> size <TAB> mtime (ms) as it was confirmed —
+                // MainActivity leaves out any file that differs by the time it asks
+                import std.conv : to;
+
+                string joined;
+                long count;
+                if (r.type == JSONType.object && "files" in r && r["files"].type == JSONType.array)
+                    foreach (f; r["files"].array)
+                    {
+                        if (f.type != JSONType.object || "path" !in f || f["path"].type != JSONType.string
+                                || "size" !in f || f["size"].type != JSONType.integer
+                                || "mtimeMs" !in f || f["mtimeMs"].type != JSONType.integer)
+                            continue;
+                        joined ~= (joined.length ? "\n" : "") ~ f["path"].str ~ "\t" ~ f["size"].integer.to!string
+                            ~ "\t" ~ f["mtimeMs"].integer.to!string;
+                        count++;
+                    }
+                immutable bytes = r.type == JSONType.object && "bytes" in r && r["bytes"].type == JSONType.integer
+                    ? r["bytes"].integer : 0;
+                if (count)
+                    deleteMedia(joined);
+                cb(JSONValue(["asked": JSONValue(count), "bytes": JSONValue(bytes)]), JSONValue(null));
+            });
+            return;
+        }
         inner.request(method, params, cb);
     }
 
     override void requestRaw(string method, string paramsJson, ResultCb cb)
     {
         // the share sheet is ours whichever way it is asked for (and the paging test's guard)
-        if (method == "photo.share" || method == "photo.shareMany" || method == "library.page" || method == "photo.neighbours")
+        if (method == "photo.share" || method == "photo.shareMany" || method == "phone.freeUp"
+            || method == "library.page" || method == "photo.neighbours")
         {
             request(method, parseJSON(paramsJson), cb);
             return;
         }
         inner.requestRaw(method, paramsJson, cb);
+    }
+
+    /// Hand files (one per line) to Android to delete, behind its own confirmation.
+    private static void deleteMedia(string paths)
+    {
+        version (Android)
+        {
+            import std.string : toStringz;
+            import qt.quick.qjnienvironment : QJniEnvironment;
+
+            auto env = QJniEnvironment.getJniEnv();
+            cast(void) pw_delete_media(cast(void*) env, paths.toStringz);
+        }
     }
 
     /// Hand a local file to the OS share sheet (WhatsApp, e-mail, …).

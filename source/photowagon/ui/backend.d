@@ -101,6 +101,8 @@ version (WithUi)
     Signal!() suggestionChanged;
     Signal!() statsChanged;
     Signal!() syncChanged;
+    Signal!() importedChanged;
+    Signal!() freeUpChanged;
     Signal!() candidatesChanged;
     Signal!() regionChanged;
     Signal!() originalChanged;
@@ -201,6 +203,13 @@ version (WithUi)
     @Property("uiStateChanged") string uiState = "{}";
     /// Phone: parsed library.syncStatus — {enabled, connected, active, pending, total, done, sent, skipped, failed, error}
     @Property("syncChanged") string sync = `{"enabled":false,"connected":false,"active":false,"pending":0,"total":0,"done":0,"sent":0,"skipped":0,"failed":0,"error":null}`;
+    /// Phone: {count, bytes} of the phone's photos the computer already has (Free up space);
+    /// count -1 until asked (importedInfo).
+    @Property("importedChanged") string imported = `{"count":-1,"bytes":0}`;
+    /// Phone: the last "Free up space" handed to Android — {seq, asked} (asked 0: nothing
+    /// confirmed, or it failed; the QML then expects no confirmation dialog).
+    @Property("freeUpChanged") string freeUpResult = `{"seq":0,"asked":0}`;
+    private long freeUpSeq;
     /// {"year","month","day","personId","albumId","rootId","favorites"} — what the page shows.
     @Property("filterChanged") string filter = `{"year":0,"month":0,"day":0,"personId":0,"albumId":0,"rootId":0,"favorites":false,"kind":"","text":""}`;
 
@@ -212,6 +221,7 @@ version (WithUi)
     private long fPerson;
     private long fAlbum, fRoot;
     private bool fFavorites;
+    private bool hideSent;   // phone: the photos already on the computer left out of every listing
     private string fKind;
     private string fText;
     private string fPlace;
@@ -251,8 +261,19 @@ version (WithUi)
         import std.process : environment;
         import std.path : buildPath, expandTilde;
 
-        immutable cfg = environment.get("XDG_CONFIG_HOME", expandTilde("~/.config"));
-        return buildPath(cfg, "photowagon", "ui-state.json");
+        version (Android)
+        {
+            // no HOME / XDG here: the app's own data directory (where core.sock lives too)
+            import qt.quick.qstandardpaths : QStandardPaths;
+
+            return buildPath(QStandardPaths.writableLocation(
+                QStandardPaths.StandardLocation.AppDataLocation).toString(), "ui-state.json");
+        }
+        else
+        {
+            immutable cfg = environment.get("XDG_CONFIG_HOME", expandTilde("~/.config"));
+            return buildPath(cfg, "photowagon", "ui-state.json");
+        }
     }
 
     /// QML calls this whenever the window state changes (geometry, a fold, the view).
@@ -291,6 +312,17 @@ version (WithUi)
             {
                 uiState = readText(uiStatePath());
                 uiStateChanged.emit();
+                // the phone's "Hide imported photos" holds from the first listing on
+                try
+                {
+                    auto st = parseJSON(uiState);
+                    if (st.type == JSONType.object)
+                        if (auto h = "hideImported" in st)
+                            hideSent = h.type == JSONType.true_;
+                }
+                catch (Exception)
+                {
+                }
             }
         catch (Exception)
         {
@@ -1241,6 +1273,7 @@ version (WithUi)
         if (fRoot)   params["rootId"] = fRoot;
         if (fFavorites) params["favorites"] = true;
         if (kindParam().length) params["kind"] = kindParam();
+        if (hideSent) params["hideSent"] = true;
         if (fText.length) params["q"] = fText;
         if (fPlace.length) { params["place"] = fPlace; if (fCountry.length) params["country"] = fCountry; }
         if (fTag.length && fTagGroup.length) params[fTagGroup] = fTag;
@@ -1344,6 +1377,48 @@ version (WithUi)
         client.request("library.rescan", (r, e) { if (e.type == JSONType.null_) loadDates(); });
     }
 
+    /// Phone: leave the photos the computer already has out of the grid ("Hide imported
+    /// photos"), or show them again. The listing reloads.
+    @Slot void setHideImported(bool on)
+    {
+        if (on == hideSent)
+            return;
+        hideSent = on;
+        reload(0, pageLimit);
+    }
+
+    /// Phone: how many of its photos (and how many bytes) the computer already has → `imported`.
+    @Slot void importedInfo()
+    {
+        client.request("library.importedFiles", (r, e) {
+            if (e.type != JSONType.null_) { report("library.importedFiles", e); return; }
+            JSONValue j = JSONValue.emptyObject;
+            j["count"] = r["count"];
+            j["bytes"] = r["bytes"];
+            imported = j.toString();
+            importedChanged.emit();
+        });
+    }
+
+    /// Phone: delete from the phone the photos the computer already has. Android asks the user
+    /// itself (its own confirmation lists them); the grid follows on the next rescan.
+    @Slot void freeUpSpace()
+    {
+        tell("Checking the photos with the computer…");
+        client.request("phone.freeUp", (r, e) {
+            long asked;
+            if (e.type != JSONType.null_)
+                tell(e.type == JSONType.object && "message" in e && e["message"].type == JSONType.string
+                    ? "Nothing deleted: " ~ e["message"].str : "Nothing deleted");
+            else if (r.type == JSONType.object && "asked" in r && r["asked"].type == JSONType.integer)
+                asked = r["asked"].integer;
+            if (e.type == JSONType.null_ && asked == 0)
+                tell("None of them is confirmed on the computer: nothing to delete");
+            freeUpResult = JSONValue(["seq": JSONValue(++freeUpSeq), "asked": JSONValue(asked)]).toString();
+            freeUpChanged.emit();
+        });
+    }
+
     @Slot void refresh()
     {
         loadPlaces();
@@ -1386,6 +1461,7 @@ version (WithUi)
             if (fRoot)   nb["rootId"] = fRoot;
             if (fFavorites) nb["favorites"] = true;
             if (kindParam().length) nb["kind"] = kindParam();   // the grid's own filter (the default hides screenshots/memes)
+            if (hideSent) nb["hideSent"] = true;
             loadFaces(id);
             // A new listing (a refresh after library.changed, say) cuts a neighbours search
             // short on the phone core: ask again. No cap — the new request queues behind the

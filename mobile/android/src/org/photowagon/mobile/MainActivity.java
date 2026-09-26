@@ -38,6 +38,7 @@ public class MainActivity extends QtActivity
     private static final String TAG = "photowagon";
     private static final int REQUEST_PHOTOS = 1;
     private static final int REQUEST_NOTIFY = 2;
+    private static final int REQUEST_DELETE = 3;
     private static MainActivity instance;
     private static Handler watcher;
     private static long statusSeen;
@@ -265,6 +266,112 @@ public class MainActivity extends QtActivity
         catch (Exception e)
         {
             Log.w(TAG, "cannot save scanned code: " + e.getMessage());
+        }
+    }
+
+    /**
+     * "Free up space": delete these files (one per line: path, size, mtime ms, tab-separated
+     * — the phone's photos the computer confirmed it holds). They go in batches of at most
+     * 2000 (createDeleteRequest refuses more), one system confirmation each, the next after
+     * the user has answered the previous one. Right before each batch's request its files are
+     * checked again (a file that differs from what was confirmed — edited or replaced while
+     * an earlier dialog waited — is left alone) and looked up in the MediaStore (images and
+     * videos). Nothing is deleted without the system dialog. Called from D (uiadapter)
+     * through the videothumb JNI shim; posted to the UI thread. Android 11+ only.
+     */
+    public static void deleteMedia(final String paths)
+    {
+        final MainActivity a = instance;
+        if (a == null || paths == null || paths.isEmpty()) return;
+        if (Build.VERSION.SDK_INT < 30)
+        {
+            Log.w(TAG, "free up space: needs Android 11 (MediaStore.createDeleteRequest)");
+            return;
+        }
+        a.runOnUiThread(new Runnable() {
+            public void run() {
+                try {
+                    java.util.ArrayList<String[]> all = new java.util.ArrayList<String[]>();
+                    for (String line : paths.split("\n")) {
+                        String[] f = line.split("\t");
+                        if (f.length == 3 && !f[0].isEmpty()) all.add(f);
+                    }
+                    deleteBatches.clear();
+                    for (int from = 0; from < all.size(); from += 2000)
+                        deleteBatches.add(new java.util.ArrayList<String[]>(all.subList(from, Math.min(all.size(), from + 2000))));
+                    Log.i(TAG, "free up space: " + all.size() + " files in " + deleteBatches.size() + " batch(es)");
+                    nextDeleteBatch(a);
+                } catch (Exception e) {
+                    deleteBatches.clear();
+                    Log.e(TAG, "free up space failed: " + e);
+                }
+            }
+        });
+    }
+
+    // what is still to be asked: {path, size, mtime ms} per file (UI thread only)
+    private static final java.util.ArrayList<java.util.ArrayList<String[]>> deleteBatches = new java.util.ArrayList<java.util.ArrayList<String[]>>();
+
+    /** The next batch: checked again now, found in the MediaStore, then the system dialog. */
+    private static void nextDeleteBatch(MainActivity a)
+    {
+        while (!deleteBatches.isEmpty()) {
+            java.util.ArrayList<String[]> batch = deleteBatches.remove(0);
+            try {
+                java.util.List<String> keep = new java.util.ArrayList<String>();
+                int changed = 0;
+                for (String[] f : batch) {
+                    File file = new File(f[0]);
+                    long size = Long.parseLong(f[1]), mtime = Long.parseLong(f[2]);
+                    if (!file.isFile() || file.length() != size || file.lastModified() != mtime) { changed++; continue; }
+                    keep.add(f[0]);
+                }
+                if (changed > 0) Log.i(TAG, "free up space: " + changed + " files changed since they were confirmed, kept");
+                java.util.ArrayList<Uri> uris = new java.util.ArrayList<Uri>();
+                Uri[] collections = {
+                    android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                };
+                android.content.ContentResolver cr = a.getContentResolver();
+                for (Uri coll : collections)
+                    for (int from = 0; from < keep.size(); from += 500) {
+                        java.util.List<String> chunk = keep.subList(from, Math.min(keep.size(), from + 500));
+                        StringBuilder sel = new StringBuilder(android.provider.MediaStore.MediaColumns.DATA + " IN (");
+                        for (int k = 0; k < chunk.size(); k++) sel.append(k == 0 ? "?" : ",?");
+                        sel.append(')');
+                        android.database.Cursor c = cr.query(coll,
+                            new String[] { android.provider.MediaStore.MediaColumns._ID },
+                            sel.toString(), chunk.toArray(new String[0]), null);
+                        if (c == null) continue;
+                        try {
+                            while (c.moveToNext())
+                                uris.add(android.content.ContentUris.withAppendedId(coll, c.getLong(0)));
+                        } finally {
+                            c.close();
+                        }
+                    }
+                Log.i(TAG, "free up space: " + keep.size() + " files checked, " + uris.size() + " found in the MediaStore");
+                if (uris.isEmpty()) continue;   // nothing of this batch to ask: the next one
+                android.app.PendingIntent pi = android.provider.MediaStore.createDeleteRequest(cr, uris);
+                a.startIntentSenderForResult(pi.getIntentSender(), REQUEST_DELETE, null, 0, 0, 0);
+                return;   // onActivityResult goes on
+            } catch (Exception e) {
+                deleteBatches.clear();
+                Log.e(TAG, "free up space failed: " + e);
+                return;
+            }
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int code, int result, Intent data)
+    {
+        super.onActivityResult(code, result, data);
+        if (code == REQUEST_DELETE)
+        {
+            Log.i(TAG, "free up space: " + (result == RESULT_OK ? "deleted" : "declined"));
+            if (result == RESULT_OK) nextDeleteBatch(this);
+            else deleteBatches.clear();   // declined: the rest is not asked either
         }
     }
 }

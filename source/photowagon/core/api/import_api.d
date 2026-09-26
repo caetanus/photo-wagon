@@ -129,6 +129,19 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 		return JSONValue(["have": JSONValue(have), "refuse": JSONValue(refuse)]);
 	});
 
+	// {hashes: [sha256, …]} → {have: [sha256, …]}: which of these are really here — a file on
+	// disk at its recorded size, not only a row (library.offer's `have` is the row). The phone
+	// asks this before deleting its own copies ("Free up space").
+	r.add("library.holds", (JSONValue p) {
+		if (p.type != JSONType.object || "hashes" !in p || p["hashes"].type != JSONType.array)
+			throw new ApiError("bad_params", "hashes: [...] wanted");
+		JSONValue[] have;
+		foreach (h; p["hashes"].array)
+			if (h.type == JSONType.string && h.str.length == 64 && photos.holdsHash(h.str))
+				have ~= h;
+		return JSONValue(["have": JSONValue(have)]);
+	});
+
 	// {name, base64, takenAt?} → {id?, existed, path}
 	// {sha256, faces} → {taken, reason?}: faces a device detected for a photo that is ALREADY here — its
 	// face pass finished after the photo was sent (it yields to the sync, so that is the usual

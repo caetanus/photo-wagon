@@ -480,6 +480,7 @@ private bool slowComputer;
         f.month = cast(int) num(p, "month");
         f.day = cast(int) num(p, "day");
         f.kind = kindOf(p);
+        f.hideSent = flag(p, "hideSent");
         return f;
     }
 
@@ -543,6 +544,7 @@ private bool slowComputer;
             case "album.create": case "album.addPhotos": case "album.removePhotos":
                 albumWithPhotos(method, params, cb); return;
             case "photo.shareMany": shareMany(params, cb); return;
+            case "library.importedFiles": importedFiles(params, cb); return;
             // Cast runs on the computer (it has the CastService + is on the TV's LAN); the
             // phone is a remote control. Photo ids are rewritten to the computer's own ids.
             case "cast.devices": case "cast.next": case "cast.prev":
@@ -1080,7 +1082,10 @@ private bool slowComputer;
         // a computer photo is left out for the phone's copy only when that copy is in this
         // listing too (a collection or a date: the phone may classify or date the same
         // picture differently)
-        foreach (ref ph; index.page(localFilter, 0, long.max))
+        // (the hidden imported photos too: their computer copies must stay out as well)
+        auto dedupFilter = localFilter;
+        dedupFilter.hideSent = false;
+        foreach (ref ph; index.page(dedupFilter, 0, long.max))
         {
             localKeys[ph.path.baseName ~ "|" ~ ph.size.to!string] = true;
             if (ph.hash.length)
@@ -1839,6 +1844,207 @@ private bool slowComputer;
             // the share targets filter on it: a video offered as image/* reaches the wrong apps
             cb(JSONValue(["path": JSONValue(path), "mime": JSONValue(mimeFor(path))]), JSONValue(null));
         });
+    }
+
+    /// library.importedFiles: the phone's photos the computer already has — what "Free up
+    /// space" offers to delete from the phone: {count, bytes, paths}. Plainly, from the index
+    /// (they were delivered); with {verify: true}, only those that still are: each file is
+    /// hashed again as it is NOW (an edit or a replacement since would not be on the
+    /// computer) and the computer is asked whether it really holds that content (library.holds:
+    /// the file on its disk, not only a row). Nothing is offered for deletion unconfirmed; each
+    /// confirmed file carries the size and mtime it was hashed at, which Android checks again
+    /// right before asking to delete it (an edit since → left alone).
+    private void importedFiles(JSONValue p, ResultCb cb)
+    {
+        auto cands = index.onComputer();
+        if (!flag(p, "verify"))
+        {
+            JSONValue[] paths;
+            long bytes;
+            foreach (ref ph; cands)
+            {
+                paths ~= JSONValue(ph.path);
+                bytes += ph.size;
+            }
+            cb(JSONValue(["count": JSONValue(paths.length), "bytes": JSONValue(bytes), "paths": JSONValue(paths)]),
+                JSONValue(null));
+            return;
+        }
+        if (!computer.connected)
+        {
+            cb(JSONValue(null), error("offline", "the computer must be connected to confirm it has the photos"));
+            return;
+        }
+        if (freeUpBox !is null)
+        {
+            cb(JSONValue(null), error("busy", "already checking the photos with the computer"));
+            return;
+        }
+        auto box = new shared(FreeUpBox);
+        string[] paths;
+        foreach (ref ph; cands)
+            paths ~= ph.path;
+        box.paths = cast(shared) paths.idup;
+        freeUpBox = box;
+        freeUpCb = cb;
+        immutable(string)[] immPaths = paths.idup;
+        auto t = new Thread({ useCrashStack(); freeUpHash(box, immPaths); });
+        t.name = "freeup";
+        t.isDaemon = true;
+        t.start();
+        if (freeUpPoll is null)
+        {
+            freeUpPoll = new QTimer(cast(cppq.QObject) null);
+            freeUpPoll.setInterval(200);
+            freeUpPoll.connectTimeout(&onFreeUpHashed);
+        }
+        freeUpPoll.start();
+    }
+
+    private static struct FreeUpBox
+    {
+        immutable(string)[] paths;
+        string[] shas;   // "" = could not be read, or changed while it was read
+        long[] sizes;
+        long[] mtimes;   // ms, as it was hashed
+        bool done;
+    }
+    private shared(FreeUpBox)* freeUpBox;
+    private ResultCb freeUpCb;
+    private QTimer freeUpPoll;
+
+    private static void freeUpHash(shared(FreeUpBox)* b, immutable(string)[] paths)
+    {
+        import core.atomic : atomicStore;
+        import std.digest : toHexString, LetterCase;
+        import std.stdio : File;
+        import photowagon.core.util.fastsha : SHA256;
+
+        version (Posix)
+        {
+            import core.sys.posix.sys.resource : setpriority, PRIO_PROCESS;
+
+            setpriority(PRIO_PROCESS, 0, 12);   // behind the UI, like the sync's hashing
+        }
+        import std.file : getSize, timeLastModified;
+
+        string[] shas;
+        long[] sizes, mtimes;
+        auto buf = new ubyte[1 << 20];   // streamed: a phone video is hundreds of MB
+        foreach (path; paths)
+        {
+            try
+            {
+                immutable size0 = getSize(path);
+                immutable mtime0 = timeLastModified(path).toUnixTime!long * 1000
+                    + timeLastModified(path).fracSecs.total!"msecs";
+                SHA256 h;
+                long n;
+                auto f = File(path, "rb");
+                foreach (chunk; f.byChunk(buf))
+                {
+                    h.put(chunk);
+                    n += chunk.length;
+                }
+                f.close();
+                // written to while it was read: what was hashed is not what is there
+                immutable same = n == size0 && getSize(path) == size0
+                    && timeLastModified(path).toUnixTime!long * 1000 + timeLastModified(path).fracSecs.total!"msecs" == mtime0;
+                shas ~= same ? toHexString!(LetterCase.lower)(h.finish()).idup : "";
+                sizes ~= n;
+                mtimes ~= mtime0;
+            }
+            catch (Exception)
+            {
+                shas ~= "";
+                sizes ~= 0;
+                mtimes ~= 0;
+            }
+        }
+        b.shas = cast(shared) shas;
+        b.sizes = cast(shared) sizes;
+        b.mtimes = cast(shared) mtimes;
+        atomicStore(b.done, true);
+    }
+
+    /// The files are hashed: ask the computer about them, a batch at a time.
+    private void onFreeUpHashed()
+    {
+        import core.atomic : atomicLoad;
+
+        auto b = freeUpBox;
+        if (b is null || !atomicLoad(b.done))
+            return;
+        freeUpPoll.stop();
+        auto paths = cast(immutable(string)[]) b.paths;
+        auto shas = cast(string[]) b.shas;
+        auto sizes = cast(long[]) b.sizes;
+        auto mtimes = cast(long[]) b.mtimes;
+        size_t[][string] byHash;   // current content → the files holding it
+        foreach (i, sha; shas)
+            if (sha.length == 64)
+                byHash[sha] ~= i;
+        auto hashes = byHash.keys;
+        bool[string] have;
+        void finish(JSONValue err)
+        {
+            freeUpBox = null;
+            auto cb = freeUpCb;
+            freeUpCb = null;
+            if (err.type != JSONType.null_)
+            {
+                cb(JSONValue(null), err);
+                return;
+            }
+            JSONValue[] out_, files;
+            long bytes;
+            foreach (sha, idxs; byHash)
+                if (sha in have)
+                    foreach (i; idxs)
+                    {
+                        out_ ~= JSONValue(paths[i]);
+                        files ~= JSONValue(["path": JSONValue(paths[i]), "size": JSONValue(sizes[i]),
+                            "mtimeMs": JSONValue(mtimes[i])]);
+                        bytes += sizes[i];
+                    }
+            plog("free up: ", out_.length, " of ", paths.length, " files confirmed on the computer");
+            cb(JSONValue(["count": JSONValue(out_.length), "bytes": JSONValue(bytes), "paths": JSONValue(out_),
+                "files": JSONValue(files)]), JSONValue(null));
+        }
+        void ask(size_t from)
+        {
+            if (from >= hashes.length)
+            {
+                finish(JSONValue(null));
+                return;
+            }
+            if (!computer.connected)
+            {
+                finish(error("offline", "the computer went away while confirming the photos"));
+                return;
+            }
+            import std.algorithm : min;
+
+            immutable to = min(hashes.length, from + offerBatchN);
+            JSONValue[] batch;
+            foreach (h; hashes[from .. to])
+                batch ~= JSONValue(h);
+            computer.request("library.holds", JSONValue(["hashes": JSONValue(batch)]), (r, e) {
+                if (e.type != JSONType.null_)
+                {
+                    immutable unknown = e.type == JSONType.object && "code" in e && e["code"].type == JSONType.string
+                        && e["code"].str == "unknown_method";
+                    finish(unknown ? error("old_computer", "update Photo Wagon on the computer first") : e);
+                    return;
+                }
+                if (r.type == JSONType.object && "have" in r && r["have"].type == JSONType.array)
+                    foreach (h; r["have"].array)
+                        if (h.type == JSONType.string)
+                            have[h.str] = true;
+                ask(to);
+            });
+        }
+        ask(0);
     }
 
     /// Several photos to the share sheet at once: a local file for each (the computer's

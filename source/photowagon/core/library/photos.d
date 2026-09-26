@@ -149,6 +149,29 @@ final class PhotoRepo
 		return Nullable!Photo(readRow(s));
 	}
 
+	/// Whether a file with this content is really here: a row with that hash whose file is on
+	/// disk at the recorded size (the row alone outlives a file deleted behind our back until
+	/// the next rescan). What the phone's "Free up space" trusts before deleting its copy.
+	bool holdsHash(string hash)
+	{
+		import std.file : exists, getSize, isFile;
+
+		auto s = db.prepare("SELECT path, size FROM photos WHERE hash = ? AND path IS NOT NULL");
+		s.bind(1, hash);
+		while (s.step())
+		{
+			immutable path = s.getString(0);
+			immutable size = s.getLong(1);
+			try
+				if (path.length && path.exists && path.isFile && getSize(path) == size)
+					return true;
+			catch (Exception)
+			{
+			}
+		}
+		return false;
+	}
+
 	bool hasHash(string hash)
 	{
 		auto s = db.prepare("SELECT 1 FROM photos WHERE hash = ?");
@@ -741,4 +764,37 @@ unittest
 	Filter memes;
 	memes.kind = "meme";
 	assert(repo.count(memes) == 1 && repo.kindCounts()["meme"] == 1 && repo.kindCounts()["unknown"] == 1);
+}
+
+unittest
+{
+	// holdsHash: the row AND its file on disk at the recorded size (Free up space trusts it)
+	import photowagon.core.db.schema : migrate;
+	import std.file : tempDir, write, remove, exists, mkdirRecurse;
+	import std.path : buildPath;
+
+	auto db = new Database(":memory:");
+	scope (exit)
+		db.close();
+	migrate(db);
+	immutable dir = buildPath(tempDir, "pw-holds-ut");
+	mkdirRecurse(dir);
+	immutable here = buildPath(dir, "here.jpg"), gone = buildPath(dir, "gone.jpg"), grew = buildPath(dir, "grew.jpg");
+	write(here, "12345");
+	write(grew, "12345678");
+	scope (exit)
+		foreach (f; [here, grew])
+			if (f.exists)
+				remove(f);
+	auto repo = new PhotoRepo(db, new ContentStore(buildPath(dir, "store")));
+	Photo a = {hash: "h1", path: here, size: 5, takenAt: "x"};
+	Photo b = {hash: "h2", path: gone, size: 5, takenAt: "x"};
+	Photo c = {hash: "h3", path: grew, size: 5, takenAt: "x"};
+	repo.insert(a);
+	repo.insert(b);
+	repo.insert(c);
+	assert(repo.holdsHash("h1"));
+	assert(repo.hasHash("h2") && !repo.holdsHash("h2"));   // a row, no file
+	assert(!repo.holdsHash("h3"));                          // a file, not the size recorded
+	assert(!repo.holdsHash("nope"));
 }

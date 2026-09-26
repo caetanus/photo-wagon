@@ -24,10 +24,7 @@ Item {
         cellHeight: 236
         model: view.memories
         ScrollBar.vertical: ScrollBar { }
-        WheelHandler {
-            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-            onWheel: (ev) => { const dy = ev.pixelDelta.y !== 0 ? ev.pixelDelta.y * 3 : ev.angleDelta.y / 120 * grid.cellHeight; grid.contentY = Math.max(0, Math.min(Math.max(0, grid.contentHeight - grid.height), grid.contentY - dy)); ev.accepted = true }
-        }
+        WheelScroll { flick: grid }
         delegate: Item {
             id: card
             required property var modelData

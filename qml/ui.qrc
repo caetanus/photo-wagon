@@ -18,6 +18,7 @@
     <file>AlbumDialog.qml</file>
     <file>SettingsDialog.qml</file>
     <file>ToolsDialog.qml</file>
+        <file>WheelScroll.qml</file>
     <file>MergeSuggestion.qml</file>
     <file>AppMenu.qml</file>
         <file>AppMenuItem.qml</file>

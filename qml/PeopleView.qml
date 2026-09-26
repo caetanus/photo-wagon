@@ -167,10 +167,7 @@ Item {
         contentHeight: column.height + 40
         clip: true
         ScrollBar.vertical: ScrollBar { }
-        WheelHandler {
-            acceptedDevices: PointerDevice.Mouse
-            onWheel: (ev) => { peopleFlick.contentY = Math.max(0, Math.min(Math.max(0, peopleFlick.contentHeight - peopleFlick.height), peopleFlick.contentY - ev.angleDelta.y * 3.2)); ev.accepted = true }
-        }
+        WheelScroll { flick: peopleFlick }
         Column {
             id: column
             x: 24

@@ -28,18 +28,6 @@ Item {
     /// Delete moves the selection to the trash; Shift+Delete asks and removes for good.
     signal remove(var ids, bool permanent)
 
-    /// Mouse wheel: a notch moves about a row and a half of photos; a touchpad's
-    /// pixel deltas are taken as they come, tripled.
-    // (bounds from originY: items inserted above the viewport shift the content's origin)
-    function wheel(view, ev) {
-        const min = view.originY
-        const max = view.originY + Math.max(0, view.contentHeight - view.height)
-        const dy = ev.pixelDelta.y !== 0 ? ev.pixelDelta.y * 3 : ev.angleDelta.y / 120 * (grid.cell + grid.gap) * 1.5
-        view.contentY = Math.max(min, Math.min(max, view.contentY - dy))
-        ev.accepted = true
-        if (view.contentY - view.originY > view.contentHeight - view.height * 3) grid.requestMore()
-    }
-
     // The rows (every photo of the listing, laid out) are built and reconciled in D
     // (library.rows): a new page never throws a delegate away, the scroll stays.
     onPageChanged: {
@@ -446,7 +434,13 @@ Item {
         }
         onMovingChanged: if (moving) { grid.pillShown = true; pillHide.stop() } else pillHide.restart()
         footer: Item { width: 1; height: 24 }
-        WheelHandler { acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad; onWheel: (ev) => { grid.wheel(allView, ev); grid.pillShown = true; pillHide.restart() } }
+        WheelScroll {
+            flick: allView
+            onScrolled: {
+                grid.pillShown = true; pillHide.restart()
+                if (allView.contentY - allView.originY > allView.contentHeight - allView.height * 3) grid.requestMore()
+            }
+        }
     }
 
     // the day of the top row, floating while the mosaic scrolls

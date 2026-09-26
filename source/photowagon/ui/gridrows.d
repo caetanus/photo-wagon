@@ -220,13 +220,19 @@ struct GridRow
 
     private void reconcile(GridRow[] next)
     {
-        bool[string] keys;
+        // Keyed, in runs: a stretch of new rows goes in with one insert, a stretch of gone ones
+        // out with one remove (row by row, the first 9000-photo listing copied the whole array
+        // once per row, quadratic, on the Qt thread).
+        bool[string] nextKeys, curKeys;
         foreach (ref r; next)
-            keys[r.kind ~ "|" ~ r.key] = true;
+            nextKeys[r.kind ~ "|" ~ r.key] = true;
+        foreach (ref r; rows)
+            curKeys[r.kind ~ "|" ~ r.key] = true;
         size_t i;
         while (i < next.length)
         {
             auto e = next[i];
+            immutable ek = e.kind ~ "|" ~ e.key;
             if (i < rows.length)
             {
                 auto cur = rows[i];
@@ -237,33 +243,53 @@ struct GridRow
                     i++;
                     continue;
                 }
-                if ((cur.kind ~ "|" ~ cur.key) !in keys)
+                if ((cur.kind ~ "|" ~ cur.key) !in nextKeys)
                 {
-                    removeAt(i);   // gone
+                    size_t j = i + 1;   // the whole stretch of gone rows
+                    while (j < rows.length && (rows[j].kind ~ "|" ~ rows[j].key) !in nextKeys)
+                        j++;
+                    removeRange(i, j);
                     continue;
                 }
-                // further down: move it up (its delegate survives)
-                size_t j = i + 1;
-                while (j < rows.length && !(rows[j].key == e.key && rows[j].kind == e.kind))
-                    j++;
-                if (j < rows.length)
+                if (ek in curKeys)
                 {
-                    moveUp(j, i);
-                    if (rows[i].tiles != e.tiles || rows[i].label != e.label || rows[i].span != e.span)
-                        replace(i, e);
-                    i++;
-                    continue;
+                    // further down: move it up (its delegate survives)
+                    size_t j = i + 1;
+                    while (j < rows.length && !(rows[j].key == e.key && rows[j].kind == e.kind))
+                        j++;
+                    if (j < rows.length)
+                    {
+                        moveUp(j, i);
+                        if (rows[i].tiles != e.tiles || rows[i].label != e.label || rows[i].span != e.span)
+                            replace(i, e);
+                        i++;
+                        continue;
+                    }
                 }
             }
-            insertAt(i, e);   // new here
-            i++;
+            // new here: with the rows new after it, in one insert
+            size_t j = i + 1;
+            while (j < next.length && (next[j].kind ~ "|" ~ next[j].key) !in curKeys)
+                j++;
+            insertRange(i, next[i .. j]);
+            i = j;
         }
         if (rows.length > next.length)
-        {
-            beginRemoveRows(QModelIndex.__make(), cast(int) next.length, cast(int) rows.length - 1);
-            rows = rows[0 .. next.length];
-            endRemoveRows();
-        }
+            removeRange(next.length, rows.length);
+    }
+
+    private void removeRange(size_t from, size_t to)
+    {
+        beginRemoveRows(QModelIndex.__make(), cast(int) from, cast(int) to - 1);
+        rows = rows[0 .. from] ~ rows[to .. $];
+        endRemoveRows();
+    }
+
+    private void insertRange(size_t at, GridRow[] block)
+    {
+        beginInsertRows(QModelIndex.__make(), cast(int) at, cast(int)(at + block.length) - 1);
+        rows = rows[0 .. at] ~ block ~ rows[at .. $];
+        endInsertRows();
     }
 
     private void replace(size_t i, GridRow e)
@@ -271,20 +297,6 @@ struct GridRow
         rows[i] = e;
         auto ix = createIndex(cast(int) i, 0);
         dataChanged(ix, ix, [KindRole, KeyRole, LabelRole, TilesRole, SpanRole]);
-    }
-
-    private void removeAt(size_t i)
-    {
-        beginRemoveRows(QModelIndex.__make(), cast(int) i, cast(int) i);
-        rows = rows[0 .. i] ~ rows[i + 1 .. $];
-        endRemoveRows();
-    }
-
-    private void insertAt(size_t i, GridRow e)
-    {
-        beginInsertRows(QModelIndex.__make(), cast(int) i, cast(int) i);
-        rows = rows[0 .. i] ~ e ~ rows[i .. $];
-        endInsertRows();
     }
 
     // row `from` (below) to position `to` (above): Qt's destination is the row it goes before
@@ -418,6 +430,8 @@ GridRow[] build(JSONValue[] items, int cols, bool headers = false, int mosaicMax
     {
         immutable ts = num(items[i], "takenTs");
         immutable dayOfSegment = dayKey(ts);
+        // a header's `tiles` carries {count}: how many photos that day
+        immutable headerAt = out_.length;
         if (headers)
             out_ ~= GridRow("h", dayOfSegment, dayLabel(ts), "[]", 0, null);
         JSONValue[] day;   // the segment: one day with headers, everything without
@@ -434,6 +448,13 @@ GridRow[] build(JSONValue[] items, int cols, bool headers = false, int mosaicMax
                 members ~= [num(items[i], "id")];
             }
             i++;
+        }
+        if (headers)
+        {
+            size_t n;
+            foreach (ref m; members)
+                n += m.length;
+            out_[headerAt].tiles = `{"count":` ~ n.to!string ~ `}`;
         }
 
         size_t[long] entryOf;   // photo id → its index in `day` (its members)
@@ -455,6 +476,11 @@ GridRow[] build(JSONValue[] items, int cols, bool headers = false, int mosaicMax
             t["remote"] = flag(it, "remote");
             t["video"] = flag(it, "video");
             t["duration"] = num(it, "duration");
+            // what the desktop cell shows or acts on (its heart, the hover words, the file)
+            t["favorite"] = flag(it, "favorite");
+            foreach (k; ["scene", "holiday", "weather", "path"])
+                if (str(it, k).length)
+                    t[k] = str(it, k);
             t["x"] = x;
             t["y"] = y;
             t["w"] = w;
@@ -550,6 +576,7 @@ unittest
     assert(rows.length == 5);
     assert(rows[0].kind == "h" && rows[1].kind == "r" && rows[1].firstPid == 5 && rows[2].firstPid == 3);
     assert(rows[3].key == "undated" && rows[3].label == "Sem data");
+    assert(parseJSON(rows[0].tiles)["count"].integer == 3);
     // no headers: rows only, running on across the days (4 photos, 2 columns: 2 rows)
     assert(build(items, 2).length == 2);
 }

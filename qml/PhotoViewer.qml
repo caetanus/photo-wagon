@@ -12,7 +12,8 @@ Item {
     required property QtObject theme
     required property QtObject icons
     property var photo: null            // parsed library.current
-    property var items: []              // the page's items, for the filmstrip
+    property var items: []              // the listing (lean: ids in order), for prev / next
+    property var strip: []              // the photos around this one with thumbnails, for the filmstrip
     property var faces: []
     property bool arrowHot: false        // the pointer on a prev/next arrow (keeps a video's controls up)
     property var people: []
@@ -814,7 +815,7 @@ Item {
     // ---- filmstrip ------------------------------------------------------------------
     Rectangle {
         id: strip
-        visible: viewer.showStrip && viewer.items.length > 1
+        visible: viewer.showStrip && viewer.strip.length > 1
         anchors.left: parent.left
         anchors.right: info.visible ? info.left : editPanel.visible ? editPanel.left : parent.right
         anchors.bottom: parent.bottom
@@ -827,8 +828,8 @@ Item {
             orientation: ListView.Horizontal
             spacing: 4
             clip: true
-            model: viewer.items
-            currentIndex: viewer.currentIndex
+            model: viewer.strip
+            currentIndex: { for (let i = 0; i < viewer.strip.length; i++) if (viewer.photo && viewer.strip[i].id === viewer.photo.id) return i; return -1 }
             highlightMoveDuration: 120
             preferredHighlightBegin: width / 2 - 28
             preferredHighlightEnd: width / 2 + 28
@@ -844,16 +845,16 @@ Item {
                     asynchronous: true
                     fillMode: Image.PreserveAspectCrop
                     sourceSize.width: 112; sourceSize.height: 112
-                    opacity: index === viewer.currentIndex ? 1 : 0.7
+                    opacity: index === stripView.currentIndex ? 1 : 0.7
                 }
                 Rectangle {
                     anchors.fill: parent
                     radius: 3
                     color: "transparent"
                     border.color: theme.accent
-                    border.width: index === viewer.currentIndex ? 2 : 0
+                    border.width: index === stripView.currentIndex ? 2 : 0
                 }
-                TapHandler { onTapped: viewer.openIndex(index) }
+                TapHandler { onTapped: { const i = viewer.items.findIndex(it => it.id === modelData.id); if (i >= 0) viewer.openIndex(i) } }
             }
         }
     }

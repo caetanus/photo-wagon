@@ -349,6 +349,45 @@ final class PhotoRepo
 		return out_;
 	}
 
+	/// The WHOLE listing of a filter, lean: only what the grid draws and selects with (id,
+	/// date, size, kind, heart, video length, stack, thumbnail, path, the classifiers' words
+	/// shown on hover). The grid lays out every photo from this at once and loads only the
+	/// thumbnails on screen (9080 photos: ~40 ms, ~1.7 MB). Same order as page().
+	JSONValue[] skeleton(Filter f)
+	{
+		auto w = whereClause(f);
+		auto s = db.prepare(`SELECT p.id, p.taken_ts, p.width, p.height, p.kind, p.favorite, p.duration_ms,
+			p.stack_id, p.thumb_hash, p.path, p.origin_peer,
+			(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'scene' AND t.tag <> ''),
+			(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'holiday' AND t.tag <> ''),
+			(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'weather' AND t.tag <> '')
+			FROM photos p` ~ w.joins ~ w.where
+				~ (f.albumId ? " ORDER BY ap.position ASC" : " ORDER BY p.taken_ts DESC, p.id DESC"));
+		w.bind(s);
+		JSONValue[] out_;
+		while (s.step())
+		{
+			JSONValue j = JSONValue.emptyObject;
+			j["id"] = s.getLong(0);
+			j["takenTs"] = s.getLong(1);
+			j["width"] = s.getLong(2);
+			j["height"] = s.getLong(3);
+			immutable kind = s.getString(4);
+			j["kind"] = kind is null ? JSONValue(null) : JSONValue(kind);
+			j["favorite"] = s.getLong(5) != 0;
+			j["video"] = kind == "video";
+			j["duration"] = s.getLong(6);
+			j["stack"] = s.isNull(7) ? JSONValue(null) : JSONValue(s.getLong(7));
+			j["thumbUrl"] = s.isNull(8) ? JSONValue(null) : JSONValue(fileUrl(store.pathFor(s.getString(8))));
+			j["path"] = s.isNull(9) ? JSONValue(null) : JSONValue(s.getString(9));
+			j["remote"] = !s.isNull(10);
+			foreach (k, name; ["scene", "holiday", "weather"])
+				j[name] = s.isNull(cast(int)(11 + k)) ? JSONValue(null) : JSONValue(s.getString(cast(int)(11 + k)));
+			out_ ~= j;
+		}
+		return out_;
+	}
+
 	/// Photos taken on the same calendar day(s) as any of `seedIds`, minus the seeds
 	/// themselves — the "you're adding photos of an event; here's the rest of that day"
 	/// suggestion. Newest first, capped at `limit`. Photos without a date are ignored.

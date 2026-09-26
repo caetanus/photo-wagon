@@ -89,8 +89,7 @@ ApplicationWindow {
         if (["mac","system","gtk"].indexOf(root._ui.theme) >= 0) root.themeMode = root._ui.theme
         if (typeof root._ui.zoom === "number" && root._ui.zoom >= 72 && root._ui.zoom <= 320) root.zoom = root._ui.zoom
         if (typeof root._ui.menuButton === "boolean") root.menuInButton = root._ui.menuButton
-        if (typeof root._ui.stacks === "boolean") root.stacksOn = root._ui.stacks
-        library.setGridStacks(root.stacksOn)
+        if (typeof root._ui.stacks === "boolean") root.stacksOn = root._ui.stacks   // (the grid applies it)
         if (["years", "months", "days", "all"].indexOf(root._ui.startupView) >= 0) { root.startupView = root._ui.startupView; root.mode = root.startupView }
         library.refreshSystemAccent()
         const w = root._ui.win
@@ -335,12 +334,12 @@ ApplicationWindow {
         }
     }
 
+    // (QML's copy of the listing is lean: the files come from the backend's)
     function pathsOf(ids) {
-        const out = []
-        for (const id of ids) {
-            for (const it of pageData.items) if (it.id === id && it.path) { out.push(it.path); break }
+        library.pathsOf(JSON.stringify(ids))
+        const out = JSON.parse(library.pathsResult)
+        for (const id of ids)
             if (current && current.id === id && current.path && !out.includes(current.path)) out.push(current.path)
-        }
         return out
     }
     function folderUrl(path) { return "file://" + path.substring(0, path.lastIndexOf("/")) }
@@ -920,6 +919,7 @@ ApplicationWindow {
                 icons: root.icons
                 photo: root.current
                 items: root.pageData.items
+                strip: root.viewing ? JSON.parse(library.strip) : []
                 faces: root.facesData
                 people: root.peopleData
                 candidates: root.candidatesData
@@ -1078,7 +1078,7 @@ ApplicationWindow {
         startupView: root.startupView
         menuInButton: root.menuInButton
         stacks: root.stacksOn
-        onPickStacks: (on) => { root.stacksOn = on; library.setGridStacks(on); root._scheduleSaveUi() }
+        onPickStacks: (on) => { root.stacksOn = on; root._scheduleSaveUi() }
         onPickTheme: (m) => { root.themeMode = m; root._scheduleSaveUi() }
         onPickMenuInButton: (on) => { root.menuInButton = on; root._scheduleSaveUi() }
         onPickThumbSize: (z) => { root.zoom = z; root._scheduleSaveUi() }
@@ -1350,7 +1350,7 @@ ApplicationWindow {
     Timer {   // PW_SHOT_VIEW=menu: the context menu over the first photo
         running: library.shotPath.length > 0 && library.shotView === "menu" && root.pageData.items.length > 0
         interval: 1500
-        onTriggered: { const it = root.pageData.items[0]; grid.selectOnly(it.id); photoMenu.ids = [it.id]; photoMenu.path = it.path || ""; photoMenu.popup(grid, 120, 120) }
+        onTriggered: { const it = root.pageData.items[0]; grid.selectOnly(it.id); photoMenu.ids = [it.id]; photoMenu.path = root.pathsOf([it.id])[0] || ""; photoMenu.popup(grid, 120, 120) }
     }
     Timer {
         running: library.shotPath.length > 0

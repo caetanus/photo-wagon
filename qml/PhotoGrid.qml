@@ -40,50 +40,21 @@ Item {
         if (view.contentY - view.originY > view.contentHeight - view.height * 3) grid.requestMore()
     }
 
-    // A new page never replaces the views' models: it is RECONCILED into them — a photo
-    // whose data changed (a thumbnail arrived, a heart, a tag) is updated in place, new
-    // ones are inserted where they belong, gone ones removed. Replacing the model threw
-    // every delegate away on each refresh (every 3 s while indexing or syncing): the
-    // thumbnails decoded again and the scroll jumped. Keys are photo ids (sections: days).
+    // The rows (every photo of the listing, laid out) are built and reconciled in D
+    // (library.rows): a new page never throws a delegate away, the scroll stays.
     onPageChanged: {
         requesting = false
         syncModels()
         const c = closedOverStacks(selected)   // a page brought more of a selected stack
         if (c) { selected = c; selectionChanged() }
     }
-    onModeChanged: { syncModels(); selectedChanged() }   // (re-close the selection over stacks)
-
-    ListModel { id: daysModel; dynamicRoles: true }
-
-    // Keyed reconcile: in place when the signature changed, MOVED when it sits later in
-    // the model (its delegate survives), inserted when new, removed when gone.
-    function reconcile(model, next) {
-        const keys = new Set()
-        for (const e of next) keys.add(e._k)
-        let i = 0
-        while (i < next.length) {
-            const e = next[i]
-            if (i < model.count) {
-                const cur = model.get(i)
-                if (cur._k === e._k) {
-                    if (cur._s !== e._s) model.set(i, e)
-                    i++
-                    continue
-                }
-                if (!keys.has(cur._k)) { model.remove(i); continue }   // gone
-                let j = i + 1
-                while (j < model.count && model.get(j)._k !== e._k) j++
-                if (j < model.count) {   // further down: move it up, keeping its delegate
-                    model.move(j, i, 1)
-                    if (model.get(i)._s !== e._s) model.set(i, e)
-                    i++
-                    continue
-                }
-            }
-            model.insert(i, e)   // new
-            i++
-        }
-        if (model.count > next.length) model.remove(next.length, model.count - next.length)
+    // Days: a header per day and a plain grid, every photo on its own; All Photos: the mosaic
+    onModeChanged: { applyModel(); selectedChanged() }   // (re-close the selection over stacks)
+    function applyModel() {
+        library.setGridHeaders(mode === "days", 0)
+        library.setGridMosaicMax(mode === "days" ? 0 : 8)
+        library.setGridStacks(stacks && mode !== "days")
+        library.setGridColumns(columns, 0)
     }
 
     // photo id → its index in the page (selection, cursor and range use page indexes)
@@ -100,13 +71,6 @@ Item {
         // the keyboard cursor and the range anchor follow their PHOTOS, not their positions
         const cid = cursor >= 0 && cursor < lastItems.length ? lastItems[cursor].id : null
         const aid = anchor >= 0 && anchor < lastItems.length ? lastItems[anchor].id : null
-        if (mode === "days") {
-            reconcile(daysModel, daysOf(items).map(d => {
-                const js = JSON.stringify(d.items)
-                return { _k: d.key, _s: d.title + js, title: d.title, n: d.items.length, itemsJson: js }
-            }))
-        } else if (daysModel.count) daysModel.clear()
-        // ("all" reads library.rows, which the backend reconciles with every page itself)
         lastItems = items
         // (from `items` itself: the indexOfId binding has not caught up with the page yet)
         const at = id => { for (let i = 0; i < items.length; i++) if (items[i].id === id) return i; return -1 }
@@ -121,7 +85,7 @@ Item {
     readonly property int cell: Math.floor((width - (columns - 1) * gap) / columns)
     // the D row model follows this grid's columns; a mosaic up to 8 across (denser zooms plain)
     onColumnsChanged: library.setGridColumns(columns, 0)
-    Component.onCompleted: { library.setGridHeaders(false, 0); library.setGridMosaicMax(8); library.setGridColumns(columns, 0) }
+    Component.onCompleted: applyModel()
     Connections {
         target: library
         function onRevealRowChanged() { if (library.revealRow >= 0) allView.positionViewAtIndex(library.revealRow, ListView.Contain) }
@@ -153,7 +117,7 @@ Item {
         return out
     }
     onSelectedChanged: if (!_closing) { const c = closedOverStacks(selected); if (c) { _closing = true; selected = c; _closing = false } }
-    onStacksChanged: selectedChanged()
+    onStacksChanged: { library.setGridStacks(stacks && mode !== "days"); selectedChanged() }
 
     function selectOnly(id) { selected = ({ [id]: true }); selectionChanged() }
     /// A stack's tile stands for all its photos: selecting it selects them all.
@@ -213,7 +177,7 @@ Item {
         let i = cursor < 0 ? 0 : Math.max(0, Math.min(it.length - 1, cursor + delta))
         cursor = i
         selectOnly(it[i].id)
-        if (mode === "all") library.revealPhoto(it[i].id)
+        library.revealPhoto(it[i].id)
     }
 
     property bool _navExtend: false
@@ -237,7 +201,7 @@ Item {
     Keys.onPressed: (event) => {
         const extend = event.modifiers & Qt.ShiftModifier
         const step = (d) => { if (extend) { if (anchor < 0) anchor = Math.max(0, cursor); selectRange(Math.max(0, Math.min(page.items.length - 1, (cursor < 0 ? 0 : cursor) + d))) } else { moveCursor(d); anchor = cursor } }
-        const view = mode === "days" ? daysView : allView
+        const view = allView
         const minY = view.originY
         const maxY = view.originY + Math.max(0, view.contentHeight - view.height)
         switch (event.key) {
@@ -248,11 +212,11 @@ Item {
         case Qt.Key_PageDown: view.contentY = Math.min(maxY, view.contentY + view.height * 0.9); if (view.contentY - view.originY > view.contentHeight - view.height * 3) requestMore(); break
         case Qt.Key_PageUp: view.contentY = Math.max(minY, view.contentY - view.height * 0.9); break
         case Qt.Key_A: if (event.modifiers & Qt.ControlModifier) { anchor = 0; selectRange(page.items.length - 1); break } return
-        // the mosaic ("all"): the arrows follow its tiles (the backend answers in navTarget)
-        case Qt.Key_Left: if (mode === "all") nav(0, extend); else step(-1); break
-        case Qt.Key_Right: if (mode === "all") nav(1, extend); else step(1); break
-        case Qt.Key_Up: if (mode === "all") nav(2, extend); else step(-columns); break
-        case Qt.Key_Down: if (mode === "all") nav(3, extend); else step(columns); break
+        // the arrows follow the tiles as laid out (the backend answers in navTarget)
+        case Qt.Key_Left: nav(0, extend); break
+        case Qt.Key_Right: nav(1, extend); break
+        case Qt.Key_Up: nav(2, extend); break
+        case Qt.Key_Down: nav(3, extend); break
         case Qt.Key_Return: case Qt.Key_Enter: case Qt.Key_Space:
             if (cursor >= 0 && cursor < page.items.length) grid.open(page.items[cursor].id); break
         case Qt.Key_Escape: clearSelection(); break
@@ -425,7 +389,6 @@ Item {
     ListView {
         id: allView
         anchors.fill: parent
-        visible: grid.mode === "all"
         clip: true
         model: library.rows
         reuseItems: true
@@ -433,18 +396,40 @@ Item {
         ScrollBar.vertical: ScrollBar { id: allBar }
         delegate: Item {
             id: band
-            required property string tiles   // JSON: the row's photos with their x, y, w, h (cells)
+            required property string kind    // "h" a day header (Days), "r" a band of tiles
+            required property string tiles   // JSON: the row's photos with their x, y, w, h (cells); a header: {count}
             required property string label
             required property int span
-            readonly property var tileList: JSON.parse(tiles)
+            readonly property var tileList: kind === "r" ? JSON.parse(tiles) : []
+            readonly property int count: kind === "h" ? (JSON.parse(tiles).count || 0) : 0
             width: allView.width
-            height: span * (grid.cell + grid.gap)
+            height: kind === "h" ? 44 : span * (grid.cell + grid.gap)
+            // ---- a day header (Days)
+            Label {
+                visible: band.kind === "h"
+                anchors.left: parent.left; anchors.leftMargin: 12
+                anchors.bottom: parent.bottom; anchors.bottomMargin: 8
+                text: band.kind === "h" ? band.label : ""
+                color: theme.text
+                font.pixelSize: 15; font.bold: true
+            }
+            Label {
+                visible: band.kind === "h"
+                anchors.right: parent.right; anchors.rightMargin: 12
+                anchors.bottom: parent.bottom; anchors.bottomMargin: 9
+                text: band.count + (band.count === 1 ? " photo" : " photos")
+                color: theme.muted
+                font.pixelSize: 12
+            }
             Repeater {
                 model: band.tileList
                 delegate: Cell {
                     required property var modelData
-                    // the full photo from the page (heart, tags, path), the row only knows its id
-                    photo: grid.indexOfId[modelData.pid] !== undefined ? grid.page.items[grid.indexOfId[modelData.pid]] : ({ id: modelData.pid, thumbUrl: modelData.thumbUrl })
+                    // everything the cell draws comes with the tile (the D row model)
+                    photo: ({ id: modelData.pid, thumbUrl: modelData.thumbUrl, video: modelData.video === true,
+                              duration: modelData.duration || 0, favorite: modelData.favorite === true,
+                              scene: modelData.scene, holiday: modelData.holiday, weather: modelData.weather,
+                              path: modelData.path })
                     cw: modelData.w || 1
                     ch: modelData.h || 1
                     members: modelData.members || []
@@ -471,7 +456,7 @@ Item {
     Rectangle {
         anchors.top: parent.top; anchors.topMargin: 12
         anchors.horizontalCenter: parent.horizontalCenter
-        visible: grid.mode === "all" && opacity > 0.01 && grid.topDay.length > 0
+        visible: grid.mode === "all" && opacity > 0.01 && grid.topDay.length > 0   // (Days has its headers)
         opacity: grid.pillShown ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: 220 } }
         height: 34; radius: 17
@@ -485,87 +470,6 @@ Item {
             color: theme.text
             font.pixelSize: 14; font.weight: Font.DemiBold
         }
-    }
-
-    // ---- "days": sections with a date header ---------------------------------------
-    function daysOf(items) {
-        const out = []
-        let cur = null
-        for (let i = 0; i < items.length; i++) {
-            const it = items[i]
-            const d = new Date(it.takenAt)
-            const key = isNaN(d.getTime()) ? "" : d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate()
-            if (!cur || cur.key !== key) {
-                cur = { key: key, title: grid.dayTitle(d), items: [] }
-                out.push(cur)
-            }
-            cur.items.push(it)
-        }
-        return out
-    }
-
-    function dayTitle(d) {
-        if (isNaN(d.getTime())) return "Unknown date"
-        const now = new Date()
-        const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
-        if (sameDay(d, now)) return "Today"
-        const y = new Date(now); y.setDate(now.getDate() - 1)
-        if (sameDay(d, y)) return "Yesterday"
-        return d.toLocaleDateString(Qt.locale(), d.getFullYear() === now.getFullYear() ? "dddd, d MMMM" : "d MMMM yyyy")
-    }
-
-    ListView {
-        id: daysView
-        anchors.fill: parent
-        visible: grid.mode === "days"
-        clip: true
-        model: daysModel
-        spacing: 0
-        cacheBuffer: 2000
-        ScrollBar.vertical: ScrollBar { }
-        delegate: Column {
-            id: section
-            required property string title
-            required property int n
-            required property string itemsJson
-            width: daysView.width
-            Item {
-                width: parent.width
-                height: 44
-                Label {
-                    anchors.left: parent.left
-                    anchors.leftMargin: 12
-                    anchors.bottom: parent.bottom
-                    anchors.bottomMargin: 8
-                    text: section.title
-                    color: theme.text
-                    font.pixelSize: 15
-                    font.bold: true
-                }
-                Label {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 12
-                    anchors.bottom: parent.bottom
-                    anchors.bottomMargin: 9
-                    text: section.n + (section.n === 1 ? " photo" : " photos")
-                    color: theme.muted
-                    font.pixelSize: 12
-                }
-            }
-            Flow {
-                width: parent.width
-                spacing: grid.gap
-                Repeater {
-                    model: JSON.parse(section.itemsJson)
-                    delegate: Cell { required property var modelData; photo: modelData }
-                }
-            }
-            Item { width: 1; height: 12 }
-        }
-        onAtYEndChanged: if (atYEnd && count > 0) grid.requestMore()
-        onContentYChanged: if (count > 0 && contentY - originY > contentHeight - height * 3) grid.requestMore()
-        footer: Item { width: 1; height: 24 }
-        WheelHandler { acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad; onWheel: (ev) => grid.wheel(daysView, ev) }
     }
 
     Label {

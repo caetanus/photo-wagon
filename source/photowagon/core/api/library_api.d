@@ -99,6 +99,13 @@ import photowagon.core.jobs.scheduler : jobs;
 		]);
 	});
 
+	// the same filter as library.page, the whole listing at once, lean (PhotoRepo.skeleton):
+	// → {total, items}
+	r.add("library.skeleton", (JSONValue p) {
+		auto items = photos.skeleton(filterOf(p));
+		return JSONValue(["total": JSONValue(items.length), "items": JSONValue(items)]);
+	});
+
 	// the same filter as library.page (dates ignored): the tree of a person, an album, the favourites…
 	r.add("library.dates", (JSONValue p) { return dates.build(filterOf(p)); });
 

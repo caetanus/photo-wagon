@@ -240,6 +240,7 @@ version (WithUi)
     private long openId; // photo being opened/shown; faces answers for others are dropped
     private long pageEpoch;   // bumped by each new listing (offset 0): older page replies are dropped
     private int pageLimit = 240;
+    private bool skeletonOk = true;   // the core answers library.skeleton (the whole listing)
     private bool indexing;
     private string progressText;
 
@@ -343,6 +344,8 @@ version (WithUi)
     /// The next page of the current filter.
     @Slot void loadMore()
     {
+        if (items.length >= total)
+            return;   // the whole listing is here (library.skeleton)
         reload(cast(int) items.length, pageLimit);
     }
 
@@ -1134,11 +1137,12 @@ version (WithUi)
                 }
                 pg["total"] = items.length;
                 pg["offset"] = items.length;   // the whole result: nothing more to load
-                pg["items"] = JSONValue(items);
+                pg["items"] = leanItems();
                 page = pg.toString();
                 if (gridRows !is null)
                     gridRows.update(items);   // the grid shows what the page does
                 pageChanged.emit();
+                refreshStrip();
             });
             return;
         }
@@ -1159,11 +1163,12 @@ version (WithUi)
                 JSONValue pg = JSONValue.emptyObject;
                 pg["total"] = items.length;
                 pg["offset"] = items.length;   // the whole result: nothing more to load
-                pg["items"] = JSONValue(items);
+                pg["items"] = leanItems();
                 page = pg.toString();
                 if (gridRows !is null)
                     gridRows.update(items);   // the grid shows what the page does
                 pageChanged.emit();
+                refreshStrip();
             });
             return;
         }
@@ -1244,6 +1249,47 @@ version (WithUi)
             params["refresh"] = true;
         immutable off = offset;
         immutable epoch = offset == 0 ? ++pageEpoch : pageEpoch;
+        // The whole listing at once, lean (library.skeleton): the grid lays out every photo and
+        // loads only the thumbnails on screen. A core without it (an older one) pages as before.
+        // (not for a core across the network: its thumbnails would all come as data URLs at once)
+        if (offset == 0 && skeletonOk && !remote)
+        {
+            JSONValue sp = params;
+            sp.object.remove("offset");
+            sp.object.remove("limit");
+            client.request("library.skeleton", sp, (r, e) {
+                if (epoch != pageEpoch)
+                    return;
+                if (e.type != JSONType.null_)
+                {
+                    // (the phone core says "not available on the phone" for what it does not know)
+                    import std.algorithm : canFind;
+                    if (e.type == JSONType.object && "code" in e && e["code"].type == JSONType.string
+                        && (e["code"].str == "unknown_method" || e["code"].str == "method_not_found"
+                            || ("message" in e && e["message"].type == JSONType.string
+                                && e["message"].str.canFind("not available"))))
+                    {
+                        skeletonOk = false;   // page it, then
+                        reload(0, limit, refresh);
+                        return;
+                    }
+                    immutable quiet = isSuperseded(e) || (e.type == JSONType.object && "code" in e
+                        && e["code"].type == JSONType.string && e["code"].str == "refresh_timeout");
+                    if (!quiet)
+                        report("skeleton", e);
+                    return;
+                }
+                items.length = 0;
+                foreach (it; r["items"].array)
+                    items ~= it;
+                total = r["total"].integer;
+                if (remote)
+                    fetchThumbs(0);
+                else
+                    publishPage();
+            });
+            return;
+        }
         client.request("library.page", params, (r, e) {
             if (epoch != pageEpoch)
                 return;   // a newer listing replaced this one
@@ -1362,6 +1408,8 @@ version (WithUi)
                 JSONValue photo = r;
                 photo["prev"] = (e2.type == JSONType.null_ && "prev" in n) ? n["prev"] : JSONValue(null);
                 photo["next"] = (e2.type == JSONType.null_ && "next" in n) ? n["next"] : JSONValue(null);
+                strip = stripAround(id).toString();
+                stripChanged.emit();
                 if (!remote)
                 {
                     current = photo.toString();
@@ -2554,9 +2602,108 @@ version (WithUi)
         JSONValue p = JSONValue.emptyObject;
         p["total"] = total;
         p["offset"] = cast(long) items.length;
-        p["items"] = JSONValue(items);
+        p["items"] = leanItems();
         page = p.toString();
         pageChanged.emit();
+        refreshStrip();
+    }
+
+    /// The open photo's filmstrip, again from the listing (it changed).
+    private void refreshStrip()
+    {
+        if (!openId)
+            return;
+        immutable st = stripAround(openId).toString();
+        if (st != strip)
+        {
+            strip = st;
+            stripChanged.emit();
+        }
+    }
+
+    /// The viewer's filmstrip: the photos around `id` in the listing, with their thumbnails
+    /// (QML's copy of the listing is the lean one, without them).
+    private JSONValue stripAround(long id)
+    {
+        enum reach = 60;
+        size_t at = size_t.max;
+        foreach (i, ref it; items)
+            if (it["id"].integer == id)
+            {
+                at = i;
+                break;
+            }
+        JSONValue[] out_;
+        if (at == size_t.max)
+            return JSONValue(out_);
+        immutable from = at > reach ? at - reach : 0;
+        immutable to = at + reach + 1 < items.length ? at + reach + 1 : items.length;
+        foreach (ref it; items[from .. to])
+        {
+            JSONValue j = JSONValue.emptyObject;
+            j["id"] = it["id"];
+            j["thumbUrl"] = "thumbUrl" in it ? it["thumbUrl"] : JSONValue(null);
+            out_ ~= j;
+        }
+        return JSONValue(out_);
+    }
+
+    Signal!() stripChanged;
+    /// The viewer's filmstrip: [{id, thumbUrl}] around the open photo, kept current as the
+    /// listing changes (thumbnails that arrive, photos that go).
+    @Property("stripChanged") string strip = "[]";
+
+    Signal!() pathsResultChanged;
+    /// After pathsOf: the files of those photos (a JSON array), for copy / drag and drop.
+    @Property("pathsResultChanged") string pathsResult = "[]";
+
+    /// The files of these photos (a JSON array of ids) → pathsResult, synchronously.
+    @Slot void pathsOf(string idsJson)
+    {
+        JSONValue[] out_;
+        try
+        {
+            bool[long] want;
+            foreach (v; parseJSON(idsJson).array)
+                want[v.integer] = true;
+            foreach (ref it; items)
+                if (it["id"].integer in want)
+                    if (auto pth = "path" in it)
+                        if (pth.type == JSONType.string)
+                            out_ ~= *pth;
+        }
+        catch (Exception)
+        {
+        }
+        pathsResult = JSONValue(out_).toString();
+        pathsResultChanged.emit();
+    }
+
+    /// What QML gets of the listing: the flyweight of each photo — its id, day, stack and the
+    /// two flags selection keeps — nothing it draws with (the tiles carry that, from the D row
+    /// model, parsed only for the rows on screen). The whole library this way is ~430 KB and
+    /// ~11 ms to parse (with every field it was ~7 MB, ~130 ms).
+    private JSONValue leanItems()
+    {
+        JSONValue[] out_;
+        out_.reserve(items.length);
+        foreach (ref it; items)
+        {
+            JSONValue j = JSONValue.emptyObject;
+            j["id"] = it["id"];
+            j["takenTs"] = "takenTs" in it ? it["takenTs"] : JSONValue(0);
+            if (auto st = "stack" in it)
+                if (st.type != JSONType.null_)
+                    j["stack"] = *st;
+            if (auto r = "remote" in it)
+                if (r.type == JSONType.true_)
+                    j["remote"] = true;
+            if (auto sn = "sent" in it)
+                if (sn.type == JSONType.true_)
+                    j["sent"] = true;
+            out_ ~= j;
+        }
+        return JSONValue(out_);
     }
 
     private void setStatus(bool connected, bool busy, string text)

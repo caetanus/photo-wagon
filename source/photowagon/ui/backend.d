@@ -216,7 +216,9 @@ version (WithUi)
     private string kindParam()
     {
         if (fKind.length) return fKind;
-        if (onlyPhotos && !fAlbum && !fText.length && !fPlace.length && !fTag.length && !fKeyword.length) return "photo";
+        // the library's own view: photos AND videos (videos have their own kind since they
+        // were added, and a "photo" default had hidden every one of them); no screenshots/memes
+        if (onlyPhotos && !fAlbum && !fText.length && !fPlace.length && !fTag.length && !fKeyword.length) return "media";
         return null;
     }
     private long openId; // photo being opened/shown; faces answers for others are dropped
@@ -1321,7 +1323,7 @@ version (WithUi)
             if (fAlbum)  nb["albumId"] = fAlbum;
             if (fRoot)   nb["rootId"] = fRoot;
             if (fFavorites) nb["favorites"] = true;
-            if (fKind.length) nb["kind"] = fKind;
+            if (kindParam().length) nb["kind"] = kindParam();   // the grid's own filter (the default hides screenshots/memes)
             loadFaces(id);
             // A new listing (a refresh after library.changed, say) cuts a neighbours search
             // short on the phone core: ask again. No cap — the new request queues behind the

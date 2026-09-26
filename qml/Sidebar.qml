@@ -263,7 +263,8 @@ Rectangle {
             width: flick.width
             SectionHeader { title: "Library" }
             // the library timeline is photographs (screenshots and memes have their own rows below)
-            Row { key: "all"; title: "Library"; icon: icons.photos; detail: sidebar.stats.kinds.photo ? String(sidebar.stats.kinds.photo) : (sidebar.stats.total ? String(sidebar.stats.total) : "") }
+            // what the library view shows: photos and videos (not screenshots or memes)
+            Row { key: "all"; title: "Library"; icon: icons.photos; detail: { const k = sidebar.stats.kinds || {}; const n = (k.photo || 0) + (k.video || 0) + (k.unknown || 0); return n ? String(n) : "" } }
             Row { key: "favorites"; title: "Favorites"; icon: icons.heart }
             Row { key: "people"; title: "People"; icon: icons.people; detail: sidebar.namedPeople.length ? String(sidebar.namedPeople.length) : "" }
             Row { key: "places"; title: "Places"; icon: icons.pin; detail: sidebar.places.length ? String(sidebar.places.length) : "" }
@@ -447,6 +448,7 @@ Rectangle {
 
             SectionHeader { title: "Media Types" }
             Row { key: "kind:photo"; title: "Photos"; icon: icons.photos; detail: String(sidebar.stats.kinds.photo || 0) }
+            Row { key: "kind:video"; title: "Videos"; icon: icons.video; detail: String(sidebar.stats.kinds.video || 0) }
             Row { key: "kind:screenshot"; title: "Screenshots"; icon: icons.screenshot; detail: String(sidebar.stats.kinds.screenshot || 0) }
             Row { key: "kind:meme"; title: "Memes"; icon: icons.meme; detail: String(sidebar.stats.kinds.meme || 0) }
 

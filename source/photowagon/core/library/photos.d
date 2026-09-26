@@ -585,6 +585,8 @@ final class PhotoRepo
 			w.where ~= " AND p.favorite = 1";
 		if (f.kind == "photo")
 			w.where ~= " AND (p.kind = 'photo' OR p.kind IS NULL)";   // not classified yet counts as a photograph
+		else if (f.kind == "media")   // the library's own view: photos and videos, not screenshots or memes
+			w.where ~= " AND (p.kind IN ('photo', 'video') OR p.kind IS NULL)";
 		else if (f.kind.length)
 		{
 			w.where ~= " AND p.kind = ?";

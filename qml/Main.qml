@@ -1198,6 +1198,7 @@ ApplicationWindow {
         if (["screenshots", "screenshot", "prints", "capturas"].includes(q)) { pickSource("kind:screenshot"); return }
         if (["memes", "meme"].includes(q)) { pickSource("kind:meme"); return }
         if (["photos", "fotos", "photographs"].includes(q)) { pickSource("kind:photo"); return }
+        if (["videos", "vídeos", "video", "vídeo", "filmes"].includes(q)) { pickSource("kind:video"); return }
         const y = q.match(/^(\d{4})$/)
         if (y) { source = "all"; library.filterDate(parseInt(y[1]), 0, 0); if (mode === "years") mode = "months"; return }
         for (let m = 1; m <= 12; m++) {

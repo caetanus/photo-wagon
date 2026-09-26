@@ -292,6 +292,7 @@ ApplicationWindow {
             AppMenuItem { text: "Remove Thumbnails…"; onTriggered: toolsDialog.openAt(0) }
             AppMenuItem { text: "Similar Photos…"; onTriggered: toolsDialog.openAt(1) }
             AppMenuItem { text: "Unnamed Faces…"; onTriggered: toolsDialog.openAt(2) }
+            AppMenuItem { text: "Screenshots & Memes…"; onTriggered: toolsDialog.openAt(3) }
         }
         ThemedMenu {
             title: "Window"
@@ -782,6 +783,7 @@ ApplicationWindow {
                 AppMenuItem { text: "Remove Thumbnails…"; onTriggered: toolsDialog.openAt(0) }
                 AppMenuItem { text: "Similar Photos…"; onTriggered: toolsDialog.openAt(1) }
                 AppMenuItem { text: "Unnamed Faces…"; onTriggered: toolsDialog.openAt(2) }
+                AppMenuItem { text: "Screenshots & Memes…"; onTriggered: toolsDialog.openAt(3) }
                 MenuSeparator {}
                 AppMenuItem { action: actMinimize }
                 AppMenuItem { action: actZoomWindow }

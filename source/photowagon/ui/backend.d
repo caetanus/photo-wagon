@@ -37,11 +37,15 @@ version (WithUi)
     Signal!() anchorRowChanged;
     Signal!() toolsSimilarChanged;
     Signal!() toolsThumbsChanged;
+    Signal!() toolsJunkChanged;
     Signal!() toolsFaceChanged;
     /// Tools (desktop): the similar-photos scan {running, done, progress, total, groups?}
     @Property("toolsSimilarChanged") string toolsSimilar = `{}`;
     /// Tools: {scanned, redundant: [{photo, keep}], orphans: [photo]}
     @Property("toolsThumbsChanged") string toolsThumbs = `{}`;
+    /// the screenshots or memes grouped by where they came from (tools.junk)
+    @Property("toolsJunkChanged") string toolsJunk = `{}`;
+    private string junkKind;
     /// Tools: {offset, total, clusters, loose, item?, candidates: [person]}
     @Property("toolsFaceChanged") string toolsFace = `{}`;
     /// The phone grid's rows (a QAbstractListModel built in D, updated by key on every page:
@@ -2294,6 +2298,19 @@ version (WithUi)
         });
     }
 
+    /// The screenshots ("screenshot") or memes ("meme"), grouped by app or month.
+    @Slot void loadJunk(string kind)
+    {
+        junkKind = kind;
+        client.request("tools.junk", JSONValue(["kind": JSONValue(kind)]), (r, e) {
+            if (e.type != JSONType.null_) { report("tools", e); return; }
+            if (("kind" in r) is null || r["kind"].str != junkKind)
+                return;   // an answer for the other kind, asked before a switch
+            toolsJunk = r.toString();
+            toolsJunkChanged.emit();
+        });
+    }
+
     /// Moves these photos (a JSON array of ids) to the trash, then refreshes the tools and
     /// the timeline.
     @Slot void trashPhotos(string idsJson)
@@ -2309,6 +2326,8 @@ version (WithUi)
             if (e.type != JSONType.null_) { report("delete", e); return; }
             pollSimilar();
             loadThumbTool();
+            if (junkKind.length)
+                loadJunk(junkKind);
             refreshTimeline();
         });
     }

@@ -6,7 +6,9 @@
 ///     phone's thumbnail cache that a USB import brought along — plus the small images with
 ///     no larger copy, shown apart for the user to decide;
 ///   - unidentified faces: the unnamed face groups (largest first), then the loose faces,
-///     one at a time, to be named, merged into a person or dismissed.
+///     one at a time, to be named, merged into a person or dismissed;
+///   - screenshots and memes: grouped by where they came from (the app a screenshot's file
+///     name carries, WhatsApp) or else by month, so a whole group goes to the trash at once.
 /// Deleting, naming and merging use the existing calls (photo.delete, people.*, face.*).
 module photowagon.core.api.tools_api;
 
@@ -295,4 +297,212 @@ void registerToolsApi(Registry r, Database db, PhotoRepo photos, SceneService sc
         }
         return o;
     });
+
+    // {kind: "screenshot"|"meme"} → {kind, total, groups: [{key, label, source, items: [{id, thumbUrl,
+    // takenTs, name, width, height}]}]}: the app groups first (largest first), then the months
+    // (newest first); each group newest first
+    r.add("tools.junk", (JSONValue p) {
+        immutable kind = p.type == JSONType.object && "kind" in p && p["kind"].type == JSONType.string
+            ? p["kind"].str : "";
+        if (kind != "screenshot" && kind != "meme")
+            throw new ApiError("bad_params", "kind must be screenshot or meme");
+        JSONValue[][string] byKey;
+        string[string] labelOf;
+        bool[string] isApp;
+        long total;
+        {
+            auto s = db.prepare("SELECT id, thumb_hash, taken_ts, path, width, height FROM photos "
+                ~ "WHERE kind = ? AND path IS NOT NULL ORDER BY taken_ts DESC, id DESC");
+            s.bind(1, kind);
+            while (s.step())
+            {
+                immutable path = s.getString(3), ts = s.getLong(2);
+                auto src = sourceOf(path);
+                string key, label;
+                if (src.length)
+                {
+                    key = "app:" ~ src;
+                    label = src;
+                }
+                else
+                {
+                    key = "month:" ~ monthKey(ts);
+                    label = monthLabel(ts);
+                }
+                JSONValue it = JSONValue.emptyObject;
+                it["id"] = s.getLong(0);
+                it["thumbUrl"] = url(s.isNull(1) ? null : s.getString(1));
+                it["takenTs"] = ts;
+                it["name"] = baseName(path);
+                it["width"] = s.getLong(4);
+                it["height"] = s.getLong(5);
+                byKey[key] ~= it;
+                labelOf[key] = label;
+                isApp[key] = src.length > 0;
+                total++;
+            }
+        }
+        // an app with only a couple of screenshots is noise as a group of its own
+        string[] small;
+        foreach (k, items; byKey)
+            if (isApp[k] && items.length < 3)
+                small ~= k;
+        foreach (k; small)
+        {
+            byKey["app:~other"] ~= byKey[k];
+            labelOf["app:~other"] = "Other apps";
+            isApp["app:~other"] = true;
+            byKey.remove(k);
+        }
+        if (auto o = "app:~other" in byKey)
+        {
+            import std.algorithm : sort;
+
+            (*o).sort!((a, b) => a["takenTs"].integer > b["takenTs"].integer);
+        }
+        import std.algorithm : sort;
+
+        auto keys = byKey.keys;
+        keys.sort!((a, b) {
+            if (isApp[a] != isApp[b])
+                return isApp[a];
+            if (isApp[a])
+                return byKey[a].length != byKey[b].length ? byKey[a].length > byKey[b].length : a < b;
+            return a > b;   // "month:YYYY-MM": newest first ("month:0000-00", undated, last)
+        });
+        JSONValue[] groups;
+        foreach (k; keys)
+            groups ~= JSONValue(["key": JSONValue(k), "label": JSONValue(labelOf[k]),
+                "source": JSONValue(isApp[k] ? "app" : "month"), "items": JSONValue(byKey[k])]);
+        return JSONValue(["kind": JSONValue(kind), "total": JSONValue(total), "groups": JSONValue(groups)]);
+    });
+}
+
+private string baseName(string path)
+{
+    import std.path : baseName;
+
+    return baseName(path);
+}
+
+/// The app a file name says it came from, "" when it says none:
+///   Screenshot_2020-06-18-19-29-52-502_com.nu.production.jpg → "Nubank"
+///   Screenshot_20251204_162630_ChatGPT.jpg → "ChatGPT"
+///   IMG-20200413-WA0018.jpg → "WhatsApp"
+string sourceOf(string path)
+{
+    import std.path : baseName, stripExtension;
+    import std.string : toLower, indexOf;
+    import std.algorithm : startsWith, canFind;
+    import std.array : split;
+    import std.ascii : isDigit, isAlpha, toUpper;
+
+    auto name = stripExtension(baseName(path));
+    // WhatsApp's own names: IMG-YYYYMMDD-WAnnnn, VID-…, STK-…
+    {
+        auto wa = name.indexOf("-WA");
+        if (wa > 0 && wa + 3 < name.length && isDigit(name[wa + 3]))
+            return "WhatsApp";
+    }
+    if (!name.toLower.startsWith("screenshot"))
+        return "";
+    // the tail after the date/time digits and separators
+    size_t i = "screenshot".length;
+    // (a dot counts only between digits: "…_09.30" is still the time)
+    // (and macOS's "Screenshot 2021-07-04 at 09.30.12": the "at" is part of the time)
+    bool timeChar(size_t k)
+    {
+        immutable c = name[k];
+        return isDigit(c) || c == '_' || c == '-' || c == ' '
+            || (c == '.' && k + 1 < name.length && isDigit(name[k + 1]));
+    }
+    while (i < name.length)
+    {
+        if (timeChar(i))
+            i++;
+        else if (name[i .. $].startsWith("at ") && i > 0 && name[i - 1] == ' ')
+            i += 3;
+        else if (i > 0 && name[i - 1] == ' ' && (name[i .. $].toLower.startsWith("am")
+                || name[i .. $].toLower.startsWith("pm")) && (i + 2 == name.length || !isAlpha(name[i + 2])))
+            i += 2;   // "… 09.30.12 AM
+        else
+            break;
+    }
+    auto app = name[i .. $];
+
+    if (!app.canFind!(c => isAlpha(c)))
+        return "";   // no name in it, only more digits
+    static immutable string[string] known = [
+        "whatsapp": "WhatsApp", "chrome": "Chrome", "youtube": "YouTube", "googlequicksearchbox": "Google",
+        "telegram": "Telegram", "instagram": "Instagram", "nu": "Nubank", "itau": "Itaú",
+        "itaucard": "Itaú", "discord": "Discord", "firefox": "Firefox", "lockscreen": "Lock screen",
+        "claude": "Claude", "chatgpt": "ChatGPT", "electrum": "Electrum", "slack": "Slack",
+        "netflix": "Netflix", "twitter": "X", "x": "X", "maps": "Maps", "brave": "Brave",
+        "photos": "Photos", "docs": "Docs", "wikipedia": "Wikipedia", "calculator": "Calculator",
+        "home": "Home screen", "weather2": "Weather", "weather": "Weather",
+    ];
+    if (!app.canFind('.'))
+    {
+        if (auto k = app.toLower in known)
+            return *k;
+        return app;   // already a display name ("Tomb of the Mask")
+    }
+    // an Android package: its most telling segment
+    static immutable noise = ["com", "org", "net", "br", "air", "st", "android", "google", "apps", "app",
+        "production", "messenger", "mobile", "activity", "browser", "mediaclient", "miui", "lgeha"];
+    string pick;
+    foreach (seg; app.split('.'))
+        if (!pick.length && seg.length && !noise.canFind(seg.toLower))
+            pick = seg;
+    if (!pick.length)
+        pick = app.split('.')[$ - 1];
+    if (auto k = pick.toLower in known)
+        return *k;
+    return pick.length ? toUpper(pick[0]) ~ pick[1 .. $] : "";
+}
+
+unittest
+{
+    assert(sourceOf("/x/Screenshot_2020-06-18-19-29-52-502_com.nu.production.jpg") == "Nubank");
+    assert(sourceOf("/x/Screenshot_20251204_162630_ChatGPT.jpg") == "ChatGPT");
+    assert(sourceOf("/x/Screenshot_2020-05-23-15-09-19-762_com.android.chrome.jpg") == "Chrome");
+    assert(sourceOf("/x/Screenshot_2020-05-23-15-09-19-762_com.google.android.youtube.jpg") == "YouTube");
+    assert(sourceOf("/x/Screenshot_2021-01-06-18-22-48-877_com.Slack.jpg") == "Slack");
+    assert(sourceOf("/x/IMG-20200413-WA0018.jpg") == "WhatsApp");
+    assert(sourceOf("/x/Screenshot_20240101_101010.png") == "");
+    assert(sourceOf("/x/1000043009.jpg") == "");
+    assert(sourceOf("/x/Screenshot_2021-07-04_09.30.jpg") == "");
+    assert(sourceOf("/x/Screenshot 2021-07-04 at 09.30.12.png") == "");
+    assert(sourceOf("/x/Screenshot 2021-07-04 at 09.30.12 AM.png") == "");
+    assert(sourceOf("/x/Screenshot 2021-07-04 at 9.30.12 pm (2).png") == "");
+    assert(sourceOf("/x/Screenshot_2020-01-01-10-10-10-111_air.com.RustyLake.CubeEscapeTheMill.jpg") == "RustyLake");
+}
+
+private string monthKey(long ts)
+{
+    import std.format : format;
+
+    if (!ts)
+        return "0000-00";
+    auto t = localTime(ts);
+    return format("%04d-%02d", t.year, cast(int) t.month);
+}
+
+private string monthLabel(long ts)
+{
+    import std.conv : to;
+
+    if (!ts)
+        return "No date";
+    static immutable mo = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    auto t = localTime(ts);
+    return mo[cast(int) t.month - 1] ~ " " ~ t.year.to!string;
+}
+
+private auto localTime(long ts)
+{
+    import std.datetime.systime : SysTime, unixTimeToStdTime;
+    import std.datetime.timezone : LocalTime;
+
+    return SysTime(unixTimeToStdTime(ts), LocalTime());
 }

@@ -4,19 +4,22 @@ import QtQuick.Layouts
 
 // Tools — clean-up work over the whole library, each one a quick question instead of a hunt
 // photo by photo: small copies of photos (a USB import's thumbnail cache), groups of
-// near-identical photos, and faces nobody has named yet. Same look as Settings: sections on
+// near-identical photos, faces nobody has named yet, and screenshots and memes grouped by
+// where they came from. Same look as Settings: sections on
 // the left, the tool on the right. Deleting goes to the system trash (photo.delete).
 Dialog {
     id: dlg
     required property QtObject theme
     required property QtObject icons
-    property int section: 0               // 0 Thumbnails · 1 Similar photos · 2 Unnamed faces
+    property int section: 0               // 0 Thumbnails · 1 Similar photos · 2 Unnamed faces · 3 Screenshots & memes
 
     function openAt(s) { section = s; open() }
 
     readonly property var similar: { try { return JSON.parse(library.toolsSimilar) } catch (e) { return ({}) } }
     readonly property var thumbs: { try { return JSON.parse(library.toolsThumbs) } catch (e) { return ({}) } }
     readonly property var face: { try { return JSON.parse(library.toolsFace) } catch (e) { return ({}) } }
+    readonly property var junk: { try { return JSON.parse(library.toolsJunk) } catch (e) { return ({}) } }
+    property string junkKind: "screenshot"
 
     title: "Tools"
     modal: true
@@ -35,7 +38,9 @@ Dialog {
         library.pollSimilar()
         if (section === 0) library.loadThumbTool()
         if (section === 2) library.loadUnidentified(Math.max(0, face.offset || 0))
+        if (section === 3) library.loadJunk(junkKind)
     }
+    onJunkKindChanged: if (opened && section === 3) library.loadJunk(junkKind)
 
     // the similar-photos scan runs in the daemon: follow it while it runs
     Timer {
@@ -47,7 +52,8 @@ Dialog {
     Timer {
         interval: 1000; repeat: true
         running: dlg.opened && ((dlg.section === 2 && dlg.face.total === undefined)
-                                || (dlg.section !== 2 && dlg.similar.running === undefined))
+                                || (dlg.section === 3 && dlg.junk.kind !== dlg.junkKind)
+                                || (dlg.section < 2 && dlg.similar.running === undefined))
         onTriggered: dlg.refresh()
     }
     // a finished scan also answers the thumbnail question
@@ -150,6 +156,7 @@ Dialog {
                 NavRow { index: 0; label: "Thumbnails"; hint: dlg.thumbs.scanned ? (dlg.thumbs.redundant.length + " small copies") : "Small copies of photos" }
                 NavRow { index: 1; label: "Similar photos"; hint: dlg.similar.done ? (dlg.similar.groups.length + " groups") : "Near-identical photos" }
                 NavRow { index: 2; label: "Unnamed faces"; hint: dlg.face.total !== undefined ? (dlg.face.total + " to go") : "Name them quickly" }
+                NavRow { index: 3; label: "Screenshots & memes"; hint: dlg.junk.total !== undefined ? (dlg.junk.total + (dlg.junk.kind === "meme" ? " memes" : " screenshots")) : "Remove them by group" }
                 Item { Layout.fillHeight: true }
                 Button { text: "Close"; Layout.fillWidth: true; onClicked: dlg.close() }
             }
@@ -476,6 +483,123 @@ Dialog {
                 Shortcut { sequence: "S"; enabled: dlg.opened && dlg.section === 2 && !newName.activeFocus && !faceTool.busy; onActivated: faceTool.skip() }
                 Shortcut { sequence: "B"; enabled: dlg.opened && dlg.section === 2 && !newName.activeFocus && !faceTool.busy; onActivated: faceTool.back() }
                 Shortcut { sequence: "X"; enabled: dlg.opened && dlg.section === 2 && !newName.activeFocus && !faceTool.busy; onActivated: faceTool.notFaces() }
+            }
+
+            // ================= Screenshots & memes =================
+            ColumnLayout {
+                id: junkTool
+                spacing: 10
+                // photo id → true: what goes to the Trash (nothing is picked until the user picks)
+                property var marked: ({})
+                property int markVersion: 0
+                readonly property var groups: dlg.junk.kind === dlg.junkKind ? (dlg.junk.groups || []) : []
+                // only what is on screen now: a pick that left the list (reclassified, deleted
+                // elsewhere) is neither counted nor trashed
+                function ids() {
+                    markVersion
+                    const out = []
+                    for (const g of groups) for (const it of g.items) if (marked[it.id] === true) out.push(it.id)
+                    return out
+                }
+                function groupMarked(g) { markVersion; return g.items.length > 0 && g.items.every(it => marked[it.id] === true) }
+                function groupCount(g) { markVersion; return g.items.filter(it => marked[it.id] === true).length }
+                function setGroup(g, on) { for (const it of g.items) marked[it.id] = on; markVersion++ }
+                function setAll(on) { for (const g of groups) for (const it of g.items) marked[it.id] = on; markVersion++ }
+                function clear() { marked = ({}); markVersion++ }
+                Connections { target: dlg; function onJunkKindChanged() { junkTool.clear() } }
+
+                Label { text: "Screenshots & memes"; color: dlg.theme.text; font.pixelSize: 20; font.weight: Font.DemiBold }
+                Label {
+                    Layout.fillWidth: true; wrapMode: Text.WordWrap; color: dlg.theme.muted; font.pixelSize: 13
+                    text: "Grouped by where they came from — the app in a screenshot's name, WhatsApp — or else by month. Pick a whole group with one click, or single pictures; they go to the Trash."
+                }
+                RowLayout {
+                    spacing: 8
+                    Repeater {
+                        model: [{ kind: "screenshot", label: "Screenshots" }, { kind: "meme", label: "Memes" }]
+                        delegate: Button {
+                            required property var modelData
+                            text: modelData.label
+                            checkable: true
+                            checked: dlg.junkKind === modelData.kind
+                            highlighted: checked
+                            onClicked: dlg.junkKind = modelData.kind
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                    Label {
+                        color: dlg.theme.muted
+                        text: dlg.junk.kind !== dlg.junkKind ? "Loading…"
+                            : junkTool.groups.length + " groups · " + (dlg.junk.total || 0) + (dlg.junkKind === "meme" ? " memes" : " screenshots")
+                    }
+                    Button { text: "Select all"; enabled: junkTool.groups.length > 0; onClicked: junkTool.setAll(true) }
+                    Button { text: "Clear"; enabled: junkTool.ids().length > 0; onClicked: junkTool.clear() }
+                    TrashButton {
+                        count: junkTool.ids().length
+                        onConfirmed: { library.trashPhotos(JSON.stringify(junkTool.ids())); junkTool.clear() }
+                    }
+                }
+                ListView {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    clip: true
+                    spacing: 14
+                    id: junkList
+                    model: junkTool.groups
+                    reuseItems: false
+                    ScrollBar.vertical: ScrollBar { }
+                    // plain anchors, not a layout: a ColumnLayout delegate laid out late drew the first
+                    // group's tiles over its own header
+                    delegate: Item {
+                        id: jg
+                        required property var modelData
+                        width: ListView.view.width
+                        height: 36 + 6 + 112
+                        readonly property bool all: junkTool.groupMarked(modelData)
+                        RowLayout {
+                            id: jgHead
+                            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                            height: 36
+                            spacing: 10
+                            Label { text: jg.modelData.label; color: dlg.theme.text; font.pixelSize: 14; font.weight: Font.DemiBold }
+                            Label {
+                                color: dlg.theme.muted; font.pixelSize: 12
+                                text: jg.modelData.items.length + (junkTool.groupCount(jg.modelData) > 0 && !jg.all ? " · " + junkTool.groupCount(jg.modelData) + " picked" : "")
+                            }
+                            Item { Layout.fillWidth: true }
+                            Button {
+                                flat: true
+                                text: jg.all ? "Unpick group" : "Pick group (" + jg.modelData.items.length + ")"
+                                onClicked: junkTool.setGroup(jg.modelData, !jg.all)
+                            }
+                        }
+                        ListView {
+                            anchors.left: parent.left; anchors.right: parent.right
+                            anchors.top: jgHead.bottom; anchors.topMargin: 6
+                            height: 112
+                            orientation: ListView.Horizontal
+                            spacing: 6
+                            clip: true
+                            model: jg.modelData.items
+                            ScrollBar.horizontal: ScrollBar { }
+                            delegate: PickTile {
+                                required property var modelData
+                                side: 104; photo: modelData
+                                checked: { junkTool.markVersion; return junkTool.marked[modelData.id] === true }
+                                onToggled: { junkTool.marked[modelData.id] = !junkTool.marked[modelData.id]; junkTool.markVersion++ }
+                                HoverHandler { id: th }
+                                ToolTip.visible: th.hovered
+                                ToolTip.delay: 600
+                                ToolTip.text: modelData.name + " · " + new Date(modelData.takenTs * 1000).toLocaleDateString()
+                            }
+                        }
+                    }
+                    Label {
+                        anchors.centerIn: parent
+                        visible: dlg.junk.kind === dlg.junkKind && junkTool.groups.length === 0
+                        text: dlg.junkKind === "meme" ? "No memes in the library." : "No screenshots in the library."
+                        color: dlg.theme.muted
+                    }
+                }
             }
         }
     }

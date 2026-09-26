@@ -481,11 +481,19 @@ Item {
             y: scrubber.trackTop + scrubber.frac * (scrubber.trackH - height)
             color: grid.scrubbing ? grid.theme.accent : grid.theme.panel
             border.color: grid.theme.accent; border.width: 1.5
+            // ▲▼: drag it up or down (Google Photos' scrubber thumb)
+            readonly property color glyph: grid.scrubbing ? grid.theme.accentText : grid.theme.accent
             Column {
-                anchors.centerIn: parent; spacing: 3
-                Repeater {
-                    model: 3
-                    delegate: Rectangle { width: 12; height: 1.5; radius: 1; color: grid.scrubbing ? grid.theme.accentText : grid.theme.accent }
+                anchors.centerIn: parent; spacing: 6
+                Image {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    source: "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 7"><path d="M1 6l5-5 5 5" fill="none" stroke="' + handle.glyph + '" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>')
+                    sourceSize.width: 12; sourceSize.height: 7
+                }
+                Image {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    source: "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 7"><path d="M1 1l5 5 5-5" fill="none" stroke="' + handle.glyph + '" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>')
+                    sourceSize.width: 12; sourceSize.height: 7
                 }
             }
             // target:null → never moves the handle (it tracks the scroll via `frac`); it only

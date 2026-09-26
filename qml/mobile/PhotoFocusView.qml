@@ -113,6 +113,7 @@ Rectangle {
     }
     onVisibleChanged: if (visible) forceActiveFocus()
     onPhotoChanged: {
+        slideAnim.stop(); slideBack.stop(); slideX = 0; navPending = false   // the neighbour slid in: it takes the centre
         resetZoom(); chrome = true; Qt.callLater(centerStrip)
         // video → video: a fresh player (its first-frame priming and speed start over)
         if (isVideo) { videoLoader.active = false; videoLoader.active = Qt.binding(() => viewer.isVideo) }
@@ -151,8 +152,8 @@ Rectangle {
     readonly property bool zoomed: image.scale > 1.01
     function resetZoom() {
         image.scale = 1
-        // bindings again, not values: the frame follows the controls once un-zoomed
-        image.x = Qt.binding(() => image.baseX)
+        // bindings again, not values: the frame follows the controls (and a swipe) once un-zoomed
+        image.x = Qt.binding(() => image.baseX + viewer.slideX)
         image.y = Qt.binding(() => image.baseY)
     }
 
@@ -167,6 +168,131 @@ Rectangle {
     readonly property real topReserve: framed ? 64 + safeTop : 0
     readonly property real bottomReserve: framed ? 72 + safeBottom + (strip && strip.length > 1 ? 60 : 0) : 0
 
+    // ---- swipe: the photo follows the finger, its neighbour slides in beside it ----------
+    // slideX is the horizontal offset of the whole strip (previous | this | next); letting go
+    // past a fifth of the width (or with a flick) slides the neighbour in and opens it, else
+    // the photo springs back. Up opens the details, down closes the viewer.
+    property real slideX: 0
+    function thumbOf(id) {
+        if (id === null || id === undefined || !strip) return ""
+        for (let i = 0; i < strip.length; i++) if (strip[i].id === id) return strip[i].thumbUrl || ""
+        return ""
+    }
+    readonly property string prevThumb: photo ? thumbOf(photo.prev) : ""
+    readonly property string nextThumb: photo ? thumbOf(photo.next) : ""
+    NumberAnimation {
+        id: slideAnim
+        target: viewer; property: "slideX"
+        duration: 190; easing.type: Easing.OutCubic
+        property int then_: 0   // -1 prev, 1 next, 0 spring back
+        onFinished: {
+            if (then_ === 0) return
+            viewer.navPending = true
+            if (then_ > 0) library.next(); else library.prev()
+            slideBack.restart()
+        }
+    }
+    // the neighbour never came (the computer went away): put this photo back
+    Timer { id: slideBack; interval: 3000; onTriggered: { viewer.navPending = false; slideAnim.stop(); slideAnim.to = 0; slideAnim.then_ = 0; slideAnim.start() } }
+    // one swipe handler for the photo, the video and the empty bands around them: it follows
+    // the finger, and tells a real release from a cancel (a second finger turning it into a
+    // pinch, another handler taking the touch) — a cancel only springs the photo back
+    component SwipeHandler: DragHandler {
+        target: null
+        enabled: !viewer.zoomed && !viewer.navPending
+        property real lastX
+        property real lastY
+        property bool cancelled: false
+        // positive evidence of a finger lifted: the grab let go with the point Released (a
+        // second finger deactivates the drag with no grab change at all — checked with
+        // qmltestrunner on Qt 6.11: release → UngrabPassive/UngrabExclusive with state
+        // Released, after active=false; second finger → active=false only)
+        property bool lifted: false
+        onGrabChanged: (transition, point) => {
+            if (transition === PointerDevice.CancelGrabExclusive || transition === PointerDevice.OverrideGrabExclusive
+                || transition === PointerDevice.CancelGrabPassive || transition === PointerDevice.OverrideGrabPassive)
+                cancelled = true
+            else if ((transition === PointerDevice.UngrabExclusive || transition === PointerDevice.UngrabPassive)
+                     && point.state === EventPoint.Released)
+                lifted = true
+        }
+        // Qt deactivates the handler BEFORE it reports the grab change that says why, so the
+        // release is decided a moment later, once a cancel had its chance to say so
+        property real endDx
+        property real endDy
+        property bool endFast
+        function decide() {
+            if (active) return   // a new touch already began
+            // anything but a finger lifted (a cancel, a second finger): back to the centre only
+            if (cancelled || !lifted) viewer.released(0, 0, false)
+            else viewer.released(endDx, endDy, endFast)
+            cancelled = false
+            lifted = false
+        }
+        onActiveChanged: {
+            if (active) { cancelled = false; lifted = false; slideAnim.stop(); slideBack.stop(); return }
+            endDx = lastX - centroid.scenePressPosition.x
+            endDy = lastY - centroid.scenePressPosition.y
+            endFast = Math.abs(centroid.velocity.x) > 900
+            Qt.callLater(decide)
+        }
+        onCentroidChanged: if (active) {
+            lastX = centroid.scenePosition.x; lastY = centroid.scenePosition.y
+            viewer.dragging(lastX - centroid.scenePressPosition.x, lastY - centroid.scenePressPosition.y)
+        }
+    }
+    // a slide went out and the neighbour is on its way: no new swipe until it lands
+    property bool navPending: false
+
+    function dragging(dx, dy) {
+        if (Math.abs(dx) > Math.abs(dy)) {
+            // resist past the ends
+            const blocked = (dx < 0 && (!photo || photo.next === null)) || (dx > 0 && (!photo || photo.prev === null))
+            slideX = blocked ? dx / 4 : dx
+        }
+    }
+    function released(dx, dy, fast) {
+        if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 70) {
+            slideX = 0
+            if (dy < 0) detailSheet.open(); else viewer.closed()
+            return
+        }
+        const w = viewer.width
+        const go = Math.abs(dx) > w / 5 || (fast && Math.abs(dx) > 40)
+        slideAnim.stop()
+        if (go && dx < 0 && photo && photo.next !== null) { slideAnim.to = -w; slideAnim.then_ = 1 }
+        else if (go && dx > 0 && photo && photo.prev !== null) { slideAnim.to = w; slideAnim.then_ = -1 }
+        else { slideAnim.to = 0; slideAnim.then_ = 0 }
+        slideAnim.start()
+    }
+    // the neighbours' thumbnails, beside the photo, sliding with it
+    Image {
+        visible: !viewer.zoomed && viewer.slideX > 0
+        x: image.x - viewer.width; y: image.y
+        width: image.width; height: image.height
+        source: viewer.prevThumb
+        fillMode: Image.PreserveAspectFit
+        asynchronous: true
+    }
+    Image {
+        visible: !viewer.zoomed && viewer.slideX < 0
+        x: image.x + viewer.width; y: image.y
+        width: image.width; height: image.height
+        source: viewer.nextThumb
+        fillMode: Image.PreserveAspectFit
+        asynchronous: true
+    }
+    // progressive: the thumbnail at once (the grid already decoded it), the photo over it
+    Image {
+        visible: !viewer.isVideo && image.status !== Image.Ready
+        x: image.x; y: image.y
+        width: image.width; height: image.height
+        source: viewer.isVideo || !viewer.photo ? "" : (viewer.photo.thumbUrl || "")
+        fillMode: Image.PreserveAspectFit
+        asynchronous: true
+        smooth: true
+    }
+
     Image {
         id: image
         visible: !viewer.isVideo
@@ -174,7 +300,7 @@ Rectangle {
         readonly property real baseY: viewer.topReserve
         width: viewer.width
         height: Math.max(1, viewer.height - viewer.topReserve - viewer.bottomReserve)
-        x: baseX
+        x: baseX + viewer.slideX
         y: baseY
         transformOrigin: Item.Center
         source: viewer.isVideo ? "" : (viewer.photo ? viewer.photo.fileUrl : "")
@@ -258,6 +384,7 @@ Rectangle {
         onYChanged: if (viewer.zoomed && bigPhoto) hiResTimer.restart()
 
         PinchHandler {
+            id: pinch
             target: image
             minimumScale: 1
             maximumScale: 6
@@ -283,18 +410,9 @@ Rectangle {
         // Swipe left / right for the neighbours, on the photo itself: it gets the touch
         // first — the one on the viewer below never saw it (the full-screen MouseArea and
         // the photo's own handlers took the press), so swiping did nothing.
-        DragHandler {
-            target: null
-            enabled: !viewer.zoomed
-            xAxis.enabled: true
-            yAxis.enabled: false
-            // measured from where the finger went DOWN to its last position: a quick flick
-            // arrives in a few events, and activeTranslation (counted from activation, past
-            // the drag threshold) was then 0 — the swipe did nothing
-            property real lastX
-            onCentroidChanged: if (active) lastX = centroid.scenePosition.x
-            onActiveChanged: if (!active) viewer.swiped(lastX - centroid.scenePressPosition.x)
-        }
+        // (measured from where the finger went DOWN: a quick flick arrives in a few events,
+        // and activeTranslation, counted from activation past the drag threshold, was 0)
+        SwipeHandler { }
         TapHandler {
             // exclusive: singleTapped waits out the double-tap interval, so a double tap is
             // never also a chrome toggle
@@ -317,7 +435,8 @@ Rectangle {
     // frame thumbnail arrives in the grid once the computer has the video and made one.
     Loader {
         id: videoLoader
-        anchors.fill: parent
+        x: viewer.slideX; y: 0   // slides with a swipe, like the photo
+        width: viewer.width; height: viewer.height
         active: viewer.isVideo
         sourceComponent: Component {
             Rectangle {
@@ -352,14 +471,7 @@ Rectangle {
                     anchors.fill: parent
                     onClicked: { mp.priming = false; mp.playbackState === MediaPlayer.PlayingState ? mp.pause() : mp.play() }
                 }
-                DragHandler {   // a video swipes to its neighbours like a photo
-                    target: null
-                    xAxis.enabled: true
-                    yAxis.enabled: false
-                    property real lastX
-                    onCentroidChanged: if (active) lastX = centroid.scenePosition.x
-                    onActiveChanged: if (!active) viewer.swiped(lastX - centroid.scenePressPosition.x)
-                }
+                SwipeHandler { }   // a video slides to its neighbours like a photo (up: details)
                 Rectangle {   // big play/pause
                     anchors.centerIn: parent
                     width: 88; height: 88; radius: 44
@@ -586,21 +698,8 @@ Rectangle {
         MenuSeparator { visible: viewer.castDevices.length > 0 }
         MenuItem { text: "Stop casting"; onTriggered: library.castStop() }
     }
-    // swipe left / right for the neighbours — off while zoomed, where a drag pans instead
-    // (the handlers on the photo and the video call this; this one catches the empty bands)
-    function swiped(dx) {
-        if (dx < -60 && viewer.photo && viewer.photo.next !== null) library.next()
-        else if (dx > 60 && viewer.photo && viewer.photo.prev !== null) library.prev()
-    }
-    DragHandler {
-        target: null
-        enabled: !viewer.zoomed
-        xAxis.enabled: true
-        yAxis.enabled: false
-        property real lastX
-        onCentroidChanged: if (active) lastX = centroid.scenePosition.x
-        onActiveChanged: if (!active) viewer.swiped(lastX - centroid.scenePressPosition.x)
-    }
+    // the same swipes on the empty bands around the photo (off while zoomed: a drag pans)
+    SwipeHandler { }
 
     // Bottom filmstrip: scrub the surrounding photos, the current one ringed; tap to jump.
     // Uses the grid's already-loaded page, so it costs no extra backend round-trip.

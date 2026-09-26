@@ -1408,8 +1408,15 @@ version (WithUi)
                 JSONValue photo = r;
                 photo["prev"] = (e2.type == JSONType.null_ && "prev" in n) ? n["prev"] : JSONValue(null);
                 photo["next"] = (e2.type == JSONType.null_ && "next" in n) ? n["next"] : JSONValue(null);
-                strip = stripAround(id).toString();
-                stripChanged.emit();
+                {
+                    // only when it changed: an unchanged window must not rebuild the filmstrip
+                    immutable st = stripAround(id).toString();
+                    if (st != strip)
+                    {
+                        strip = st;
+                        stripChanged.emit();
+                    }
+                }
                 if (!remote)
                 {
                     current = photo.toString();
@@ -2644,6 +2651,8 @@ version (WithUi)
 
     /// The viewer's filmstrip: the photos around `id` in the listing, with their thumbnails
     /// (QML's copy of the listing is the lean one, without them).
+    private size_t stripFrom, stripTo;   // the filmstrip's window in `items`
+
     private JSONValue stripAround(long id)
     {
         enum reach = 60;
@@ -2657,8 +2666,24 @@ version (WithUi)
         JSONValue[] out_;
         if (at == size_t.max)
             return JSONValue(out_);
-        immutable from = at > reach ? at - reach : 0;
-        immutable to = at + reach + 1 < items.length ? at + reach + 1 : items.length;
+        // the same window while the photo stays well inside it: the filmstrip then only moves
+        // its highlight (a window re-centred on every photo rebuilt the list, which "spun")
+        enum margin = 15;
+        size_t from, to;
+        if (stripTo <= items.length && stripFrom < stripTo
+            && at >= stripFrom + (stripFrom > 0 ? margin : 0)
+            && at + (stripTo < items.length ? margin : 0) < stripTo)
+        {
+            from = stripFrom;
+            to = stripTo;
+        }
+        else
+        {
+            from = at > reach ? at - reach : 0;
+            to = at + reach + 1 < items.length ? at + reach + 1 : items.length;
+            stripFrom = from;
+            stripTo = to;
+        }
         foreach (ref it; items[from .. to])
         {
             JSONValue j = JSONValue.emptyObject;

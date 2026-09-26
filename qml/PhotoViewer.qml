@@ -200,7 +200,16 @@ Item {
         if (zoom === 1) { panX = 0; panY = 0 }
     }
     function resetZoom() { zoom = 1; panX = 0; panY = 0 }
-    onPhotoChanged: { if (editing && photo && photo.id === editingId) return; resetZoom(); if (editing) endEdit() }
+    onPhotoChanged: {
+        if (editing && photo && photo.id === editingId) return
+        resetZoom(); if (editing) endEdit()
+        stage.transitionFrom(lastShown)
+        navDir = 0
+        if (photo && photo.video === true) lastShown = ""   // (a video leaves no picture to slide out)
+    }
+    // the picture last actually shown (updated when a decode is ready: the edit preview too),
+    // what the slide takes out when the photo changes
+    property string lastShown: ""
     onZoomChanged: regionTimer.restart()
     onPanXChanged: regionTimer.restart()
     onPanYChanged: regionTimer.restart()
@@ -259,8 +268,11 @@ Item {
 
     function step(delta) {
         const i = currentIndex + delta
-        if (i >= 0 && i < items.length) openIndex(i)
+        if (i >= 0 && i < items.length) { navDir = delta > 0 ? 1 : -1; openIndex(i) }
     }
+    // the direction of the last move (1 next, -1 previous, 0 opened from elsewhere): the photo
+    // slides that way
+    property int navDir: 0
 
     // ---- the photo ------------------------------------------------------------------
     Item {
@@ -269,8 +281,64 @@ Item {
         anchors.left: parent.left
         anchors.right: info.visible ? info.left : editPanel.visible ? editPanel.left : parent.right
         anchors.bottom: caption.top
+        clip: true   // a zoomed photo stays inside its area (it drew over the bars and the strip)
 
         readonly property bool isVideo: viewer.photo && viewer.photo.video === true
+
+        // the move to another photo: the old one slides out (and fades) the way we go, the new
+        // one comes in from the other side; opened from elsewhere, a crossfade
+        // true from a move until the new picture has slid in (face boxes wait for it)
+        property bool sliding: false
+        property bool pendingIn: false
+        function transitionFrom(oldSource) {
+            outAnim.stop(); inAnim.stop(); inWait.stop()
+            if (!oldSource || stage.isVideo) { ghost.source = ""; slide.x = 0; image.opacity = 1; sliding = false; pendingIn = false; return }
+            ghost.source = oldSource
+            ghost.opacity = 1
+            ghostSlide.x = 0
+            const d = viewer.navDir
+            outAnim.dx = -d * stage.width * 0.35
+            slide.x = d * stage.width * 0.35
+            image.opacity = 0
+            sliding = true
+            // the old picture stays until the new one is decoded (at most 600 ms), then both move
+            pendingIn = true
+            inWait.restart()
+            // (checked once the image's source binding has moved to the new photo: read now, the
+            // status is still the old picture's)
+            Qt.callLater(() => { if (image.status === Image.Ready) stage.startSlide() })
+        }
+        function startSlide() {
+            if (!pendingIn) return
+            pendingIn = false
+            inWait.stop()
+            outAnim.start(); inAnim.start()
+        }
+        Timer { id: inWait; interval: 600; onTriggered: stage.startSlide() }
+        Image {
+            id: ghost
+            x: image.x; y: image.y; width: image.width; height: image.height
+            visible: source != "" && opacity > 0.01
+            fillMode: Image.PreserveAspectFit
+            autoTransform: true
+            asynchronous: false   // the pixmap cache already holds it: no flash of nothing
+            cache: true
+            sourceSize: image.sourceSize
+            transform: Translate { id: ghostSlide }
+        }
+        ParallelAnimation {
+            id: outAnim
+            property real dx: 0
+            NumberAnimation { target: ghostSlide; property: "x"; to: outAnim.dx; duration: 180; easing.type: Easing.OutCubic }
+            NumberAnimation { target: ghost; property: "opacity"; to: 0; duration: 180 }
+            onFinished: ghost.source = ""
+        }
+        ParallelAnimation {
+            id: inAnim
+            NumberAnimation { target: slide; property: "x"; to: 0; duration: 180; easing.type: Easing.OutCubic }
+            NumberAnimation { target: image; property: "opacity"; to: 1; duration: 180 }
+            onFinished: stage.sliding = false
+        }
         Image {
             id: image
             visible: !stage.isVideo
@@ -280,6 +348,7 @@ Item {
             y: 12 + viewer.panY
             scale: viewer.zoom
             transformOrigin: Item.Center
+            transform: Translate { id: slide }
             // while editing: the core's preview of the current edits; otherwise the saved result, or the file.
             // A video is handled by the player below, not here.
             source: stage.isVideo ? ""
@@ -301,6 +370,10 @@ Item {
             mipmap: false
             sourceSize.width: Math.min(4096, 256 * Math.ceil(stage.width * dpr / 256))
             sourceSize.height: Math.min(4096, 256 * Math.ceil(stage.height * dpr / 256))
+            onStatusChanged: if (status === Image.Ready) {
+                viewer.lastShown = source.toString()
+                stage.startSlide()
+            }
         }
         // the zoomed-in region at the original's resolution, laid over the scaled picture
         Image {
@@ -555,7 +628,7 @@ Item {
             id: overlay
             // shown while hovering or naming; toggled by showFaces; tracks zoom+pan so
             // faces stay markable when zoomed in (uses the zoom-aware painted geometry)
-            visible: !viewer.editing && image.status === Image.Ready && viewer.showFaces && (stageHover.hovered || namer.opened)
+            visible: !viewer.editing && !stage.sliding && image.status === Image.Ready && viewer.showFaces && (stageHover.hovered || namer.opened)
             Repeater {
                 model: viewer.faces
                 delegate: Item {

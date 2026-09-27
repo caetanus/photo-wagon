@@ -140,6 +140,7 @@ final class HsMuxServe
 	/// flush to a peer that is gone), then the same teardown a udx close would run.
 	private void watch() nothrow
 	{
+		int tick;
 		while (!gone)
 		{
 			try
@@ -148,11 +149,20 @@ final class HsMuxServe
 				return; // interrupted: the session is closing
 			if (gone)
 				return;
+			// the transport's own view every 10 s (and when the peer goes quiet): what a link
+			// that dies on the phone's 4G was doing — mtu, rtt, losses, what never got acked
+			immutable quiet = MonoTime.currTime - lastRecv > 3.seconds;
+			if (++tick % 10 == 0 || (quiet && tick % 2 == 0))
+				try
+					logInfo("hs/mux: %s link %s%s", short_, c.linkStats(), quiet ? " (quiet)" : "");
+				catch (Exception)
+				{
+				}
 			immutable limit = authed ? deadAfter : pairPending ? deadAfterPairing : deadAfterPreAuth;
 			if (MonoTime.currTime - lastRecv <= limit)
 				continue;
 			try
-				logInfo("hs/mux: %s silent for %ss — dropping", short_, limit.total!"seconds");
+				logInfo("hs/mux: %s silent for %ss — dropping (%s)", short_, limit.total!"seconds", c.linkStats());
 			catch (Exception)
 			{
 			}

@@ -19,6 +19,7 @@ import core.time : MonoTime, msecs, seconds;
 import vibe.core.core : sleep;
 import vibe.core.log : logInfo, logDiagnostic;
 import vibe.core.sync : LocalTaskSemaphore;
+import vibe.core.task : Task;
 
 /// Lane priorities: lower runs first among the passes waiting.
 enum Priority : int
@@ -47,6 +48,8 @@ final class Scheduler
 	private long seq;
 	private bool laneBusy;
 	private string laneName;
+	private int lanePrio;
+	private Task laneOwner;   // the fiber whose pass holds the lane (a borrower while lent)
 
 	this(int heavyPermits)
 	{
@@ -117,18 +120,65 @@ final class Scheduler
 		dropWaiter(mySeq);
 		laneBusy = true;
 		laneName = name;
+		lanePrio = prio;
+		auto me = Task.getThis();
+		laneOwner = me;
 		auto started = MonoTime.currTime;
 		logDiagnostic("jobs: %s starts (%s queued)", name, waiting.length);
 		scope (exit)
 		{
-			laneBusy = false;
-			laneName = null;
-			// a pass leaves a heap behind it (JSON, decoded pixels, blobs): give it back
-			GC.collect();
-			GC.minimize();
-			logDiagnostic("jobs: %s done in %.1fs", name, (MonoTime.currTime - started).total!"msecs" / 1000.0);
+			// only if this pass still holds it: interrupted while lending, a borrower does
+			if (laneOwner == me)
+			{
+				laneBusy = false;
+				laneName = null;
+				laneOwner = Task.init;
+				// a pass leaves a heap behind it (JSON, decoded pixels, blobs): give it back —
+				// after a real pass only. One received photo is a pass of its own, and a full
+				// collection of the whole heap per photo, on the event-loop thread, stalled
+				// everything else during a sync (the phone's link went silent and dropped).
+				if (MonoTime.currTime - started >= 1.seconds)
+				{
+					GC.collect();
+					GC.minimize();
+				}
+				logDiagnostic("jobs: %s done in %.1fs", name, (MonoTime.currTime - started).total!"msecs" / 1000.0);
+			}
 		}
 		body_();
+	}
+
+	/// Called by a long pass between two of its photos: when a more urgent pass waits (a
+	/// photo that just arrived — the user wants to SEE it; enrichment can wait), the lane
+	/// is lent to it and this pass resumes after, ahead of passes of its own rank. Still
+	/// one pass at a time. A no-op outside a pass or when nothing more urgent waits.
+	void yieldLane()
+	{
+		auto me = Task.getThis();
+		if (!laneBusy || laneOwner != me)
+			return;   // not inside this fiber's own pass
+		bool urgent;
+		foreach (w; waiting)
+			if (w.prio < lanePrio)
+				urgent = true;
+		if (!urgent)
+			return;
+		immutable myPrio = lanePrio;
+		immutable myName = laneName;
+		immutable mySeq = -(++seq);   // negative: first among its own rank when the lane frees
+		laneBusy = false;
+		laneName = null;
+		laneOwner = Task.init;
+		waiting ~= Waiter(myPrio, mySeq);
+		scope (exit)
+			dropWaiter(mySeq);
+		logDiagnostic("jobs: %s steps aside", myName);
+		while (laneBusy || !isNext(mySeq))
+			sleep(20.msecs);
+		laneBusy = true;
+		laneName = myName;
+		lanePrio = myPrio;
+		laneOwner = me;
 	}
 
 	private bool isNext(long mySeq) const
@@ -237,3 +287,63 @@ unittest
 }
 
 version (unittest) import std.conv : to;
+
+unittest
+{
+	// a long pass lends the lane between its photos to a more urgent one (a photo that just
+	// arrived), then resumes before a waiting pass of its own rank; still one at a time
+	import vibe.core.core : runTask, runEventLoop, exitEventLoop;
+
+	auto s = new Scheduler(1);
+	string[] order;
+	int inside, maxInside;
+	void enter(string what)
+	{
+		inside++;
+		if (inside > maxInside)
+			maxInside = inside;
+		order ~= what;
+	}
+
+	void safe(void delegate() f) nothrow
+	{
+		try
+			f();
+		catch (Exception)
+		{
+		}
+	}
+
+	runTask(() nothrow {
+		safe({
+			auto long_ = runTask(() nothrow {
+				safe({
+					s.pass(Priority.faces, "faces", {
+						foreach (i; 0 .. 3)
+						{
+							s.yieldLane();
+							enter("faces" ~ i.to!string);
+							sleep(40.msecs);
+							inside--;
+						}
+					});
+				});
+			});
+			sleep(10.msecs);   // faces0 runs
+			auto peer = runTask(() nothrow {
+				safe({ s.pass(Priority.faces, "faces-b", { enter("faces-b"); inside--; }); });
+			});
+			auto imp = runTask(() nothrow {
+				safe({ s.pass(Priority.indexer, "import", { enter("import"); sleep(5.msecs); inside--; }); });
+			});
+			long_.join();
+			peer.join();
+			imp.join();
+			s.yieldLane();   // outside a pass: nothing
+			exitEventLoop();
+		});
+	});
+	runEventLoop();
+	assert(maxInside == 1);
+	assert(order == ["faces0", "import", "faces1", "faces2", "faces-b"], order.to!string);
+}

@@ -311,6 +311,7 @@ final class SceneService
 		{
 			if (closed)
 				return;
+			jobs.yieldLane();   // a photo that just arrived goes in first
 			float[clipDim] emb;
 			bool encoded;
 			try

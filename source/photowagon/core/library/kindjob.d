@@ -103,6 +103,7 @@ final class KindService
 		long[string] counts;
 		foreach (id; ids)
 		{
+			jobs.yieldLane();   // a photo that just arrived goes in first
 			try
 			{
 				auto p = photos.get(id);

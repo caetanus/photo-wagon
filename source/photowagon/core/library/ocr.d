@@ -147,6 +147,7 @@ final class OcrService
 		{
 			if (closed)
 				return;
+			jobs.yieldLane();   // a photo that just arrived goes in first
 			string text;
 			try
 			{

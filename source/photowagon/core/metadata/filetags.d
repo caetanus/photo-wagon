@@ -224,6 +224,7 @@ final class FileTagWriter
 		immutable total = queue.length;
 		while (queue.length && !closed)
 		{
+			jobs.yieldLane();   // a photo that just arrived goes in first
 			long id;
 			foreach (k, _; queue)
 			{

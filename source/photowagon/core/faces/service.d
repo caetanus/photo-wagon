@@ -389,6 +389,7 @@ final class FaceService
 		long done, found;
 		foreach (id; ids)
 		{
+			jobs.yieldLane();   // a photo that just arrived goes in first
 			if (!claim(id))
 			{
 				done++;   // a device's faces arrived (or are arriving) for it

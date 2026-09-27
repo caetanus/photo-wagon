@@ -16,6 +16,7 @@ import core.time : MonoTime, Duration, minutes, seconds;
 
 import vibe.core.core : runTask, sleep;
 import vibe.core.task : Task;
+import vibe.core.sync : LocalManualEvent, createManualEvent;
 import vibe.core.log : logDiagnostic, logInfo;
 
 import hyperswarm.connection : Connection;
@@ -27,7 +28,8 @@ import photowagon.core.ipc.events : Events, EventSink;
 import photowagon.core.ipc.handler : RequestHandler;
 import photowagon.core.ipc.protocol : Registry, getString;
 import photowagon.core.p2p.devices : DeviceRepo, DeviceState, PairingManager;
-import photowagon.core.sync.muxstream : MuxSession, MuxStream, muxTagControl, muxTagPiece;
+import photowagon.core.sync.muxstream : LinkMux, MuxSession, MuxStream, muxTagControl, muxTagPiece, isLegacyMuxFrame;
+import photowagon.core.sync.pmux : PmuxSession;
 import photowagon.core.sync.pieces : PieceService, PieceStore;
 
 alias tagControl = muxTagControl;
@@ -45,6 +47,8 @@ enum deadAfterPreAuth = 10.seconds;
 /// waits (its pings start after auth), so silence is expected — but a pairing nobody
 /// confirms must not hold the session forever either.
 enum deadAfterPairing = 5.minutes;
+/// Replies/events queued for a phone that is not reading: past this it is dropped.
+enum size_t maxOutQueued = 64 * 1024 * 1024;
 
 /// One phone session over a hyperswarm Connection, on the mux.
 final class HsMuxServe
@@ -57,14 +61,20 @@ final class HsMuxServe
 	private DeviceRepo devices;
 	private PairingManager pairing;
 	private PieceService pieces;
-	private MuxSession mux;
-	private MuxStream control;           // the 'i' stream we send replies/events on
+	private LinkMux mux;                 // made on the phone's first message: protomux, or the legacy mux
+	private Stream control;              // the 'i' stream we send replies/events on
 	private RequestHandler handler;
 	private EventSink sink;
 	private bool authed, tokenOk, gone, pairPending;
 	private uint pairGen; // which daemon.pair is current: a superseded resolver must not clear it
 	private MonoTime lastRecv;
 	private Task watchdog;
+	// replies and events leave through a queue a task of its own writes: an event producer
+	// (Events.emit is synchronous) must never block on this peer's flow control
+	private string[] outq;
+	private size_t outBytes;
+	private LocalManualEvent outEv;
+	private Task writer;
 
 	this(Connection c, Registry registry, Events events, string token, DeviceRepo devices,
 		PairingManager pairing, PieceService pieces)
@@ -78,16 +88,18 @@ final class HsMuxServe
 		this.pieces = pieces;
 		peer = hex(c.remotePublicKey[]);
 		handler = new RequestHandler(registry, &send);
+		outEv = createManualEvent();
 		sink = &send;
 		authed = token.length == 0;
-		mux = new MuxSession(&write, /*initiator*/ false, &onAccept);
-		mux.throttle = () nothrow { hsWaitWritable(c); };
 		lastRecv = MonoTime.currTime;
 		c.onData((ubyte[] b) nothrow {
 			if (gone)
 				return;
 			lastRecv = MonoTime.currTime;
-			mux.feed(b);
+			if (mux is null)
+				mux = makeMux(b);
+			if (mux !is null)
+				mux.feed(b);
 		});
 		c.onClose = &onClose;
 		events.attach(sink);
@@ -97,6 +109,31 @@ final class HsMuxServe
 		{
 		}
 		logInfo("hs/mux: %s connected", short_);
+	}
+
+	/// The phone speaks first; its first message says which mux it runs: protomux (this
+	/// version) or the legacy framing of an older phone.
+	private LinkMux makeMux(const(ubyte)[] first) nothrow
+	{
+		LinkMux m;
+		immutable legacy = isLegacyMuxFrame(first);
+		try
+		{
+			if (legacy)
+				m = new MuxSession(&write, /*initiator*/ false, (MuxStream s) nothrow { onAccept(s); });
+			else
+			{
+				auto pm = new PmuxSession(&write, &onAccept, () nothrow { c.destroy(); });
+				pm.admitted = () nothrow { return authed; };   // the mini apps' TCP services: paired peers only
+				m = pm;
+			}
+			m.setThrottle(() nothrow { hsWaitWritable(c); });
+			logInfo("hs/mux: %s speaks %s", short_, legacy ? "the legacy mux" : "protomux");
+		}
+		catch (Exception)
+		{
+		}
+		return m;
 	}
 
 	/// Drop a peer that has gone silent past its deadline: a hard destroy (nothing to
@@ -134,10 +171,12 @@ final class HsMuxServe
 		}
 	}
 
-	private void onAccept(MuxStream s) nothrow
+	private void onAccept(Stream s) nothrow
 	{
 		try
 			runTask(() nothrow {
+				scope (exit)
+					s.close();   // served (or failed): this side is done with it
 				try
 				{
 					ubyte[1] tag;
@@ -161,9 +200,11 @@ final class HsMuxServe
 
 	// ---- control channel ('i'): the JSON-lines IPC, auth/pair, events --------------------
 
-	private void serveControl(MuxStream s)
+	private void serveControl(Stream s)
 	{
 		control = s;   // events and replies go here
+		if (writer == Task.init)
+			writer = runTask(&writeOut);
 		for (;;)
 		{
 			auto line = cast(string) readLengthPrefixed(s, maxControlLine).idup;
@@ -179,10 +220,50 @@ final class HsMuxServe
 			line = line[0 .. $ - 1];
 		if (line.length == 0)
 			return;
-		try
-			writeLengthPrefixed(control, cast(const(ubyte)[]) line);
-		catch (Exception)
+		if (outBytes + line.length > maxOutQueued)
 		{
+			// the peer takes nothing (withheld flow credit, a stuck phone): cut it loose
+			try
+				logInfo("hs/mux: %s is not reading — dropping", short_);
+			catch (Exception)
+			{
+			}
+			c.destroy();
+			onClose();
+			return;
+		}
+		outq ~= line;
+		outBytes += line.length;
+		outEv.emit();
+	}
+
+	// the control channel's writer: one line at a time, in order
+	private void writeOut() nothrow
+	{
+		auto seen = outEv.emitCount;
+		while (!gone)
+		{
+			if (outq.length == 0)
+			{
+				try
+					seen = outEv.wait(seen);
+				catch (Exception)
+					return;
+				continue;
+			}
+			auto line = outq[0];
+			outq = outq[1 .. $];
+			outBytes -= line.length;
+			try
+				writeLengthPrefixed(control, cast(const(ubyte)[]) line);
+			catch (Exception)
+			{
+				// the control stream is gone: without it nothing reaches the phone — end the
+				// session (it reconnects) rather than queue replies nobody will read
+				c.destroy();
+				onClose();
+				return;
+			}
 		}
 	}
 
@@ -302,7 +383,7 @@ final class HsMuxServe
 
 	// ---- piece channel ('p') -------------------------------------------------------------
 
-	private void servePieces(MuxStream s)
+	private void servePieces(Stream s)
 	{
 		if (!authed)   // only a paired device may pull/push pieces
 		{
@@ -328,12 +409,15 @@ final class HsMuxServe
 		if (gone)
 			return;
 		gone = true;
+		outq = null;
+		outEv.emit();   // the writer leaves
 		// stop the watchdog, unless this teardown is running on it (no self-interrupt)
 		if (watchdog != Task.init && watchdog.running && Task.getThis() != watchdog)
 			watchdog.interrupt();
 		try
 		{
-			mux.closeAll();
+			if (mux !is null)
+				mux.closeAll();
 			events.detach(sink);
 			handler.close();
 			if (pairing !is null && !authed)

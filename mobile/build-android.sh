@@ -186,7 +186,7 @@ if [ -n "$HS_WANTED" ]; then
     done
     HS_VERSION="-d-version=PwHyperswarm"
     HS_INCLUDES="-I$HERE/../../d-hyperswarm/source"
-    HS_SOURCES="../source/photowagon/core/p2p/hswarm.d ../source/photowagon/core/sync/muxstream.d"
+    HS_SOURCES="../source/photowagon/core/p2p/hswarm.d ../source/photowagon/core/sync/muxstream.d ../source/photowagon/core/sync/pmux.d"
     echo "PW_HS: hyperswarm flavor ON for $ABI_DIR:$UDX_LIBS"
 fi
 # UDX_WHOLE=1: force every member of the two archives into the .so (--whole-archive). Until

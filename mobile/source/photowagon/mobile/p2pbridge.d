@@ -43,7 +43,8 @@ import photowagon.core.sync.pieces : PieceStore, PieceService, Manifest, Bitfiel
 version (PwHyperswarm)
 {
     import photowagon.core.p2p.hswarm : HsTransport, hsWaitWritable;
-    import photowagon.core.sync.muxstream : MuxSession, MuxStream, muxTagControl, muxTagPiece;
+    import photowagon.core.sync.muxstream : muxTagControl, muxTagPiece;
+    import photowagon.core.sync.pmux : PmuxSession;
     import hyperswarm.connection : HsConn = Connection;
 }
 import photowagon.core.pairingcode : parsePairingCode;
@@ -1291,8 +1292,10 @@ final class P2pBridge : Bridge
                         if (ss.conn is c)
                             hsSessions.remove(peerKey);
 
-            auto mux = new MuxSession(hsWrite(c), /*initiator*/ true, null);
-            mux.throttle = hsThrottle(c);
+            // protomux on the Connection (a desktop of this version or later tells it from the
+            // legacy mux by this first frame); the phone only dials, it accepts no stream
+            auto mux = new PmuxSession(hsWrite(c), null, () nothrow { c.destroy(); });
+            mux.setThrottle(hsThrottle(c));
             c.onData((ubyte[] b) nothrow { try mux.feed(b); catch (Exception) {} });
             bool dead;
             c.onClose = () nothrow { dead = true; try mux.closeAll(); catch (Exception) {} };
@@ -1483,7 +1486,7 @@ final class P2pBridge : Bridge
         }
 
         // daemon.auth, then daemon.pair if the desktop needs it; blocks until admitted or refused.
-        private bool hsAuth(MuxStream ctl)
+        private bool hsAuth(Stream ctl)
         {
             JSONValue auth = ["id": JSONValue(-10), "method": JSONValue("daemon.auth"),
                 "params": JSONValue(["token": JSONValue(hsToken()), "name": JSONValue(deviceName())])];

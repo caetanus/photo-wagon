@@ -47,7 +47,7 @@ configuration "desktop-hs" {
 	// hsession.d: the parked HsSession (never constructed; the live path is P2pBridge.hsRun
 	// over muxstream). Excluded like the desktop config and build-android.sh do.
 	excludedSourceFiles "source/photowagon/mobile/hsession.d"
-	sourceFiles "../source/photowagon/core/p2p/hswarm.d" "../source/photowagon/core/sync/muxstream.d"
+	sourceFiles "../source/photowagon/core/p2p/hswarm.d" "../source/photowagon/core/sync/muxstream.d" "../source/photowagon/core/sync/pmux.d"
 	libs "Qt6Quick" "Qt6QmlModels" "Qt6Qml" "Qt6Gui" "Qt6Network" "Qt6Core" "stdc++"
 	lflags "--start-group" "$PACKAGE_DIR/../../qt-dlang-gen/.build/qt-6.11-cxx-quick/libbinding_ldc2.a" \
 	       "$PACKAGE_DIR/../../qt-dlang-gen/.build/qt-6.11-cxx-quick/libshims.a" "--end-group" \

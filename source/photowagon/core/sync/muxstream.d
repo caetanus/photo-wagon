@@ -33,8 +33,42 @@ enum size_t maxMuxFrame = maxMuxPayload + 16;
 
 private enum ubyte flagData = 0, flagFin = 1, flagReset = 2;
 
+/// What the phone↔desktop link code needs of a mux over one hyperswarm Connection — the
+/// legacy framing below (MuxSession) or protomux (photowagon.core.sync.pmux.PmuxSession).
+/// Streams open with their 1-byte tag (muxTagControl / muxTagPiece) as their first write,
+/// and an accepted stream reads its tag first, whichever mux carries them.
+interface LinkMux
+{
+	/// A new logical stream to the peer.
+	Stream open();
+	/// Bytes (one Connection message) from the peer.
+	void feed(const(ubyte)[] bytes) nothrow;
+	/// The Connection is gone: every stream fails.
+	void closeAll() nothrow;
+	/// Backpressure between a stream's big writes (see MuxSession.throttle).
+	void setThrottle(void delegate() nothrow t) nothrow;
+}
+
+/// Whether `msg` — the FIRST message a peer sends on a Connection — is the legacy mux
+/// framing (this module) rather than protomux. Legacy: one frame per message, `u32 BE len`
+/// equal to the rest of the message, then an odd (dialer's) stream id and a flag 0..2.
+/// Protomux's first message is a control frame `uint 0, uint type…`: an open (00 01 …, so
+/// the u32 would be ≥ 65536 — never the length of one message) or a batch (00 00 then a
+/// channel id and a length-prefixed message, which would have to match the length, the
+/// parity and the flag all at once).
+bool isLegacyMuxFrame(const(ubyte)[] msg) pure nothrow @safe
+{
+	if (msg.length < 9 || msg[0] != 0)
+		return false;
+	immutable len = (cast(uint) msg[0] << 24) | (cast(uint) msg[1] << 16) | (cast(uint) msg[2] << 8) | msg[3];
+	if (len != msg.length - 4)
+		return false;
+	immutable id = (cast(uint) msg[4] << 24) | (cast(uint) msg[5] << 16) | (cast(uint) msg[6] << 8) | msg[7];
+	return (id & 1) == 1 && msg[8] <= flagReset;
+}
+
 /// One end of the mux over a byte pipe.
-final class MuxSession
+final class MuxSession : LinkMux
 {
 	private void delegate(const(ubyte)[]) nothrow sink;   // Connection.write
 	private void delegate(MuxStream) nothrow onAccept;     // an inbound logical stream opened
@@ -55,6 +89,11 @@ final class MuxSession
 		this.sink = sink;
 		this.onAccept = onAccept;
 		nextId = initiator ? 1 : 2;
+	}
+
+	void setThrottle(void delegate() nothrow t) nothrow
+	{
+		throttle = t;
 	}
 
 	/// Open a logical stream to the peer (the asking side of a request).

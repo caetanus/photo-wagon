@@ -6,7 +6,7 @@
 // call the same function once the core moves there.
 module photowagon.mobile.corefactory;
 
-import photowagon.mobile.plog : plog;
+import photowagon.mobile.plog : plog, plogFile;
 import photowagon.mobile.localbridge : LocalBridge;
 import photowagon.mobile.phoneindex : PhoneIndex;
 import photowagon.mobile.p2pbridge : P2pBridge;
@@ -97,6 +97,7 @@ PhoneCore buildPhoneCore()
     core.cacheDir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation).toString();
     auto roots = photoRoots();
     plog("phone: roots ", roots, " data ", core.dataDir, " cache ", core.cacheDir);
+    plogFile = buildPath(core.dataDir, "p2p.log");   // the link's history, readable after the fact
 
     {
         import photowagon.mobile.corelock : acquireCoreLock, coreLockHolder;

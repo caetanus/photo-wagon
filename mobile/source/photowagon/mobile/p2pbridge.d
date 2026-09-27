@@ -739,6 +739,7 @@ final class P2pBridge : Bridge
         import std.conv : to;
 
         string sig = netSignature();
+        string sig4 = ipv4Of(sig);
         long last = bootNanos();
         for (;;)
         {
@@ -748,14 +749,19 @@ final class P2pBridge : Bridge
                 return;
             immutable now = bootNanos();
             immutable cur = netSignature();
+            immutable cur4 = ipv4Of(cur);   // from the same snapshot: a move between two reads is not lost
             string why;
             immutable resumed = last > 0 && now - last > 10_000_000_000L;
             immutable addrChanged = cur != sig;   // judged on its own: a wake may ALSO move the network
+            // Only an IPv4 move restarts the session: the hyperswarm link is IPv4, and on 4G the
+            // IPv6 side churns all the time (the VoLTE/IMS interface, temporary addresses) —
+            // restarting on each killed a working link over and over ("4G never connects").
+            immutable v4Changed = cur4 != sig4;
             try
             {
                 if (resumed)
                     why = "resumed after " ~ ((now - last) / 1_000_000_000L).to!string ~ " s asleep";
-                if (addrChanged)
+                if (addrChanged || v4Changed)
                     why ~= (why.length ? "; " : "") ~ "network changed [" ~ sig ~ "] -> [" ~ cur ~ "]";
             }
             catch (Exception)
@@ -763,6 +769,7 @@ final class P2pBridge : Bridge
             }
             last = now;
             sig = cur;
+            sig4 = cur4;
             if (why.length == 0)
                 continue;
             // libp2p forgets the old network: its dead connections (and their observed
@@ -785,7 +792,7 @@ final class P2pBridge : Bridge
             bool bumped;
             try
                 synchronized (lock)
-                    if (addrChanged || lastBumpBoot < now - 3_000_000_000L)
+                    if (v4Changed || (resumed && lastBumpBoot < now - 3_000_000_000L))
                     {
                         bumpLocked();
                         bumped = true;
@@ -794,7 +801,8 @@ final class P2pBridge : Bridge
             {
             }
             try
-                plog("p2p: ", why, bumped ? " — restarting the session" : " — session already restarting");
+                plog("p2p: ", why, bumped ? " — restarting the session"
+                    : v4Changed || resumed ? " — session already restarting" : " — IPv4 unchanged, the session stays");
             catch (Exception)
             {
             }
@@ -816,6 +824,18 @@ final class P2pBridge : Bridge
 
     /// Every address of an UP, non-loopback interface (IPv6 link-local skipped: it is
     /// per-link noise), as sorted "iface=addr" — a different string means a moved network.
+    /// The IPv4 part of a netSignature ("iface=a.b.c.d" entries only).
+    private static string ipv4Of(string sig) nothrow
+    {
+        import std.algorithm : filter, canFind, splitter;
+        import std.array : join, array;
+
+        try
+            return sig.splitter(',').filter!(p => !p.canFind(':')).array.join(",");
+        catch (Exception)
+            return sig;
+    }
+
     private static string netSignature() nothrow
     {
         import core.sys.linux.ifaddrs : ifaddrs, getifaddrs, freeifaddrs;
@@ -1415,6 +1435,7 @@ final class P2pBridge : Bridge
                 });
             }
             auto lastPing = MonoTime.currTime;
+            auto lastStats = MonoTime.currTime;
             while (!done && !dead)
             {
                 {
@@ -1447,9 +1468,16 @@ final class P2pBridge : Bridge
                     lastPing = now;
                     try writeLengthPrefixed(ctl, ping); catch (Exception) break;
                 }
+                // the transport's view every 10 s, every 2 s while nothing comes in (p2p.log)
+                immutable quiet = now - lastRecv > 3.seconds;
+                if (now - lastStats >= (quiet ? 2.seconds : 10.seconds))
+                {
+                    lastStats = now;
+                    plog("hs: link ", c.linkStats(), quiet ? " (quiet)" : "");
+                }
                 if (now - lastRecv >= deadAfter && now - lastPieceAck >= deadAfter)
                 {
-                    plog("p2p: hyperswarm link silent — dropping");
+                    plog("p2p: hyperswarm link silent — dropping (", c.linkStats(), ")");
                     silent = true;
                     break;
                 }

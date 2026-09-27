@@ -20,6 +20,46 @@ void plog(T...)(T args)
         import std.string : toStringz;
         __android_log_write(4 /* INFO */, "photowagon", s.toStringz);
     }
+    traceLine(s);
+}
+
+/// The core's own record of what its link did — p2p, hs, sync and push lines — in
+/// <data>/p2p.log (2 MB, then p2p.log.1): logcat on a phone rolls over in minutes (mDNS
+/// alone logs every 2 s), and a link that failed while the phone was out on 4G is read
+/// back once it is in reach again (adb run-as). Set by the core at start; empty = off.
+__gshared string plogFile;
+private __gshared Object traceLock;
+
+shared static this()
+{
+    traceLock = new Object;
+}
+
+private void traceLine(string s) nothrow
+{
+    import std.algorithm.searching : startsWith;
+
+    if (plogFile.length == 0)
+        return;
+    if (!(s.startsWith("p2p:") || s.startsWith("hs:") || s.startsWith("sync:") || s.startsWith("push:")))
+        return;
+    try
+        synchronized (traceLock)
+        {
+            import std.file : append, exists, getSize, rename;
+            import std.datetime.systime : Clock;
+
+            if (plogFile.exists && getSize(plogFile) > 2 * 1024 * 1024)
+                rename(plogFile, plogFile ~ ".1");
+            import std.format : format;
+
+            auto t = Clock.currTime;
+            append(plogFile, format("%04d-%02d-%02d %02d:%02d:%02d.%03d %s\n", t.year, cast(int) t.month, t.day,
+                t.hour, t.minute, t.second, t.fracSecs.total!"msecs", s));
+        }
+    catch (Exception)
+    {
+    }
 }
 
 /// SIGTERM / SIGINT end the process. vibe-core installs handlers for both on the
@@ -290,4 +330,30 @@ string pinThreadTls(string who)
     }
     else
         return "n/a";
+}
+
+unittest
+{
+    import std.file : tempDir, readText, exists, remove, write, getSize;
+    import std.path : buildPath;
+    import std.algorithm.searching : canFind;
+
+    auto f = buildPath(tempDir, "plog-trace-test.log");
+    foreach (x; [f, f ~ ".1"])
+        if (x.exists)
+            remove(x);
+    plogFile = f;
+    scope (exit)
+        plogFile = null;
+    plog("p2p: first");
+    plog("phone: not traced");
+    plog("hs: link mtu=1200");
+    auto t = readText(f);
+    assert(t.canFind(" p2p: first\n") && t.canFind(" hs: link mtu=1200\n") && !t.canFind("not traced"), t);
+    // past 2 MB it rolls over to .1 and starts again
+    write(f, new char[2 * 1024 * 1024 + 1]);
+    plog("sync: after roll");
+    assert(exists(f ~ ".1") && getSize(f) < 100 && readText(f).canFind("sync: after roll"));
+    remove(f);
+    remove(f ~ ".1");
 }

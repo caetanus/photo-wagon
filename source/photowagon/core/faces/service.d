@@ -378,6 +378,8 @@ final class FaceService
 
 	private void runPass()
 	{
+		import photowagon.core.vision.worker : isVisionUnavailable;
+
 		auto ids = faces.unscannedPhotos();
 		if (ids.length == 0)
 			return;
@@ -399,7 +401,16 @@ final class FaceService
 			catch (InterruptException)
 				throw new InterruptException;
 			catch (Exception e)
+			{
+				if (isVisionUnavailable(e))
+				{
+					// no worker at all: nothing about THIS photo — stop, mark nothing, the next
+					// pass takes them all again
+					logWarn("faces: pass stopped, %s photos left for later: %s", ids.length - done, e.msg);
+					break;   // (what was found so far is still grouped and announced below)
+				}
 				logWarn("faces: photo %s: %s", id, e.msg);
+			}
 			faces.markScanned(id);
 			done++;
 			if (MonoTime.currTime - lastReport > 300.msecs || done == ids.length)

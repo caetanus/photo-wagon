@@ -17,6 +17,7 @@ import vibe.core.task : InterruptException;
 
 import libp2p.util.fibers : FiberGroup;
 
+import photowagon.core.vision.worker : isVisionUnavailable;
 import photowagon.core.config : Config;
 import photowagon.core.db.sqlite : Database;
 import photowagon.core.ipc.events : Events;
@@ -160,7 +161,15 @@ final class OcrService
 			catch (InterruptException)
 				throw new InterruptException;
 			catch (Exception e)
+			{
+				if (isVisionUnavailable(e))
+				{
+					// no worker at all, not a bad file: stop, mark nothing — the next pass retries
+					logWarn("ocr: pass stopped: %s", e.msg);
+					break;
+				}
 				logWarn("ocr: photo %s: %s", id, e.msg);   // still marked below, so a bad file is not retried
+			}
 			storeText(id, text);
 			if (text.length)
 				found++;

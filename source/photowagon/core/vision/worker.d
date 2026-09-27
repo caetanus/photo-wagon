@@ -46,12 +46,47 @@ void configureVision(VisionModels m)
 		models = m;
 }
 
+/// The worker could not be started at all (not a bad photo): a pass stops on this and
+/// marks nothing — its photos wait for the next pass, they are not "scanned".
+class VisionUnavailable : Exception
+{
+	this(string msg, string file = __FILE__, size_t line = __LINE__) pure nothrow @safe
+	{
+		super(unavailableMark ~ msg, file, line);
+	}
+}
+
+private enum unavailableMark = "vision unavailable: ";
+
+/// Whether `e` is (or was, before crossing a thread: vibe's async re-creates exceptions as
+/// plain Exception with the same message) a VisionUnavailable.
+bool isVisionUnavailable(const Exception e) pure nothrow @safe
+{
+	import std.algorithm.searching : startsWith;
+
+	return cast(const VisionUnavailable) e !is null || e.msg.startsWith(unavailableMark);
+}
+
 private void spawn()
 {
-	import std.file : thisExePath;
-
-	proc = pipeProcess([thisExePath, "--vision-worker", models.clip, models.yunet, models.sface, "--exit-with-parent"],
-		Redirect.stdin | Redirect.stdout);
+	// The worker is this same program. /proc/self/exe, not the path: rebuilding the binary
+	// while the app runs leaves that path "(deleted)" and every spawn failed — hundreds of
+	// photos a second marked scanned without their faces, the event loop starved.
+	version (linux)
+		immutable exe = "/proc/self/exe";
+	else
+	{
+		import std.file : thisExePath;
+		immutable exe = thisExePath;
+	}
+	try
+		proc = pipeProcess([exe, "--vision-worker", models.clip, models.yunet, models.sface, "--exit-with-parent"],
+			Redirect.stdin | Redirect.stdout);
+	catch (Exception e)
+	{
+		up = false;
+		throw new VisionUnavailable("vision worker: " ~ e.msg);
+	}
 	auto first = proc.stdout.readln().strip;
 	if (first != "ready")
 	{
@@ -64,7 +99,7 @@ private void spawn()
 		{
 		}
 		up = false;
-		throw new Exception("vision worker did not start: " ~ (first.length ? first : "no answer"));
+		throw new VisionUnavailable("vision worker did not start: " ~ (first.length ? first : "no answer"));
 	}
 	up = true;
 }
@@ -134,7 +169,13 @@ string visionRequest(string line)
 			answer = proc.stdout.readln().strip;
 		}
 		if (answer.startsWith("err "))
+		{
+			// a model the worker cannot load is this machine's problem, not the photo's: the
+			// pass must stop, not mark every photo done ("cannot load the face models", …)
+			if (answer[4 .. $].startsWith("cannot load the "))
+				throw new VisionUnavailable(answer[4 .. $]);
 			throw new Exception(answer[4 .. $]);
+		}
 		if (!answer.startsWith("ok"))
 			throw new Exception("vision worker: bad answer to '" ~ line ~ "'");
 		return answer.length > 3 ? answer[3 .. $] : "";

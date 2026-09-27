@@ -20,6 +20,7 @@ import vibe.core.task : InterruptException;
 
 import libp2p.util.fibers : FiberGroup;
 
+import photowagon.core.vision.worker : isVisionUnavailable;
 import photowagon.core.config : Config;
 import photowagon.core.db.schema : getSetting, setSetting;
 import photowagon.core.db.sqlite : Database;
@@ -324,6 +325,12 @@ final class SceneService
 				throw new InterruptException;
 			catch (Exception e)
 			{
+				if (isVisionUnavailable(e))
+				{
+					// no worker at all, not a bad image: stop, mark nothing — the next pass retries
+					logWarn("scenes: pass stopped: %s", e.msg);
+					break;
+				}
 				logWarn("scenes: photo %s: %s", id, e.msg);
 				markFailed(id);   // an unreadable image is not retried; the zero embedding says so
 			}

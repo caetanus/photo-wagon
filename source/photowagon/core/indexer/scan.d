@@ -35,6 +35,9 @@ struct Candidate
 	long size;
 	long mtimeMs;
 	bool isVideo;
+	/// A date the sender knew (the phone's own reading of the photo), unix seconds; 0 = none.
+	/// Used when the file has no EXIF date and its name carries none — before the mtime.
+	long hintTs;
 }
 
 /// Every image under `root`, without following symlinks or entering hidden

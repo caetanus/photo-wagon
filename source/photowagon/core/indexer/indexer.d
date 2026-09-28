@@ -118,7 +118,7 @@ final class Indexer
 	/// `then` runs once the file is in the library (or the import failed), on the core thread —
 	/// indexing is asynchronous, so a caller that needs the new row (faces a device sent with
 	/// the photo) must wait for it there.
-	void indexOne(long rootId, string path, void delegate() then = null)
+	void indexOne(long rootId, string path, void delegate() then = null, long hintTs = 0)
 	{
 		import std.file : exists, getSize, timeLastModified;
 
@@ -133,6 +133,7 @@ final class Indexer
 		Candidate c;
 		c.path = path;
 		c.isVideo = isVideoPath(path);
+		c.hintTs = hintTs;
 		try
 		{
 			c.size = cast(long) getSize(path);
@@ -233,7 +234,7 @@ final class Indexer
 			pv.size = c.size;
 			pv.mtimeMs = c.mtimeMs;
 			immutable vnamed = dateFromPath(c.path);
-			pv.takenTs = vnamed ? vnamed : c.mtimeMs / 1000;
+			pv.takenTs = vnamed ? vnamed : c.hintTs > 0 ? c.hintTs : c.mtimeMs / 1000;   // (as for photos: the sender's date before the file time)
 			pv.takenAt = isoTime(pv.takenTs);
 			pv.width = v.width;
 			pv.height = v.height;
@@ -265,7 +266,9 @@ final class Indexer
 		p.mtimeMs = c.mtimeMs;
 		import photowagon.core.metadata.datefromname : dateFromPath;
 		immutable named = exif.takenTs ? 0 : dateFromPath(c.path);
-		p.takenTs = exif.takenTs ? exif.takenTs : (named ? named : c.mtimeMs / 1000);
+		// EXIF, then a date in the name (or a real date folder), then what the sender knew
+		// (a phone that sent it), then the file's time
+		p.takenTs = exif.takenTs ? exif.takenTs : named ? named : c.hintTs > 0 ? c.hintTs : c.mtimeMs / 1000;
 		p.takenAt = isoTime(p.takenTs);
 		immutable swap = exif.orientation >= 5;
 		p.width = swap ? thumb.srcHeight : thumb.srcWidth;

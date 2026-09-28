@@ -34,9 +34,28 @@ long dateFromPath(string path)
 		return t;
 	// the folders: .../2020/02/13/... or .../2020-02-13/... or .../2020/02/...
 	immutable dir = path.dirName;
+	if (isImportsMonth(dir))
+		return 0;   // our own archive folder, not a date the photo carries (the file's time is)
 	if (auto t = folderDate(dir))
 		return t;
 	return 0;
+}
+
+/// The desktop's own imports folder (`<data>/imports`), set by the core at start: under it,
+/// a `YYYY-MM` folder is where a received photo was filed by the month the phone said — not
+/// a date the photo carries. Empty (the phone, tests): no folder is excluded.
+__gshared string importsRootForDates;
+
+/// `<data>/imports/YYYY-MM`: read as a date it put every received photo on the 15th at noon,
+/// over the file's own time and the phone's date. Only OUR imports folder — a user's own
+/// `imports/2019-08` elsewhere is a real date.
+private bool isImportsMonth(string dir)
+{
+	if (importsRootForDates.length == 0)
+		return false;
+	immutable leaf = dir.baseName;
+	return leaf.length == 7 && digits(leaf, 0, 4) && leaf[4] == '-' && digits(leaf, 5, 2)
+		&& dir.dirName == importsRootForDates;
 }
 
 private bool dig(char c) { return c >= '0' && c <= '9'; }
@@ -227,6 +246,12 @@ unittest
 {
 	long y(long ts) { return ts ? SysTime.fromUnixTime(ts, LocalTime()).year : 0; }
 	int month(long ts) { return ts ? cast(int) SysTime.fromUnixTime(ts, LocalTime()).month : 0; }
+	importsRootForDates = "/home/u/.local/share/photowagon/imports";
+	assert(dateFromPath("/home/u/.local/share/photowagon/imports/2026-09/photo.jpg") == 0);   // our archive
+	assert(dateFromPath("/home/u/.local/share/photowagon/imports/2026-09/IMG_20260903_101010.jpg") != 0);   // the name still counts
+	assert(dateFromPath("/x/2026-09/photo.jpg") != 0);   // a user's own month folder still counts
+	assert(dateFromPath("/mnt/old/imports/2019-08/photo.jpg") != 0);   // someone else's imports folder too
+	importsRootForDates = null;
 	immutable pix = dateFromPath("/p/IMG_20210321_150104.jpg");
 	assert(y(pix) == 2021 && month(pix) == 3);
 	assert(y(dateFromPath("/p/20220102_064744.jpg")) == 2022);

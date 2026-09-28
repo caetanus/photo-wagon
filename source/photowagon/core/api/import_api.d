@@ -8,7 +8,7 @@ import std.file : exists, mkdirRecurse, write;
 import std.json;
 import std.path : buildPath, baseName, extension, stripExtension;
 
-import vibe.core.log : logInfo;
+import vibe.core.log : logInfo, logWarn;
 
 import photowagon.core.config : Config;
 import photowagon.core.indexer.indexer : Indexer;
@@ -25,10 +25,17 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 	string delegate(long photoId, JSONValue facesJson) ingestFaces = null)
 {
 	immutable importsRoot = buildPath(cfg.dataDir, "imports");
+	{
+		import photowagon.core.metadata.datefromname : importsRootForDates;
+
+		// the same string the imported paths are built from (compared as is): its YYYY-MM
+		// folders are not dates
+		importsRootForDates = importsRoot;
+	}
 
 	// Indexes a file just placed in imports/ (deduped by hash already); the phone's faces
 	// are stored once the photo is in the library.
-	JSONValue landed(string hash, string path, JSONValue facesJson)
+	JSONValue landed(string hash, string path, JSONValue facesJson, string takenAt = null)
 	{
 		immutable rootId = roots.add(importsRoot);
 		// The phone sent faces it detected + embedded (same r100 model; an empty array = it
@@ -43,14 +50,17 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 				if (!landed.isNull)
 					cast(void) ingestFaces(landed.get.id, facesJson);
 			};
-		indexer.indexOne(rootId, path, then);   // just this file — no re-scan of the whole imports/ folder
+		// just this file — no re-scan of the whole imports/ folder; the phone's date of the
+		// photo is the fallback for one without EXIF or a dated name (before the file time)
+		indexer.indexOne(rootId, path, then, unixOf(takenAt));
 		return JSONValue(["existed": JSONValue(false), "path": JSONValue(path)]);
 	}
 
 	// Writes `bytes` into imports/<yyyy-mm>/ and indexes just that file; deduped by hash, so
 	// a photo already here is returned as `existed` without a second copy. Shared by the base64
 	// path and the blob-pipe (ticket) path.
-	JSONValue landBytes(string name, string takenAt, const(ubyte)[] bytes, JSONValue facesJson = JSONValue(null))
+	JSONValue landBytes(string name, string takenAt, const(ubyte)[] bytes, JSONValue facesJson = JSONValue(null),
+		long mtimeMs = 0)
 	{
 		immutable base = name.baseName;
 		if (base.length == 0 || base[0] == '.')
@@ -66,15 +76,17 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 		mkdirRecurse(dir);
 		immutable path = freePath(dir, base);
 		write(path, bytes);
+		keepTimes(path, mtimeMs);
 		logInfo("import: %s (%s bytes)", path, bytes.length);
-		return landed(hash, path, facesJson);
+		return landed(hash, path, facesJson, takenAt);
 	}
 
 	// The same for a file already complete and verified on disk (the piece store, the
 	// offset spool): MOVED into imports/<yyyy-mm>/, never read into memory — a phone video
 	// is hundreds of MB, and holding each one whole (read + hash + write) took the desktop
 	// past its memory limit while a phone pushed its videos (2026-09-25).
-	JSONValue landFile(string name, string takenAt, string src, string hash, JSONValue facesJson = JSONValue(null))
+	JSONValue landFile(string name, string takenAt, string src, string hash, JSONValue facesJson = JSONValue(null),
+		long mtimeMs = 0)
 	{
 		import std.file : rename, copy, remove, getSize;
 
@@ -104,8 +116,9 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 			copy(src, path);     // streamed by the OS, not through our heap
 			remove(src);
 		}
+		keepTimes(path, mtimeMs);
 		logInfo("import: %s (%s bytes)", path, getSize(path));
-		return landed(hash, path, facesJson);
+		return landed(hash, path, facesJson, takenAt);
 	}
 
 
@@ -205,7 +218,7 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 			catch (Exception e)
 				throw new ApiError("bad_blob", e.msg);
 			import std.string : toLower;
-			return landFile(name, getString(p, "takenAt"), done, h.toLower, facesJson);
+			return landFile(name, getString(p, "takenAt"), done, h.toLower, facesJson, mtimeOf(p));
 		}
 		// Ticket path: the whole blob came over the pipe in one go (pre-resume wire).
 		if (p.type == JSONType.object && "ticket" in p && p["ticket"].type == JSONType.integer)
@@ -215,7 +228,7 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 			auto bytes = blobs.take(p["ticket"].integer);
 			if (bytes is null)
 				throw new ApiError("no_blob", "no bytes arrived for this ticket");
-			return landBytes(name, getString(p, "takenAt"), bytes, facesJson);
+			return landBytes(name, getString(p, "takenAt"), bytes, facesJson, mtimeOf(p));
 		}
 		// Fallback: base64 in the JSON (a client with no blob pipe, e.g. the LAN TCP link).
 		ubyte[] bytes;
@@ -223,11 +236,62 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 			bytes = Base64.decode(requireString(p, "base64"));
 		catch (Exception e)
 			throw new ApiError("bad_params", "base64: " ~ e.msg);
-		return landBytes(name, getString(p, "takenAt"), bytes, facesJson);
+		return landBytes(name, getString(p, "takenAt"), bytes, facesJson, mtimeOf(p));
 	});
 }
 
 /// "2024-05" from an ISO timestamp, "undated" otherwise.
+// The phone's own modification time on the copy (the only date a picture without EXIF
+// has — a WhatsApp image, a screenshot): set before indexing, so the index and its
+// size+mtime change test see the file as the phone had it. 0 = unknown, left as is.
+void keepTimes(string path, long mtimeMs)
+{
+	import std.file : setTimes;
+	import std.datetime.systime : SysTime, unixTimeToStdTime;
+
+	// milliseconds between 1990 and 2100: anything else is a mistake (seconds sent as ms,
+	// garbage) and would overflow the conversion
+	if (mtimeMs < 631_152_000_000L || mtimeMs > 4_102_444_800_000L)
+		return;
+	try
+	{
+		auto t = SysTime(unixTimeToStdTime(mtimeMs / 1000) + (mtimeMs % 1000) * 10_000);
+		setTimes(path, t, t);
+	}
+	catch (Exception e)
+		logWarn("import: %s: cannot keep its time: %s", path, e.msg);
+}
+
+/// Unix seconds of an ISO time the phone sent ("takenAt"), 0 when absent or unreadable.
+long unixOf(string iso) nothrow
+{
+	import std.datetime.systime : SysTime;
+
+	if (iso.length < 10)
+		return 0;
+	try
+	{
+		immutable t = SysTime.fromISOExtString(iso).toUnixTime!long;
+		return t > 0 ? t : 0;
+	}
+	catch (Exception)
+		return 0;
+}
+
+/// The request's "mtimeMs" (the phone's file time), 0 when absent or not a number.
+long mtimeOf(JSONValue p) nothrow
+{
+	try
+		if (p.type == JSONType.object)
+			if (auto v = "mtimeMs" in p)
+				if (v.type == JSONType.integer || v.type == JSONType.uinteger)
+					return v.integer;
+	catch (Exception)
+	{
+	}
+	return 0;
+}
+
 string monthFolder(string takenAt) pure
 {
 	if (takenAt.length >= 7 && takenAt[4] == '-')
@@ -292,4 +356,27 @@ void registerImportsCleanup(Registry r, Config cfg, PhotoRepo photos, void deleg
 			changed();
 		return JSONValue(["removed": JSONValue(res[0]), "failed": JSONValue(res[1])]);
 	});
+}
+
+unittest
+{
+	// a received file keeps the phone's modification time (ms precision); 0 leaves it alone
+	import std.file : tempDir, write, remove, timeLastModified;
+	import std.path : buildPath;
+	import std.json : parseJSON;
+
+	immutable f = buildPath(tempDir, "pw-keeptimes-test.jpg");
+	write(f, "x");
+	scope (exit)
+		remove(f);
+	keepTimes(f, 1_600_000_000_123);
+	auto t = timeLastModified(f);
+	assert(t.toUnixTime == 1_600_000_000 && t.fracSecs.total!"msecs" == 123, t.toString);
+	immutable before = timeLastModified(f);
+	keepTimes(f, 0);
+	assert(timeLastModified(f) == before);
+	assert(mtimeOf(parseJSON(`{"mtimeMs":1600000000123}`)) == 1_600_000_000_123);
+	assert(mtimeOf(parseJSON(`{"name":"a"}`)) == 0);
+	assert(unixOf("2020-09-13T12:26:40Z") == 1_600_000_000);
+	assert(unixOf("") == 0 && unixOf("garbage-xx") == 0);
 }

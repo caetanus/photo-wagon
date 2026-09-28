@@ -68,6 +68,8 @@ final class HsMuxServe
 	private bool authed, tokenOk, gone, pairPending;
 	private uint pairGen; // which daemon.pair is current: a superseded resolver must not clear it
 	private MonoTime lastRecv;
+	private ulong lastPkts;        // udx packets received, as last seen by watch()
+	private MonoTime lastPktAt;    // when that count last moved
 	private Task watchdog;
 	// replies and events leave through a queue a task of its own writes: an event producer
 	// (Events.emit is synchronous) must never block on this peer's flow control
@@ -92,6 +94,7 @@ final class HsMuxServe
 		sink = &send;
 		authed = token.length == 0;
 		lastRecv = MonoTime.currTime;
+		lastPktAt = lastRecv;
 		c.onData((ubyte[] b) nothrow {
 			if (gone)
 				return;
@@ -158,8 +161,20 @@ final class HsMuxServe
 				catch (Exception)
 				{
 				}
+			// Alive while ANY udx packet still comes in: app messages stuck behind one lost
+			// packet (a 4G burst the carrier dropped) are not silence — the link was killed
+			// just as it recovered. Only a transport that went quiet too is dead.
+			immutable pkts = c.packetsReceived();
+			if (pkts != lastPkts)
+			{
+				lastPkts = pkts;
+				lastPktAt = MonoTime.currTime;
+			}
 			immutable limit = authed ? deadAfter : pairPending ? deadAfterPairing : deadAfterPreAuth;
-			if (MonoTime.currTime - lastRecv <= limit)
+			// (a ceiling: an app that answers nothing for 4× the limit is gone even if its
+			// transport still acknowledges)
+			immutable appQuiet = MonoTime.currTime - lastRecv;
+			if (appQuiet <= limit || (authed && MonoTime.currTime - lastPktAt <= limit && appQuiet <= 4 * limit))
 				continue;
 			try
 				logInfo("hs/mux: %s silent for %ss — dropping (%s)", short_, limit.total!"seconds", c.linkStats());

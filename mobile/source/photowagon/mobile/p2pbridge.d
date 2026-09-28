@@ -1436,6 +1436,8 @@ final class P2pBridge : Bridge
             }
             auto lastPing = MonoTime.currTime;
             auto lastStats = MonoTime.currTime;
+            ulong lastPkts;
+            auto lastPktAt = MonoTime.currTime;
             while (!done && !dead)
             {
                 {
@@ -1475,7 +1477,17 @@ final class P2pBridge : Bridge
                     lastStats = now;
                     plog("hs: link ", c.linkStats(), quiet ? " (quiet)" : "");
                 }
-                if (now - lastRecv >= deadAfter && now - lastPieceAck >= deadAfter)
+                // alive while any udx packet still comes in (see the desktop's watch()): a
+                // stream stuck behind one lost packet is recovering, not dead
+                immutable pkts = c.packetsReceived();
+                if (pkts != lastPkts)
+                {
+                    lastPkts = pkts;
+                    lastPktAt = now;
+                }
+                // (the ceiling counts from the newer app sign of life: a control reply or a piece answer)
+                immutable appQuiet = now - (lastRecv > lastPieceAck ? lastRecv : lastPieceAck);
+                if (appQuiet >= deadAfter && (now - lastPktAt >= deadAfter || appQuiet >= 4 * deadAfter))
                 {
                     plog("p2p: hyperswarm link silent — dropping (", c.linkStats(), ")");
                     silent = true;

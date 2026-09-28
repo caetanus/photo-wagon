@@ -1806,6 +1806,16 @@ version (WithUi)
         });
     }
 
+    /// The in-app deletions held from another computer (too many at once to apply unasked):
+    /// `apply` moves those photos to the Trash here too; otherwise they stay on this computer.
+    @Slot void resolveComputerDeletions(string key, bool apply)
+    {
+        client.request("computers.applyDeletions", JSONValue(["key": JSONValue(key), "apply": JSONValue(apply)]), (r, e) {
+            if (e.type != JSONType.null_) { report("computers.applyDeletions", e); return; }
+            loadComputers();
+        });
+    }
+
     /// Stop mirroring a computer (its photos already here stay).
     @Slot void removeComputer(string key)
     {

@@ -133,6 +133,23 @@ final class DeviceRepo
         q.run();
     }
 
+    /// Mark a device as another of the user's computers (paired as one): only such a device
+    /// may mirror this library and read its organization (core/sync/meta.d).
+    void setKind(string peerId, string kind)
+    {
+        auto q = db.prepare("UPDATE devices SET kind = ? WHERE peer_id = ?");
+        q.bind(1, kind).bind(2, peerId);
+        q.run();
+    }
+
+    /// "computer", or null (a phone, or unknown).
+    string kindOf(string peerId)
+    {
+        auto q = db.prepare("SELECT kind FROM devices WHERE peer_id = ?");
+        q.bind(1, peerId);
+        return q.step() && !q.isNull(0) ? q.getString(0) : null;
+    }
+
     void rename(string peerId, string name)
     {
         auto q = db.prepare("UPDATE devices SET name = ? WHERE peer_id = ?");

@@ -286,6 +286,17 @@ final class PhotoRepo
 		return n;
 	}
 
+	/// Removed from Wagon on another computer while not here: remembered all the same, so it
+	/// stays out (the mirror does not bring it) and this library agrees it is removed.
+	void quarantineAbsent(string hash)
+	{
+		if (!hash.length)
+			return;
+		auto s = db.prepare("INSERT OR IGNORE INTO removed_hashes (hash) VALUES (?)");
+		s.bind(1, hash);
+		s.run();
+	}
+
 	bool isRemoved(string hash)
 	{
 		if (!hash.length)

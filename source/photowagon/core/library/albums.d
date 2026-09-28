@@ -31,7 +31,8 @@ final class AlbumRepo
 		if (name.length == 0)
 			throw new ApiError("bad_params", "album needs a name");
 		return db.transaction!long({
-			auto s = db.prepare("INSERT INTO albums (name, created_at, manifest, origin_peer) VALUES (?, ?, ?, ?)");
+			// uid: the same album on every computer of the user (core/sync/meta.d)
+			auto s = db.prepare("INSERT INTO albums (name, created_at, manifest, origin_peer, uid) VALUES (?, ?, ?, ?, lower(hex(randomblob(8))))");
 			s.bind(1, name).bind(2, Clock.currTime.toUnixTime).bind(3, manifest).bind(4, originPeer);
 			s.run();
 			immutable id = db.lastInsertId();

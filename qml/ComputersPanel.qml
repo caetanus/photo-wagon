@@ -135,6 +135,49 @@ Popup {
             }
         }
 
+        // in-app deletions from another computer, too many at once to apply unasked
+        Repeater {
+            model: panel.computers.filter(c => (c.held || 0) > 0)
+            delegate: Rectangle {
+                id: heldRow
+                required property var modelData
+                Layout.fillWidth: true
+                implicitHeight: heldCol.implicitHeight + 20
+                radius: 6
+                color: Qt.rgba(0.91, 0.64, 0.24, 0.12)
+                border.color: "#e8a33d"
+                ColumnLayout {
+                    id: heldCol
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    spacing: 6
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        color: theme.text
+                        font.pixelSize: 12
+                        text: heldRow.modelData.held + (heldRow.modelData.held === 1 ? " photo was" : " photos were")
+                              + " deleted in Photo Wagon on " + (heldRow.modelData.alias || "the other computer")
+                              + ". Delete " + (heldRow.modelData.held === 1 ? "it" : "them") + " here too?"
+                              + " They go to this computer's Trash."
+                    }
+                    RowLayout {
+                        spacing: 8
+                        Item { Layout.fillWidth: true }
+                        Button {
+                            text: "Keep them here"
+                            flat: true
+                            onClicked: library.resolveComputerDeletions(heldRow.modelData.key, false)
+                        }
+                        Button {
+                            text: "Delete " + heldRow.modelData.held + " here"
+                            onClicked: library.resolveComputerDeletions(heldRow.modelData.key, true)
+                        }
+                    }
+                }
+            }
+        }
+
         RowLayout {
             Item { Layout.fillWidth: true }
             Button { text: "Close"; onClicked: panel.close() }

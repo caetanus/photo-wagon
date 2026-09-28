@@ -91,7 +91,11 @@ final class KeywordService
 	}
 
 	/// Adds every keyword to every photo (already there = nothing happens).
-	void add(long[] ids, string[] keywords)
+	/// `fromUser` false: a keyword that came from another of the user's computers (core/sync/
+	/// meta.d) — the library takes it, the file is not rewritten for it (that computer wrote its
+	/// own copy; rewriting ours as a side effect of syncing would touch every original and
+	/// leave its bytes no longer those of its hash).
+	void add(long[] ids, string[] keywords, bool fromUser = true)
 	{
 		keywords = normalize(keywords);
 		if (!ids.length || !keywords.length)
@@ -108,11 +112,11 @@ final class KeywordService
 		});
 		if (events !is null)
 			events.emit("keywords.changed", JSONValue.emptyObject);
-		if (onUserChange !is null)
+		if (onUserChange !is null && fromUser)
 			onUserChange(ids);
 	}
 
-	void remove(long[] ids, string keyword)
+	void remove(long[] ids, string keyword, bool fromUser = true)
 	{
 		keyword = keyword.strip;
 		if (!ids.length || !keyword.length)
@@ -128,7 +132,7 @@ final class KeywordService
 		});
 		if (events !is null)
 			events.emit("keywords.changed", JSONValue.emptyObject);
-		if (onUserChange !is null)
+		if (onUserChange !is null && fromUser)
 			onUserChange(ids);
 	}
 

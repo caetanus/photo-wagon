@@ -1133,6 +1133,19 @@ ApplicationWindow {
         onSetPlace: (place, country, ids) => library.setPlace(JSON.stringify(ids), place, country)
     }
 
+    // in-app deletions from another computer waiting for the user (too many at once to apply
+    // unasked): the Computers panel opens by itself, once per new batch
+    Connections {
+        target: library
+        property int heldSeen: 0
+        function onComputersChanged() {
+            let held = 0
+            try { for (const c of (JSON.parse(library.computers).computers || [])) held += (c.held || 0) } catch (e) {}
+            if (held > heldSeen && !computersPanel.opened)
+                computersPanel.open()
+            heldSeen = held
+        }
+    }
     ComputersPanel {
         id: computersPanel
         theme: root.theme

@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 21;
+enum currentVersion = 23;
 
 void migrate(Database db)
 {
@@ -64,6 +64,10 @@ void migrate(Database db)
 			db.exec(schemaV20);
 		if (have < 21)
 			db.exec(schemaV21);
+		if (have < 22)
+			db.exec(schemaV22);
+		if (have < 23)
+			db.exec(schemaV23);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -320,6 +324,86 @@ CREATE INDEX removed_hashes_path ON removed_hashes(path);
 CREATE INDEX removed_hashes_file ON removed_hashes(file_hash) WHERE file_hash IS NOT NULL;
 `;
 
+// v22: the organization replicated between the user's computers (core/sync/meta.d). An
+// album gets a uid that is the same on every computer. meta_state is this library's view of
+// every replicated fact — one row per (kind, key): its value, the hybrid clock of the last
+// change (last writer wins) and a local sequence number the other computers page by
+// (meta_cursor: how far we read each of them). meta_pending: facts taken from another
+// computer whose photo is not here yet (applied when it arrives). meta_held: deletions from
+// another computer waiting for the user (too many at once to apply unasked). See v23.
+private enum schemaV22 = `
+ALTER TABLE albums ADD COLUMN uid TEXT;
+UPDATE albums SET uid = lower(hex(randomblob(8))) WHERE uid IS NULL;
+CREATE UNIQUE INDEX albums_uid ON albums(uid);
+CREATE TABLE meta_state (
+    kind  TEXT NOT NULL,
+    key   TEXT NOT NULL,
+    value TEXT NOT NULL,
+    hlc   TEXT NOT NULL,
+    seq   INTEGER NOT NULL,
+    PRIMARY KEY (kind, key)
+);
+CREATE INDEX meta_state_seq ON meta_state(seq);
+CREATE TABLE meta_clock (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    wall    INTEGER NOT NULL,
+    counter INTEGER NOT NULL,
+    seq     INTEGER NOT NULL
+);
+INSERT INTO meta_clock (id, wall, counter, seq) VALUES (1, 0, 0, 0);
+CREATE TABLE meta_cursor (
+    peer TEXT PRIMARY KEY,
+    seq  INTEGER NOT NULL
+);
+CREATE TABLE meta_pending (
+    kind  TEXT NOT NULL,
+    key   TEXT NOT NULL,
+    since INTEGER NOT NULL,
+    PRIMARY KEY (kind, key)
+);
+CREATE TABLE meta_held (
+    peer TEXT NOT NULL,
+    key  TEXT NOT NULL,
+    hlc  TEXT NOT NULL,
+    PRIMARY KEY (peer, key)
+);
+`;
+
+// v23: the rest of the organization sync. (v22 shipped first, briefly, in a build under test —
+// libraries at v22 carry its tables; whatever it recorded is dropped: it was never exchanged.)
+// meta_clock/meta_cursor.epoch: a library's sequence space (a reset starts another — a peer
+// reads it all again). meta_kept: deletions from another computer the user chose to keep here.
+// devices.kind: 'computer' when paired as one (confirmed on screen) — only such a device mirrors
+// this library. meta_arrived, filled by triggers: every local photo row just made — one that comes
+// back as a NEW row (its file deleted outside the app and brought back, re-imported) gets its
+// facts back instead of its empty new row reading as "the user took them all off" (row ids can
+// be reused, so the trigger, not an id comparison, says a row is new).
+private enum schemaV23 = `
+DELETE FROM meta_state;
+DELETE FROM meta_cursor;
+DELETE FROM meta_pending;
+DELETE FROM meta_held;
+INSERT OR IGNORE INTO meta_clock (id, wall, counter, seq) VALUES (1, 0, 0, 0);
+UPDATE meta_clock SET seq = 0;
+ALTER TABLE meta_clock ADD COLUMN epoch TEXT NOT NULL DEFAULT '';
+UPDATE meta_clock SET epoch = lower(hex(randomblob(8)));
+ALTER TABLE meta_cursor ADD COLUMN epoch TEXT;
+CREATE TABLE meta_kept (
+    key TEXT PRIMARY KEY,
+    hlc TEXT NOT NULL
+);
+ALTER TABLE devices ADD COLUMN kind TEXT;
+CREATE TABLE meta_arrived (
+    hash TEXT PRIMARY KEY
+);
+CREATE TRIGGER photos_meta_arrived AFTER INSERT ON photos WHEN new.path IS NOT NULL BEGIN
+    INSERT OR IGNORE INTO meta_arrived (hash) VALUES (new.hash);
+END;
+CREATE TRIGGER photos_meta_arrived_path AFTER UPDATE OF path ON photos WHEN old.path IS NULL AND new.path IS NOT NULL BEGIN
+    INSERT OR IGNORE INTO meta_arrived (hash) VALUES (new.hash);
+END;
+`;
+
 private void migrateV18(Database db)
 {
 	// ArcFace r100 (512-d) replaces SFace (128-d) for the face embedding: far better
@@ -415,3 +499,40 @@ unittest
 	setSetting(db, "k", "2");
 	assert(getSetting(db, "k") == "2");
 }
+
+unittest
+{
+	// a library left at v22 by the build under test (its exact tables, a fact recorded in them)
+	// upgrades to v23: the tables completed, the interim facts dropped, the triggers working
+	import photowagon.core.db.sqlite : Database;
+
+	auto db = new Database(":memory:");
+	scope (exit)
+		db.close();
+	migrate(db);   // to the current version first, to build every earlier table
+	// rebuild the v22 shape by hand: drop what v23 adds, back to user_version 22
+	db.exec("DROP TRIGGER photos_meta_arrived; DROP TRIGGER photos_meta_arrived_path; DROP TABLE meta_arrived; DROP TABLE meta_kept;");
+	db.exec("DROP TABLE meta_clock; DROP TABLE meta_cursor;");
+	db.exec("CREATE TABLE meta_clock (id INTEGER PRIMARY KEY CHECK (id = 1), wall INTEGER NOT NULL, counter INTEGER NOT NULL, seq INTEGER NOT NULL);"
+		~ "INSERT INTO meta_clock VALUES (1, 5, 1, 7); CREATE TABLE meta_cursor (peer TEXT PRIMARY KEY, seq INTEGER NOT NULL);");
+	db.exec("ALTER TABLE devices DROP COLUMN kind;");
+	db.exec("INSERT INTO meta_state VALUES ('kw', 'h', 'a\nb', 'x', 3); INSERT INTO meta_cursor VALUES ('p', 9);");
+	db.exec("PRAGMA user_version = 22");
+	migrate(db);
+	{
+		auto v = db.prepare("PRAGMA user_version");
+		v.step();
+		assert(v.getInt(0) == currentVersion);
+	}
+	{
+		auto s = db.prepare("SELECT (SELECT count(*) FROM meta_state), (SELECT count(*) FROM meta_cursor), seq, length(epoch) FROM meta_clock");
+		s.step();
+		assert(s.getLong(0) == 0 && s.getLong(1) == 0 && s.getLong(2) == 0 && s.getLong(3) == 16);
+	}
+	db.exec("INSERT INTO devices (peer_id, kind) VALUES ('d', 'computer')");
+	db.exec("INSERT INTO photos (hash, path, taken_ts, taken_at) VALUES ('hh', '/p/x.jpg', 0, 'x')");
+	auto a = db.prepare("SELECT count(*) FROM meta_arrived WHERE hash = 'hh'");
+	a.step();
+	assert(a.getLong(0) == 1);
+}
+

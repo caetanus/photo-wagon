@@ -35,6 +35,7 @@ import photowagon.core.api.import_api : LandFn;
 import photowagon.core.library.photos : PhotoRepo;
 import photowagon.core.sync.muxstream : LinkMux, muxTagControl, muxTagPiece;
 import photowagon.core.sync.pieces : PieceStore, pullFile;
+import photowagon.core.sync.meta : MetaSync;
 
 enum exchangeEvery = 3.minutes;
 enum exchangeAfterChangeMin = 10.seconds;
@@ -63,6 +64,7 @@ struct MirrorStatus
 	long pulled;       // files brought over since the link came up
 	long failed;
 	long lastSync;     // unix seconds of the last complete exchange
+	long held;         // its in-app deletions waiting for the user here (too many at once)
 }
 
 final class MirrorClient
@@ -88,6 +90,9 @@ final class MirrorClient
 	private MonoTime[string] unfetchable;
 
 	MirrorStatus status;
+	/// The organization (core/sync/meta.d), pulled after the files on every exchange; null: files only.
+	MetaSync meta;
+	private bool metaUnsupported;     // the other computer is older: it has no meta.since
 	/// The other computer's token once known (the pending code it proved, or the kept one).
 	string chosenToken;
 	/// Called whenever `status` moves (from the mirror's task).
@@ -260,6 +265,7 @@ final class MirrorClient
 				try
 				{
 					exchange();
+					metaExchange();
 					failedLast = false;
 				}
 				catch (Exception e)
@@ -321,6 +327,43 @@ final class MirrorClient
 				return t;
 		}
 		return null;
+	}
+
+	/// The organization: what the other computer did (albums, favorites, names, deletions in
+	/// the app…) since the last time, taken where it is newer. After the files, so a fact
+	/// about a photo that just arrived applies at once.
+	private void metaExchange()
+	{
+		if (meta is null || metaUnsupported || stopped)
+			return;
+		try
+		{
+			auto r = meta.pull(peerKey, (string method, JSONValue params) {
+				auto res = call(method, params, callTimeout);
+				if ("result" in res)
+					return res["result"];
+				immutable code = "error" in res && res["error"].type == JSONType.object && "code" in res["error"]
+					&& res["error"]["code"].type == JSONType.string ? res["error"]["code"].str : "";
+				if (code == "unknown_method" || code == "unauthorized")
+					metaUnsupported = true;
+				throw new Exception(method ~ ": " ~ (code.length ? code : "no answer"));
+			});
+			if (r.taken || r.held)
+				logInfo("mirror %s: organization — %s taken, %s applied, %s waiting for their photo, %s deletion(s) held",
+					status.peerAlias, r.taken, r.applied, r.pending, r.held);
+		}
+		catch (Exception e)
+		{
+			if (stopped)
+				return;
+			logWarn("mirror %s: organization not exchanged: %s", status.peerAlias, e.msg);
+		}
+		immutable h = meta.heldCount(peerKey);
+		if (h != status.held)
+		{
+			status.held = h;
+			setState(status.state);   // tell the UI
+		}
 	}
 
 	/// One pass: what the other computer has that is not here (and not turned away), pulled.

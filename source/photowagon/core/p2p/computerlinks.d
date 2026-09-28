@@ -21,6 +21,7 @@ import photowagon.core.p2p.devices : DeviceRepo;
 import photowagon.core.p2p.hsmux : HsMuxServe;
 import photowagon.core.sync.computers : ComputerPeers, Computer;
 import photowagon.core.sync.mirror : MirrorClient, MirrorStatus;
+import photowagon.core.sync.meta : MetaSync;
 import photowagon.core.sync.pieces : PieceStore;
 
 final class ComputerLinks
@@ -41,6 +42,9 @@ final class ComputerLinks
 	private HsMuxServe[][string] sessions;   // live sessions by the peer's key (a pair may hold several paths)
 	private string[][string] tokensOf;      // the tokens to try on a key's sessions
 	private MirrorStatus[string] status;   // by the other computer's key (or token while pending)
+	/// The organization replicated with these computers (albums, names, in-app deletions…);
+	/// null: files only.
+	MetaSync meta;
 
 	this(ComputerPeers peers, DeviceRepo devices, PhotoRepo photos, PieceStore pieces, LandFn land,
 		Events events, string ownToken, string ownAlias, string tmpDir, void delegate(string) join,
@@ -74,8 +78,13 @@ final class ComputerLinks
 	void start()
 	{
 		foreach (c; peers.list)
+		{
+			// computers paired before their kind was recorded (phase 2): they are computers
+			if (c.key.length && devices !is null && devices.exists(c.key) && devices.kindOf(c.key) != "computer")
+				devices.setKind(c.key, "computer");
 			if (ComputerPeers.weDial(ownKey(), c.key))
 				join(c.token);
+		}
 	}
 
 	/// Whether a connection is (or is being made) to another computer — its session gets its
@@ -95,6 +104,14 @@ final class ComputerLinks
 		s.ownAlias = ownAlias;
 		s.ownKey = ownKey();
 		s.onMirrorHello = &greeted;
+		s.isComputerPeer = (string k) nothrow {
+			try
+				return peers.byKey(k) !is null;
+			catch (Exception)
+				return false;
+		};
+		if (meta !is null)
+			s.onMeta = &meta.serve;
 		string key;
 		try
 			key = hexOf(c);
@@ -180,6 +197,7 @@ final class ComputerLinks
 		if (mux is null)
 			return;   // the peer has said nothing yet (not a computer's session)
 		auto m = new MirrorClient(mux, tokens, mustProve, ownToken, ownAlias, ownKey(), key, photos, pieces, land, tmpDir);
+		m.meta = meta;
 		m.onEnded = () nothrow {
 			if (auto x = s in clients)
 				if (*x is m)
@@ -225,6 +243,9 @@ final class ComputerLinks
 				tokensOf[key] = [token];   // its own token only: other pending codes never go to it
 				if (devices !is null && !devices.exists(key))
 					devices.add(key, "computer");
+				// we paired with it as a computer (its code, proved): it is one here too
+				if (devices !is null)
+					devices.setKind(key, "computer");
 				peers.remember(key, token, peers.byKey(key) is null ? null : peers.byKey(key).alias_);
 				dialPolicy(key, token);
 			}
@@ -364,9 +385,28 @@ final class ComputerLinks
 					j["failed"] = st.failed;
 					j["lastSync"] = st.lastSync;
 				}
+				// its in-app deletions waiting for the user here — kept across restarts
+				if (meta !is null && c.key.length)
+					j["held"] = meta.heldCount(c.key);
 				out_ ~= j;
 			}
 			return JSONValue(["computers": JSONValue(out_), "alias": JSONValue(ownAlias)]);
+		});
+		// {key, apply: bool} → {applied}: the user decides about the in-app deletions held from
+		// that computer (too many at once to apply unasked): move them to the Trash here too,
+		// or keep these photos on this computer
+		r.add("computers.applyDeletions", (JSONValue p) {
+			immutable key = getString(p, "key");
+			if (!key.length || peers.byKey(key) is null)
+				throw new ApiError("not_found", "no such computer");
+			if (meta is null)
+				throw new ApiError("unavailable", "no organization sync here");
+			immutable apply_ = p.type == JSONType.object && "apply" in p && p["apply"].type == JSONType.true_;
+			immutable n = meta.resolveHeld(key, apply_);
+			if (auto st = key in status)
+				st.held = meta.heldCount(key);
+			changed();
+			return JSONValue(["applied": JSONValue(n)]);
 		});
 		r.add("computers.remove", (JSONValue p) {
 			immutable key = getString(p, "key");

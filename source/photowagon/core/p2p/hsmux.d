@@ -66,6 +66,7 @@ final class HsMuxServe
 	private RequestHandler handler;
 	private EventSink sink;
 	private bool authed, tokenOk, gone, pairPending;
+	private string declaredKind;         // what daemon.auth said this peer is ("computer" · a phone says nothing)
 	private uint pairGen; // which daemon.pair is current: a superseded resolver must not clear it
 	private MonoTime lastRecv;
 	private ulong lastPkts;        // udx packets received, as last seen by watch()
@@ -82,6 +83,11 @@ final class HsMuxServe
 	/// its key (hex), its token, its name. The daemon remembers it and mirrors it back over
 	/// this session's mux.
 	void delegate(HsMuxServe session, string peerKey, string token, string alias_) nothrow onMirrorHello;
+	/// meta.since from another computer (core/sync/meta.d): its params → our facts. Only a
+	/// peer that is one of the paired computers (`isComputerPeer`) is answered.
+	JSONValue delegate(JSONValue params) onMeta;
+	/// Whether a key is one of the user's paired computers (not a phone).
+	bool delegate(string peerKey) nothrow isComputerPeer;
 	/// This computer's name, answered to mirror.hello.
 	string ownAlias;
 	/// This node's hyperswarm key (hex), bound into mirror.prove's answer.
@@ -359,6 +365,8 @@ final class HsMuxServe
 				return;
 			}
 			tokenOk = true;
+			if (msg.type == JSONType.object && "params" in msg.object)
+				declaredKind = getString(msg["params"], "kind");
 			if (devices !is null && peer.length)
 			{
 				immutable st = devices.stateOf(peer);
@@ -429,6 +437,10 @@ final class HsMuxServe
 					{
 						devices.add(peer, name);
 						devices.touch(peer);
+						// paired as another computer (it said so, and the user confirmed it here):
+						// only such a device may mirror this library and read its organization
+						if (declaredKind == "computer")
+							devices.setKind(peer, "computer");
 						authed = true;
 						emit("devices.changed", JSONValue.emptyObject);
 						send(JSONValue(["id": pid, "result": JSONValue(["ok": JSONValue(true)])]).toString());
@@ -465,10 +477,18 @@ final class HsMuxServe
 		}
 		if (method == "mirror.hello")
 		{
-			// another computer, authenticated: its token (so we mirror it back) and its name
+			// another computer, authenticated: its token (so we mirror it back) and its name. A
+			// phone never says it is a computer — only a peer that did may become one.
 			if (!authed)
 			{
 				send(RequestHandler.errorLine(id, "unauthorized", "authenticate first"));
+				return;
+			}
+			// the kind recorded when the pairing was confirmed — not what this session says now
+			// (an authenticated phone could otherwise just declare itself a computer)
+			if (declaredKind != "computer" || devices is null || devices.kindOf(peer) != "computer")
+			{
+				send(RequestHandler.errorLine(id, "forbidden", "only another computer mirrors this library"));
 				return;
 			}
 			immutable params = msg.type == JSONType.object && "params" in msg.object ? msg["params"] : JSONValue.emptyObject;
@@ -477,6 +497,22 @@ final class HsMuxServe
 			send(JSONValue(["id": id, "result": JSONValue(["ok": JSONValue(true), "alias": JSONValue(ownAlias)])]).toString());
 			if (onMirrorHello !is null && ptoken.length)
 				onMirrorHello(this, peer, ptoken, palias);
+			return;
+		}
+		if (method == "meta.since")
+		{
+			// the organization, for another of the user's computers only
+			if (!authed || declaredKind != "computer" || devices is null || devices.kindOf(peer) != "computer"
+				|| isComputerPeer is null || !isComputerPeer(peer) || onMeta is null)
+			{
+				send(RequestHandler.errorLine(id, "forbidden", "only a paired computer reads this"));
+				return;
+			}
+			immutable params = msg.type == JSONType.object && "params" in msg.object ? msg["params"] : JSONValue.emptyObject;
+			try
+				send(JSONValue(["id": id, "result": onMeta(params)]).toString());
+			catch (Exception e)
+				send(RequestHandler.errorLine(id, "failed", e.msg));
 			return;
 		}
 		if (authed || method == "daemon.hello")

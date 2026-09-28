@@ -317,6 +317,13 @@ version (PW_NoVision) {} else private StackService stacks;
 					buildPath(cfg.dataDir, "imports", ".mirror"),
 					(string t) { nd.joinComputer(t); }, (string t) nothrow { nd.leaveComputer(t); },
 					() nothrow => nd.hsKeyHex());
+				// the organization too: albums, favorites, keywords, names, in-app deletions
+				{
+					import photowagon.core.sync.meta : MetaSync;
+
+					computers.meta = new MetaSync(db, () nothrow => nd.hsKeyHex(), photos, registry, events);
+					computers.meta.keywords = keywords;   // taken keywords: the library, not the files
+				}
 				computers.register(registry);
 				computers.start();
 			}

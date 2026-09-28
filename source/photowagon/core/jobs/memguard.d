@@ -157,6 +157,57 @@ void disableCoreDumps() nothrow @nogc
 	}
 }
 
+/// Raises the open-files limit to what the system allows (the hard limit): the p2p layers
+/// keep a UDP socket per connection (libp2p's QUIC reaches ~150 public peers, hyperswarm
+/// its own), the indexer and the watchers hold files — under the usual soft limit of 1024 a
+/// headless sync box ran out ("Too many open files") and its computer mirroring failed.
+/// Returns the limit in force.
+ulong raiseOpenFilesLimit() nothrow @nogc
+{
+	version (Posix)
+	{
+		import core.sys.posix.sys.resource : getrlimit, setrlimit, rlimit, RLIMIT_NOFILE;
+
+		rlimit r;
+		if (getrlimit(RLIMIT_NOFILE, &r) != 0)
+			return 0;
+		// a finite target: an unlimited hard limit cannot be the soft one (macOS refuses
+		// it, and caps at OPEN_MAX), and a million descriptors is plenty everywhere
+		version (OSX)
+			enum ulong ceiling = 10_240;
+		else
+			enum ulong ceiling = 1_048_576;
+		immutable ulong hard = r.rlim_max;
+		foreach (target; [hard < ceiling ? hard : ceiling, 65_536UL])
+		{
+			if (target <= r.rlim_cur || target > hard)
+				continue;
+			rlimit want = r;
+			want.rlim_cur = cast(typeof(want.rlim_cur)) target;
+			if (setrlimit(RLIMIT_NOFILE, &want) == 0)
+				return target;
+		}
+		return r.rlim_cur;
+	}
+	else
+		return 0;
+}
+
+unittest
+{
+	version (Posix)
+	{
+		import core.sys.posix.sys.resource : getrlimit, rlimit, RLIMIT_NOFILE;
+
+		rlimit before;
+		getrlimit(RLIMIT_NOFILE, &before);
+		immutable got = raiseOpenFilesLimit();
+		rlimit r;
+		getrlimit(RLIMIT_NOFILE, &r);
+		assert(got == r.rlim_cur && r.rlim_cur >= before.rlim_cur);
+	}
+}
+
 /// Starts the watchdog; `limitMb <= 0` disables it. `what` names the process in the log.
 /// `dump` = true (the desktop) ends with a SIGSEGV core dump so a leak can be read; false
 /// (the phone) exits cleanly with no dump — a giant core on a phone is never worth its cost.

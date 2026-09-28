@@ -48,8 +48,9 @@ int main(string[] args)
 		return runVisionWorker(VisionModels(cfg.visionModels[0], cfg.visionModels[1], cfg.visionModels[2]));
 	}
 	{
-		import photowagon.core.jobs.memguard : startMemoryGuard;
+		import photowagon.core.jobs.memguard : startMemoryGuard, raiseOpenFilesLimit;
 		startMemoryGuard(cfg.memoryLimitMb);
+		cast(void) raiseOpenFilesLimit();   // p2p sockets + the indexer's files outgrow 1024
 	}
 	if (cfg.p2pRelayMode)
 	{

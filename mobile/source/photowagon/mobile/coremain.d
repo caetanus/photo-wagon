@@ -74,8 +74,9 @@ int serviceMain()
     }
     {
         // same memory discipline as the UI process: no core dumps, bounded RSS
-        import photowagon.core.jobs.memguard : startMemoryGuard, disableCoreDumps;
+        import photowagon.core.jobs.memguard : startMemoryGuard, disableCoreDumps, raiseOpenFilesLimit;
         disableCoreDumps();
+        cast(void) raiseOpenFilesLimit();   // p2p sockets + the index's files outgrow 1024
         startMemoryGuard(1536, "photo-wagon-core", false);
     }
     cast(void) createApp(CORE_ID);

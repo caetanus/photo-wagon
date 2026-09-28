@@ -663,14 +663,15 @@ final class PhoneIndex
     /// back on the Qt thread, starts decoding what is new on the workers.
     /// `onScanned(found)` follows; 0 with no readable root usually means the
     /// permission is not granted yet.
-    void scan()
+    /// False when a walk is already running (nothing started).
+    bool scan()
     {
         import core.thread : Thread;
 
         synchronized (lock)
         {
             if (walking)
-                return;
+                return false;
             walking = true;
         }
         auto t = new Thread(&walk);
@@ -678,6 +679,7 @@ final class PhoneIndex
         t.isDaemon = true;
         t.start();
         pump.start();
+        return true;
     }
 
     private void walk()

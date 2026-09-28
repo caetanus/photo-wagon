@@ -6,6 +6,9 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
+import android.database.ContentObserver;
+import android.net.Uri;
+import android.provider.MediaStore;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.net.ConnectivityManager;
@@ -145,6 +148,7 @@ public class CoreService extends QtService
         enterForeground();
         watchSyncStatus();
         watchMetered();
+        watchMedia();
         // off the main thread: a first-install copy of 120 MB must not hold onCreate (the
         // service-execution timeout); the core waits for the files to appear
         Thread x = new Thread(this::extractModels, "extract-models");
@@ -222,6 +226,17 @@ public class CoreService extends QtService
         Log.i(TAG, "core service: destroyed");
         if (watcher != null)
             watcher.removeCallbacksAndMessages(null);
+        if (mediaObserver != null)
+        {
+            try
+            {
+                getContentResolver().unregisterContentObserver(mediaObserver);
+            }
+            catch (Exception e)
+            {
+            }
+            mediaObserver = null;
+        }
         if (netCallback != null)
         {
             try
@@ -235,6 +250,59 @@ public class CoreService extends QtService
         }
         holdCpu(false);
         super.onDestroy();
+    }
+
+    // ---- new photos ------------------------------------------------------------------------
+
+    private ContentObserver mediaObserver;
+    private long mediaChanges;
+
+    /**
+     * A photo or video the camera (or anything) just saved: the core only walked its folders at
+     * start and when asked, so a new photo waited for the next manual refresh. MediaStore tells
+     * us at once; each change bumps a counter in files/settings/media-changed (atomically), the
+     * core notices it within its 3 s poll and walks the folders again.
+     */
+    private void watchMedia()
+    {
+        final File file = new File(new File(getFilesDir(), "settings"), "media-changed");
+        mediaObserver = new ContentObserver(new Handler(Looper.getMainLooper())) {
+            @Override
+            public void onChange(boolean selfChange)
+            {
+                mediaChanges++;
+                writeFlag(file, Long.toString(System.currentTimeMillis()) + "-" + mediaChanges);
+            }
+        };
+        try
+        {
+            getContentResolver().registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, mediaObserver);
+            getContentResolver().registerContentObserver(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, mediaObserver);
+        }
+        catch (Exception e)
+        {
+            Log.w(TAG, "media watch: " + e.getMessage());
+            mediaObserver = null;
+        }
+    }
+
+    private static void writeFlag(File file, String value)
+    {
+        try
+        {
+            file.getParentFile().mkdirs();
+            File tmp = new File(file.getPath() + ".tmp-java");
+            try (FileOutputStream out = new FileOutputStream(tmp))
+            {
+                out.write(value.getBytes("UTF-8"));
+            }
+            if (!tmp.renameTo(file))
+                tmp.delete();
+        }
+        catch (Exception e)
+        {
+            Log.w(TAG, "flag " + file.getName() + ": " + e.getMessage());
+        }
     }
 
     // ---- metered network (data saver) ---------------------------------------------------

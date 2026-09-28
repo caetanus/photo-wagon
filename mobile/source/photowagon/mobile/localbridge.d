@@ -61,7 +61,8 @@ final class LocalBridge : Bridge
     // Android's ConnectivityManager into settings/metered ("1"/"0"). The photo in flight
     // finishes; the next one waits. Explicit one-photo actions (Send, Add to album) still go.
     private bool syncPaused, dataSaver, metered;
-    private string pausedFile, dataSaverFile, meteredFile;
+    private string pausedFile, dataSaverFile, meteredFile, mediaChangedFile;
+    private string mediaSeen;   // the last media-changed mark acted on
     private QTimer meteredPoll;
     private string syncStatusFile;     // files/settings/sync-status, read by the Java notifier
     private long[] sendQueue;         // the WANTED photos (negotiated), waiting for their bytes
@@ -198,6 +199,7 @@ private bool slowComputer;
             pausedFile = buildPath(settingsDir, "sync-paused");
             dataSaverFile = buildPath(settingsDir, "data-saver");
             meteredFile = buildPath(settingsDir, "metered");
+            mediaChangedFile = buildPath(settingsDir, "media-changed");
             syncPaused = pausedFile.exists;
             dataSaver = dataSaverFile.exists;
             metered = readMetered();
@@ -240,9 +242,20 @@ private bool slowComputer;
         verifyLater.connectTimeout({ requestReverify(); });
         // the network's metered flag follows Android (CoreService writes it): 4G → hold,
         // Wi-Fi → go on, without the user doing anything
+        mediaSeen = readMediaMark();   // what is already there was walked at start
+        if (mediaSeen is null)
+            mediaSeen = "";
         meteredPoll = new QTimer(cast(cppq.QObject) null);
         meteredPoll.setInterval(3000);
         meteredPoll.connectTimeout({
+            // a photo just saved (CoreService's MediaStore observer bumps the mark): walk now,
+            // not at the next manual refresh
+            immutable mark = readMediaMark();
+            if (mark.length && mark != mediaSeen && index.scan())   // a walk under way: next tick
+            {
+                mediaSeen = mark;
+                plog("phone: new media — walking the folders");
+            }
             immutable m = readMetered();
             if (m == metered)
                 return;
@@ -2762,6 +2775,14 @@ private bool slowComputer;
     private bool held() const
     {
         return syncPaused || (dataSaver && metered);
+    }
+
+    private string readMediaMark()
+    {
+        try
+            return mediaChangedFile.length && mediaChangedFile.exists ? readText(mediaChangedFile) : null;
+        catch (Exception)
+            return null;
     }
 
     private bool readMetered()

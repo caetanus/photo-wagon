@@ -26,6 +26,7 @@
     <file>PersonMenu.qml</file>
     <file>PeersPanel.qml</file>
     <file>PhonePanel.qml</file>
+    <file>ComputersPanel.qml</file>
     <file>icon.png</file>
   </qresource>
 </RCC>

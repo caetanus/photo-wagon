@@ -216,11 +216,15 @@ final class Indexer
 		}
 		photos.setDigest(hash, dg.fingerprint, dg.pieces, dg.size);
 		auto same = photos.byHash(hash);
-		if (!same.isNull && same.get.path != c.path)
+		if (!same.isNull && same.get.path !is null && same.get.path != c.path)
 		{
 			logDiagnostic("indexer: duplicate of %s: %s", same.get.path, c.path);
 			return false;
 		}
+		// a remote-only row of this content (a photo seen in a fetched album): the file that
+		// just came is its original — the row gets it, rather than the file being dropped
+		if (known.isNull && !same.isNull && same.get.path is null)
+			known = same;
 
 		// videos take a different path: a frame is the thumbnail, ffprobe gives duration and
 		// size, there is no EXIF to read and nothing to classify — kind is simply 'video'.

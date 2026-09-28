@@ -55,6 +55,42 @@ final class Node : Notifiee
 	/// Transport seam: each phone the swarm connects arrives here as a raw byte
 	/// stream; the desktop serve() (framing + DeviceRepo admission) wires onto it.
 	void delegate(HsConn) nothrow onConnection;
+
+	/// Dial another of the user's computers: the topic of ITS pairing token (see
+	/// core/sync/computers.d). No-op without the hyperswarm transport.
+	void joinComputer(string token)
+	{
+		import std.string : strip;
+
+		if (hs !is null && token.strip.length)
+			hs.joinPeer(cast(const(ubyte)[]) token.strip);
+	}
+
+	/// Stop dialing it (an open link stays).
+	void leaveComputer(string token) nothrow
+	{
+		import std.string : strip;
+
+		if (hs !is null)
+			try
+				hs.leavePeer(cast(const(ubyte)[]) token.strip);
+			catch (Exception)
+			{
+			}
+	}
+
+	/// This node's hyperswarm public key (hex), or null without the transport.
+	string hsKeyHex() nothrow
+	{
+		import std.format : format;
+
+		if (hs is null)
+			return null;
+		try
+			return format("%(%02x%)", hs.publicKey[]);
+		catch (Exception)
+			return null;
+	}
 	private AutoNat autonat;
 	private string[] circuitAddrsList; // complete /p2p-circuit addresses (already end in /p2p/<self>)
 	private ubyte[] meetKey;           // DHT rendezvous key from the pairing token (pairingcode.rendezvousKey); empty = no token yet

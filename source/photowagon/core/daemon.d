@@ -31,6 +31,9 @@ import photowagon.core.api.moments_api : registerMomentsApi;
 import photowagon.core.api.p2p_api : registerP2pApi;
 import photowagon.core.api.peernames_api : registerPeerNamesApi;
 import photowagon.core.api.pairing_api : registerPairingApi, ServerControl;
+import photowagon.core.api.import_api : LandFn;
+import photowagon.core.p2p.computerlinks : ComputerLinks;
+import photowagon.core.sync.computers : ComputerPeers;
 import photowagon.core.api.places_api : registerPlacesApi;
 version (PW_NoVision) {} else import photowagon.core.api.tags_api : registerTagsApi;
 version (PW_NoVision) {} else import photowagon.core.api.tools_api : registerToolsApi;
@@ -215,11 +218,13 @@ version (PW_NoVision) {} else private StackService stacks;
 		// resumable pushes spool here by sha256 until the phone says the file is complete
 		auto partials = new PartialStore(cfg.dataDir);
 		auto pieces = new PieceStore(buildPath(cfg.dataDir, "imports", ".pieces"));
+		LandFn landPulled;   // how a file pulled from another computer lands (mirror)
 		version (PW_NoVision)
-			registerImportApi(registry, cfg, roots, photos, indexer, blobStash, partials, pieces);
+			registerImportApi(registry, cfg, roots, photos, indexer, blobStash, partials, pieces, null,
+				(LandFn f) { landPulled = f; });
 		else
 			registerImportApi(registry, cfg, roots, photos, indexer, blobStash, partials, pieces,
-				(long photoId, JSONValue fj) => facesService.acceptFromDevice(photoId, fj));
+				(long photoId, JSONValue fj) => facesService.acceptFromDevice(photoId, fj), (LandFn f) { landPulled = f; });
 		registerImportsCleanup(registry, cfg, photos, () {
 			events.emit("library.changed", JSONValue.emptyObject);
 			events.emit("people.changed", JSONValue.emptyObject);
@@ -295,9 +300,33 @@ version (PW_NoVision) {} else private StackService stacks;
 
 				wireDigests(hsPieces, photos);
 			}
+			// the user's other computers: mirrored both ways over the same hyperswarm sessions
+			ComputerLinks computers;
+			{
+				import std.socket : Socket;
+
+				string alias_ = "computer";
+				try
+					alias_ = Socket.hostName;
+				catch (Exception)
+				{
+				}
+				auto nd = node;
+				computers = new ComputerLinks(new ComputerPeers(buildPath(cfg.dataDir, "settings", "computers.json")),
+					deviceRepo, photos, pieces, landPulled, events, token, alias_,
+					buildPath(cfg.dataDir, "imports", ".mirror"),
+					(string t) { nd.joinComputer(t); }, (string t) nothrow { nd.leaveComputer(t); },
+					() nothrow => nd.hsKeyHex());
+				computers.register(registry);
+				computers.start();
+			}
 			node.onConnection = (HsConn c) nothrow {
 				try
-					new HsMuxServe(c, registry, events, token, deviceRepo, pairingMgr, hsPieces);
+				{
+					auto s = new HsMuxServe(c, registry, events, token, deviceRepo, pairingMgr, hsPieces,
+						computers.isComputer(c));
+					computers.onSession(s, c);
+				}
 				catch (Exception e)
 				{
 					try logInfo("hs/mux: could not start a session: %s", e.msg); catch (Exception) {}

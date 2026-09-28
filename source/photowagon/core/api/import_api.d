@@ -20,9 +20,14 @@ import photowagon.core.store.partials : PartialStore;
 import photowagon.core.sync.pieces : PieceStore;
 import photowagon.core.store.store : sha256Hex;
 
+/// Lands a verified file into imports/ (see landFile): what another computer's mirror uses
+/// for the files it pulls — `sub` is that computer's folder under imports/.
+alias LandFn = JSONValue delegate(string name, string takenAt, string src, string hash, long mtimeMs, string sub);
+
 void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos, Indexer indexer,
 	BlobStash blobs = null, PartialStore partials = null, PieceStore pieces = null,
-	string delegate(long photoId, JSONValue facesJson) ingestFaces = null)
+	string delegate(long photoId, JSONValue facesJson) ingestFaces = null,
+	void delegate(LandFn) exportLand = null)
 {
 	immutable importsRoot = buildPath(cfg.dataDir, "imports");
 	{
@@ -88,7 +93,7 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 	// is hundreds of MB, and holding each one whole (read + hash + write) took the desktop
 	// past its memory limit while a phone pushed its videos (2026-09-25).
 	JSONValue landFile(string name, string takenAt, string src, string hash, JSONValue facesJson = JSONValue(null),
-		long mtimeMs = 0)
+		long mtimeMs = 0, string sub = null)
 	{
 		import std.file : rename, copy, remove, getSize;
 
@@ -98,7 +103,7 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 		if (getSize(src) == 0)
 			throw new ApiError("bad_params", "empty file");
 		auto known = photos.byHash(hash);
-		if (!known.isNull)
+		if (!known.isNull && known.get.path !is null)   // (a remote-only row gets this file)
 		{
 			try
 				remove(src);
@@ -118,7 +123,8 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 			return JSONValue(["existed": JSONValue(true), "removed": JSONValue(true)]);
 		}
 		immutable month = monthFolder(takenAt);
-		immutable dir = buildPath(importsRoot, month);
+		// a file another computer sent goes under imports/<that computer>/ (sub)
+		immutable dir = sub.length ? buildPath(importsRoot, safeFolder(sub), month) : buildPath(importsRoot, month);
 		mkdirRecurse(dir);
 		immutable path = freePath(dir, base);
 		try
@@ -133,6 +139,39 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 		return landed(hash, path, facesJson, takenAt);
 	}
 
+
+	if (exportLand !is null)
+		exportLand((string n, string t, string src, string h, long m, string sub) => landFile(n, t, src, h,
+			JSONValue(null), m, sub));
+
+	// {after?, limit?} → {items: [{sha256, size, name, takenAt, mtimeMs}], next}: the library's
+	// local files page by page, for a paired computer mirroring this one — it pulls what it
+	// lacks by sha256 over the piece protocol. `next` is the `after` of the next page, 0 at
+	// the end. Files removed from Wagon are left out (they left the library).
+	r.add("library.hashes", (JSONValue p) {
+		long after;
+		long limit = 500;
+		if (p.type == JSONType.object)
+		{
+			if (auto a = "after" in p)
+				if (a.type == JSONType.integer)
+					after = a.integer;
+			if (auto l = "limit" in p)
+				if (l.type == JSONType.integer && l.integer > 0)
+					limit = l.integer > 2000 ? 2000 : l.integer;
+		}
+		auto rows = photos.localFilesAfter(after, cast(int) limit);
+		JSONValue[] items;
+		foreach (f; rows)
+		{
+			if (photos.isRemoved(f.hash))
+				continue;
+			items ~= JSONValue(["sha256": JSONValue(f.hash), "size": JSONValue(f.size),
+				"name": JSONValue(f.path.baseName), "takenAt": JSONValue(f.takenAt), "mtimeMs": JSONValue(f.mtimeMs)]);
+		}
+		immutable next = rows.length == limit ? rows[$ - 1].id : 0;
+		return JSONValue(["items": JSONValue(items), "next": JSONValue(next)]);
+	});
 
 	// {hashes: [sha256, …]} → {have: [sha256, …], refuse: [sha256, …]}: the phone offers a
 	// batch of the photos it means to send; the desktop answers which it already has and
@@ -276,6 +315,19 @@ void keepTimes(string path, long mtimeMs)
 		logWarn("import: %s: cannot keep its time: %s", path, e.msg);
 }
 
+/// A computer's alias as a folder name under imports/: letters, digits, '-', '_', '.' kept,
+/// anything else (and a leading dot) replaced; never empty, never a path.
+string safeFolder(string s) pure nothrow @safe
+{
+	char[] o;
+	foreach (char c; s)
+		o ~= (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_'
+			|| (c == '.' && o.length) ? c : '_';
+	if (o.length > 64)
+		o = o[0 .. 64];
+	return o.length ? o.idup : "computer";
+}
+
 /// Unix seconds of an ISO time the phone sent ("takenAt"), 0 when absent or unreadable.
 long unixOf(string iso) nothrow
 {
@@ -393,4 +445,5 @@ unittest
 	assert(mtimeOf(parseJSON(`{"name":"a"}`)) == 0);
 	assert(unixOf("2020-09-13T12:26:40Z") == 1_600_000_000);
 	assert(unixOf("") == 0 && unixOf("garbage-xx") == 0);
+	assert(safeFolder("novigrad") == "novigrad" && safeFolder("../x y") == "_._x_y" && safeFolder("") == "computer");
 }

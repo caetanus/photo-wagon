@@ -95,6 +95,7 @@ version (WithUi)
     Signal!() endpointChanged;
     Signal!() pairingChanged;
     Signal!() devicesChanged;
+    Signal!() computersChanged;
     Signal!() pairingCodeChanged;
     Signal!() pairingRequestChanged;
     Signal!() deviceConnectedChanged;
@@ -151,6 +152,9 @@ version (WithUi)
     @Property("pairingChanged") string pairing = `{"enabled":false}`;
     /// Desktop: the paired phones — {devices:[{peerId, name, state, pairedAt, lastSeen}]}.
     @Property("devicesChanged") string devices = `{"devices":[]}`;
+    /// The user's other computers (computers.list) and this one's code (computers.code).
+    @Property("computersChanged") string computers = `{"computers":[],"alias":""}`;
+    @Property("computersChanged") string computersCode = "";
     /// Phone: while first-pairing, {code:"4821"} to show so the desktop can authorize; {} otherwise.
     @Property("pairingCodeChanged") string pairingCode = "{}";
     /// Desktop: a phone knocking to be authorized — {peer, name}; {} when none is waiting.
@@ -1778,6 +1782,39 @@ version (WithUi)
     }
 
     /// Desktop: the paired phones, for the device list.
+    /// The other computers this library mirrors, and this computer's own code.
+    @Slot void loadComputers()
+    {
+        client.request("computers.list", (r, e) {
+            if (e.type != JSONType.null_) { report("computers", e); return; }
+            computers = r.toString();
+            computersChanged.emit();
+        });
+        client.request("computers.code", (r, e) {
+            if (e.type != JSONType.null_) return;
+            computersCode = r["code"].str;
+            computersChanged.emit();
+        });
+    }
+
+    /// Pair with another computer: the code it shows (pw://…).
+    @Slot void pairComputer(string code)
+    {
+        client.request("computers.pair", JSONValue(["code": JSONValue(code)]), (r, e) {
+            if (e.type != JSONType.null_) { report("computers.pair", e); return; }
+            loadComputers();
+        });
+    }
+
+    /// Stop mirroring a computer (its photos already here stay).
+    @Slot void removeComputer(string key)
+    {
+        client.request("computers.remove", JSONValue(["key": JSONValue(key)]), (r, e) {
+            if (e.type != JSONType.null_) { report("computers.remove", e); return; }
+            loadComputers();
+        });
+    }
+
     @Slot void loadDevices()
     {
         client.request("devices.list", (r, e) {
@@ -2212,6 +2249,9 @@ version (WithUi)
             loadDates();
             loadRoots();
             reload(0, pageLimit);
+            break;
+        case "computers.changed":
+            loadComputers();
             break;
         case "devices.changed":
             loadDevices();

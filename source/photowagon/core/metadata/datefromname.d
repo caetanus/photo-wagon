@@ -54,8 +54,9 @@ private bool isImportsMonth(string dir)
 	if (importsRootForDates.length == 0)
 		return false;
 	immutable leaf = dir.baseName;
+	// imports/YYYY-MM (a phone's photos) or imports/<computer>/YYYY-MM (a paired computer's)
 	return leaf.length == 7 && digits(leaf, 0, 4) && leaf[4] == '-' && digits(leaf, 5, 2)
-		&& dir.dirName == importsRootForDates;
+		&& (dir.dirName == importsRootForDates || dir.dirName.dirName == importsRootForDates);
 }
 
 private bool dig(char c) { return c >= '0' && c <= '9'; }
@@ -251,6 +252,7 @@ unittest
 	assert(dateFromPath("/home/u/.local/share/photowagon/imports/2026-09/IMG_20260903_101010.jpg") != 0);   // the name still counts
 	assert(dateFromPath("/x/2026-09/photo.jpg") != 0);   // a user's own month folder still counts
 	assert(dateFromPath("/mnt/old/imports/2019-08/photo.jpg") != 0);   // someone else's imports folder too
+	assert(dateFromPath("/home/u/.local/share/photowagon/imports/novigrad/2026-09/photo.jpg") == 0);   // a computer's
 	importsRootForDates = null;
 	immutable pix = dateFromPath("/p/IMG_20210321_150104.jpg");
 	assert(y(pix) == 2021 && month(pix) == 3);

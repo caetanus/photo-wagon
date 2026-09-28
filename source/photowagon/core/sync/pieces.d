@@ -875,6 +875,44 @@ ubyte[] askPiece(Stream s, string sha, const Manifest man, uint i)
 }
 
 /// MANIFEST: tell the peer what `sha` is, so it can take PUTs. True when accepted.
+/// Download `sha` from the peer on `st` into `dest`: its manifest, what `pieces` already
+/// has of it (a transfer that dropped resumes there), then every missing piece, each verified
+/// against its hash as it lands; `pieces.finish` checks the whole file and moves it to
+/// `dest`. `onPiece` runs after each piece that arrives (liveness, progress). Returns the
+/// size. `retry` = false for a definitive failure (the peer has no such file, the whole file
+/// did not verify), true when trying again would go on from what is stored.
+long pullFile(Stream st, PieceStore pieces, string sha, string dest, out bool retry,
+	void delegate() onPiece = null)
+{
+	retry = true;
+	auto man = askInfo(st, sha);
+	if (man.count == 0 && man.size == 0)
+	{
+		retry = false;
+		throw new Exception("the peer does not have that file");
+	}
+	if (!(pieces.manifest(sha).count == man.count && man.count > 0))
+		pieces.adopt(sha, man);
+	auto mine = pieces.have(sha);
+	foreach (i; 0 .. man.count)
+	{
+		if (mine.has(i))
+			continue;
+		auto bytes = askPiece(st, sha, man, i);
+		if (onPiece !is null)
+			onPiece();
+		pieces.store(sha, i, bytes);
+	}
+	try
+		pieces.finish(sha, dest);
+	catch (Exception e)
+	{
+		retry = false;
+		throw e;
+	}
+	return man.size;
+}
+
 bool tellManifest(Stream s, string sha, const Manifest man)
 {
 	s.write(cast(ubyte[])[PieceOp.manifest] ~ shaBytes(sha)[] ~ encodeManifest(man));

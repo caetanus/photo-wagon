@@ -30,6 +30,10 @@ final class HsTransport
     private string[] delegate() lanSource;
     private void delegate(NetworkAddress, string[]) nothrow lanListener;
     private ubyte[] startedKey; // the key start() last joined, so a repeat is a no-op
+    // Other computers' keys this node dials (joinPeer): their LAN rendezvous and our listener
+    // on it, by the key's topic (hex).
+    private LanRendezvous[string] peerLan;
+    private void delegate(NetworkAddress, string[]) nothrow[string] peerLanListener;
 
     /// Invoked once per new peer connection, after its secret stream opens. The
     /// callee sets the Connection's onData/onClose and uses write() to send.
@@ -82,6 +86,18 @@ final class HsTransport
             return;
         closed = true;
         leaveLan();
+        foreach (hex, r; peerLan)
+            if (r !is null)
+                try
+                {
+                    if (auto l = hex in peerLanListener)
+                        r.removeListener(*l);
+                    r.release();
+                }
+                catch (Exception)
+                {
+                }
+        peerLan = null;
         try
             swarm.close();
         catch (Exception)
@@ -107,6 +123,82 @@ final class HsTransport
         lan = null;
         lanListener = null;
         lanSource = null;
+    }
+
+    /// Dial another computer: discover the topic of ITS key (the code it showed) and connect,
+    /// over the DHT and, when it is on this LAN, straight to the address its LAN line gives.
+    /// The connection arrives on onPeer like any other. A repeat for the same key is a no-op.
+    void joinPeer(scope const(ubyte)[] key)
+    {
+        import std.format : format;
+
+        if (closed)
+            return;
+        auto topic = topicFor(key);
+        immutable hex = format("%(%02x%)", topic[]);
+        if (hex in peerLan)
+            return;
+        swarm.join(topic, /*client*/ true, /*serverMode*/ false);
+        try
+        {
+            auto r = LanRendezvous.forKey("pw", key);
+            r.acquire();
+            auto sw = swarm;
+            auto listener = (NetworkAddress from, string[] txts) nothrow {
+                try
+                {
+                    import std.conv : to;
+
+                    immutable portText = LanRendezvous.line(txts, "udx");
+                    immutable pkText = LanRendezvous.line(txts, "pk");
+                    if (portText.length == 0 || pkText.length != 64)
+                        return;
+                    ubyte[32] pk;
+                    foreach (i; 0 .. 32)
+                        pk[i] = cast(ubyte) pkText[2 * i .. 2 * i + 2].to!int(16);
+                    if (pk[] == sw.keyPair.publicKey[])
+                        return;   // our own line
+                    sw.connectAt(pk, Address(from.toAddressString, 4, portText.to!ushort));
+                }
+                catch (Exception)
+                {
+                }
+            };
+            r.addListener(listener);
+            peerLan[hex] = r;
+            peerLanListener[hex] = listener;
+        }
+        catch (Exception)
+        {
+            peerLan[hex] = null;   // no multicast here: the DHT path stands alone
+        }
+    }
+
+    /// Stop dialing that computer (a connection already up is kept).
+    void leavePeer(scope const(ubyte)[] key) nothrow
+    {
+        import std.format : format;
+
+        try
+        {
+            auto topic = topicFor(key);
+            immutable hex = format("%(%02x%)", topic[]);
+            swarm.leave(topic);
+            if (auto r = hex in peerLan)
+            {
+                if (*r !is null)
+                {
+                    if (auto l = hex in peerLanListener)
+                        (*r).removeListener(*l);
+                    (*r).release();
+                }
+                peerLan.remove(hex);
+                peerLanListener.remove(hex);
+            }
+        }
+        catch (Exception)
+        {
+        }
     }
 
     /// The older entry: a pre-derived topic, no LAN rendezvous (needs the key).

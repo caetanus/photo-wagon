@@ -2441,40 +2441,14 @@ private void pushPieces(Stream st, string path, string sha, string keptPieces = 
         throw new Exception("file_changed: " ~ path.baseName ~ " changed size while it was sent");
 }
 
-/// Download over the piece protocol: the computer's manifest, our piece store's bitfield,
-/// then every missing piece (verified against its hash as it lands); finish() checks the
-/// whole file and moves it to `dest`. Returns the size.
+/// Download over the piece protocol (core/sync/pieces.d pullFile, shared with the
+/// computer-to-computer mirror): every piece that lands counts as the link being alive.
 private long pullPieces(Stream st, PieceStore pieces, string sha, string dest, out bool retry)
 {
-    import std.conv : to;
+    import photowagon.core.sync.pieces : pullFile;
 
-    retry = true;
-    auto man = askInfo(st, sha);
-    if (man.count == 0 && man.size == 0)
-    {
-        retry = false;
-        throw new Exception("the computer does not have that file");
-    }
-    if (!(pieces.manifest(sha).count == man.count && man.count > 0))
-        pieces.adopt(sha, man);
-    auto mine = pieces.have(sha);
-    plog("pull: ", dest.baseName, " ", man.count, " pieces, have ", mine.haveCount);
-    foreach (i; 0 .. man.count)
-    {
-        if (mine.has(i))
-            continue;
-        auto bytes = askPiece(st, sha, man, i);
-        lastPieceAck = MonoTime.currTime;   // the computer answered: the link is alive
-        pieces.store(sha, i, bytes);
-    }
-    try
-        pieces.finish(sha, dest);
-    catch (Exception e)
-    {
-        retry = false;
-        throw e;
-    }
-    return man.size;
+    plog("pull: ", dest.baseName, " by pieces");
+    return pullFile(st, pieces, sha, dest, retry, () { lastPieceAck = MonoTime.currTime; });
 }
 private enum pullProtocol = "/photowagon/pull/1.0.0";
 

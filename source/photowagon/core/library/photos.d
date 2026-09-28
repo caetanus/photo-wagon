@@ -149,6 +149,36 @@ final class PhotoRepo
 		return Nullable!Photo(readRow(s));
 	}
 
+	/// Whether a row with this content has a file here (not a remote-only row: a photo seen
+	/// in a fetched album whose original never came).
+	bool hasLocalFile(string hash)
+	{
+		auto s = db.prepare("SELECT 1 FROM photos WHERE hash = ? AND path IS NOT NULL");
+		s.bind(1, hash);
+		return s.step();
+	}
+
+	/// One local file of the library, as another computer mirroring it needs to know it.
+	struct LocalFile
+	{
+		long id;
+		string hash, path, takenAt;
+		long size, mtimeMs;
+	}
+
+	/// The library's local files (a hash and a path), in id order after `afterId`, at most
+	/// `limit` — what a paired computer pages through to find what it lacks (library.hashes).
+	LocalFile[] localFilesAfter(long afterId, int limit)
+	{
+		auto s = db.prepare("SELECT id, hash, path, size, mtime_ms, taken_at FROM photos"
+			~ " WHERE id > ? AND path IS NOT NULL AND hash IS NOT NULL AND hash != '' ORDER BY id LIMIT ?");
+		s.bind(1, afterId).bind(2, cast(long) limit);
+		LocalFile[] out_;
+		while (s.step())
+			out_ ~= LocalFile(s.getLong(0), s.getString(1), s.getString(2), s.getString(5), s.getLong(3), s.getLong(4));
+		return out_;
+	}
+
 	/// Whether a file with this content is really here: a row with that hash whose file is on
 	/// disk at the recorded size (the row alone outlives a file deleted behind our back until
 	/// the next rescan). What the phone's "Free up space" trusts before deleting its copy.

@@ -78,8 +78,22 @@ final class HsMuxServe
 	private LocalManualEvent outEv;
 	private Task writer;
 
+	/// Another computer (not a phone) greeted us with `mirror.hello` after it authenticated:
+	/// its key (hex), its token, its name. The daemon remembers it and mirrors it back over
+	/// this session's mux.
+	void delegate(HsMuxServe session, string peerKey, string token, string alias_) nothrow onMirrorHello;
+	/// This computer's name, answered to mirror.hello.
+	string ownAlias;
+	/// This node's hyperswarm key (hex), bound into mirror.prove's answer.
+	string ownKey;
+	/// Called once when the session ends (a mirror client on its mux stops).
+	void delegate() nothrow onGone;
+
+	/// `eager`: the peer is another computer (we dialed it, or we know it) — the mux is made
+	/// now, protomux (a computer never speaks the legacy framing), so this side can open its
+	/// own streams on it before the peer says anything.
 	this(Connection c, Registry registry, Events events, string token, DeviceRepo devices,
-		PairingManager pairing, PieceService pieces)
+		PairingManager pairing, PieceService pieces, bool eager = false)
 	{
 		this.c = c;
 		this.registry = registry;
@@ -95,6 +109,8 @@ final class HsMuxServe
 		authed = token.length == 0;
 		lastRecv = MonoTime.currTime;
 		lastPktAt = lastRecv;
+		if (eager)
+			mux = makeMux(null);
 		c.onData((ubyte[] b) nothrow {
 			if (gone)
 				return;
@@ -119,7 +135,7 @@ final class HsMuxServe
 	private LinkMux makeMux(const(ubyte)[] first) nothrow
 	{
 		LinkMux m;
-		immutable legacy = isLegacyMuxFrame(first);
+		immutable legacy = first !is null && isLegacyMuxFrame(first);
 		try
 		{
 			if (legacy)
@@ -137,6 +153,35 @@ final class HsMuxServe
 		{
 		}
 		return m;
+	}
+
+	/// Whether the session has ended.
+	bool isGone() const nothrow
+	{
+		return gone;
+	}
+
+	/// Close this session now (the user removed that computer).
+	void drop() nothrow
+	{
+		try
+			c.destroy();
+		catch (Exception)
+		{
+		}
+		onClose();
+	}
+
+	/// The session's mux (null until the peer's first message, unless eager).
+	LinkMux linkMux() nothrow
+	{
+		return mux;
+	}
+
+	/// The peer's public key, hex.
+	string peerKey() const nothrow
+	{
+		return peer;
 	}
 
 	/// Drop a peer that has gone silent past its deadline: a hard destroy (nothing to
@@ -398,6 +443,42 @@ final class HsMuxServe
 			emit("pairing.request", JSONValue(["peer": JSONValue(peer), "name": JSONValue(name)]));
 			return;
 		}
+		if (method == "mirror.prove")
+		{
+			// A computer that dialed us with a pairing code asks us to prove we are the
+			// computer that code belongs to BEFORE it sends the token: HMAC(our token,
+			// nonce ‖ its key ‖ our key). Reveals nothing about the token; allowed pre-auth.
+			import std.digest.hmac : hmac;
+			import std.digest.sha : SHA256;
+			import std.digest : toHexString, LetterCase;
+
+			immutable params = msg.type == JSONType.object && "params" in msg.object ? msg["params"] : JSONValue.emptyObject;
+			immutable nonce = getString(params, "nonce");
+			if (nonce.length < 32 || nonce.length > 128 || !token.length)
+			{
+				send(RequestHandler.errorLine(id, "bad_params", "nonce wanted"));
+				return;
+			}
+			immutable mac = hmac!SHA256(cast(const(ubyte)[]) (nonce ~ "|" ~ peer ~ "|" ~ ownKey), cast(const(ubyte)[]) token);
+			send(JSONValue(["id": id, "result": JSONValue(["mac": JSONValue(toHexString!(LetterCase.lower)(mac).idup)])]).toString());
+			return;
+		}
+		if (method == "mirror.hello")
+		{
+			// another computer, authenticated: its token (so we mirror it back) and its name
+			if (!authed)
+			{
+				send(RequestHandler.errorLine(id, "unauthorized", "authenticate first"));
+				return;
+			}
+			immutable params = msg.type == JSONType.object && "params" in msg.object ? msg["params"] : JSONValue.emptyObject;
+			immutable ptoken = getString(params, "token");
+			immutable palias = getString(params, "alias");
+			send(JSONValue(["id": id, "result": JSONValue(["ok": JSONValue(true), "alias": JSONValue(ownAlias)])]).toString());
+			if (onMirrorHello !is null && ptoken.length)
+				onMirrorHello(this, peer, ptoken, palias);
+			return;
+		}
 		if (authed || method == "daemon.hello")
 		{
 			handler.handle(line);
@@ -451,6 +532,8 @@ final class HsMuxServe
 		catch (Exception)
 		{
 		}
+		if (onGone !is null)
+			onGone();
 		try
 			logInfo("hs/mux: %s left", short_);
 		catch (Exception)

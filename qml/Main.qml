@@ -219,6 +219,7 @@ ApplicationWindow {
     Action { id: actAddFolder;  text: "Add Folder to Library…"; onTriggered: folderDialog.open() }
     Action { id: actImportPhone; text: "Import from Phone…";    onTriggered: phonePanel.open() }
     Action { id: actPeers;      text: "Computers…";             onTriggered: peersPanel.open() }
+    Action { id: actComputers;  text: "Sync with Another Computer…"; onTriggered: computersPanel.open() }
     Action { id: actSettings;   text: "Settings…"; shortcut: "Ctrl+,"; onTriggered: settingsDialog.open() }
     Action { id: actQuit;       text: "Quit"; shortcut: StandardKey.Quit; onTriggered: Qt.quit() }
 
@@ -268,6 +269,7 @@ ApplicationWindow {
             title: "File"
             AppMenuItem { action: actAddFolder }
             AppMenuItem { action: actImportPhone }
+            AppMenuItem { action: actComputers }
             MenuSeparator {}
             AppMenuItem { action: actPeers }
             MenuSeparator {}
@@ -777,6 +779,7 @@ ApplicationWindow {
                 id: primaryMenu
                 AppMenuItem { action: actAddFolder }
                 AppMenuItem { action: actImportPhone }
+                AppMenuItem { action: actComputers }
                 MenuSeparator {}
                 AppMenuItem { action: actSelectAll }
                 AppMenuItem { action: actDeselect }
@@ -1130,6 +1133,13 @@ ApplicationWindow {
         onSetPlace: (place, country, ids) => library.setPlace(JSON.stringify(ids), place, country)
     }
 
+    ComputersPanel {
+        id: computersPanel
+        theme: root.theme
+        anchors.centerIn: parent
+        width: Math.min(520, root.width - 80)
+    }
+
     PhonePanel {
         id: phonePanel
         theme: root.theme
@@ -1152,9 +1162,9 @@ ApplicationWindow {
         background: Rectangle { color: theme.panel; border.color: theme.separator; radius: 10 }
         contentItem: ColumnLayout {
             spacing: 14
-            Label { text: "Allow this phone?"; font.pixelSize: 18; font.bold: true; color: theme.text }
+            Label { text: "Allow this device?"; font.pixelSize: 18; font.bold: true; color: theme.text }
             Label {
-                text: (pairingRequestPopup.pr.name || "A phone") + " wants to connect. Type the 4-digit code it shows:"
+                text: (pairingRequestPopup.pr.name || "A phone or computer") + " wants to connect. Type the 4-digit code it shows:"
                 color: theme.muted; wrapMode: Text.WordWrap; Layout.preferredWidth: 320
             }
             TextField {
@@ -1307,6 +1317,7 @@ ApplicationWindow {
             if (applied) return
             applied = true
             if (library.shotView.startsWith("tools")) toolsDialog.openAt(Number(library.shotView.substring(5)) || 0)
+            else if (library.shotView === "computers") computersPanel.open()
             else if (library.shotView === "people") root.pickSource("people")
             else if (library.shotView === "places") root.pickSource("places")
             else if (library.shotView === "memories") root.pickSource("memories")
@@ -1380,7 +1391,7 @@ ApplicationWindow {
     Timer {
         running: library.shotPath.length > 0
         interval: library.shotView.startsWith("tools") ? 15000 : 3500
-        onTriggered: (library.shotView.startsWith("tools") ? root.contentItem.Window.contentItem : library.shotView === "overlay" ? Overlay.overlay : library.shotSend ? phonePanel.body : library.shotView.startsWith("name:") ? viewer.namerBody : library.shotView === "menu" ? photoMenu.contentItem : library.shotView === "facemenu" ? viewer.faceMenuBody : shell).grabToImage(function (r) {
+        onTriggered: (library.shotView.startsWith("tools") ? root.contentItem.Window.contentItem : library.shotView === "computers" ? computersPanel.body : library.shotView === "overlay" ? Overlay.overlay : library.shotSend ? phonePanel.body : library.shotView.startsWith("name:") ? viewer.namerBody : library.shotView === "menu" ? photoMenu.contentItem : library.shotView === "facemenu" ? viewer.faceMenuBody : shell).grabToImage(function (r) {
             r.saveToFile(library.shotPath)
             console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length, "source", root.source, "filter", library.filter)
             library.quit()

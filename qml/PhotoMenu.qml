@@ -23,6 +23,7 @@ AppMenu {
     signal setTag(var ids, string group, string tag)
     signal setKind(var ids, string kind)
     signal remove(var ids, bool permanent)
+    signal removeFromWagon(var ids)
 
     readonly property string suffix: ids.length === 1 ? "" : " (" + ids.length + ")"
 
@@ -36,6 +37,7 @@ AppMenu {
     AppMenuItem { text: "Add Tags…" + menu.suffix; onTriggered: menu.addTags(menu.ids) }
     AppMenuItem { text: "Write Tags to File" + (menu.ids.length === 1 ? "" : "s") + menu.suffix; onTriggered: menu.writeTags(menu.ids) }
     MenuSeparator { }
+    AppMenuItem { text: "Remove from Wagon…" + menu.suffix; onTriggered: menu.removeFromWagon(menu.ids) }
     AppMenuItem { text: "Move to Trash" + menu.suffix; onTriggered: menu.remove(menu.ids, false) }
     AppMenuItem { text: "Delete Permanently…" + menu.suffix; onTriggered: menu.remove(menu.ids, true) }
     MenuSeparator { }

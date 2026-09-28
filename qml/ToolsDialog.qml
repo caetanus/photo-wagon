@@ -11,7 +11,7 @@ Dialog {
     id: dlg
     required property QtObject theme
     required property QtObject icons
-    property int section: 0               // 0 Thumbnails · 1 Similar photos · 2 Unnamed faces · 3 Screenshots & memes · 4 From phones
+    property int section: 0               // 0 Thumbnails · 1 Similar photos · 2 Unnamed faces · 3 Screenshots & memes · 4 From phones · 5 Removed from Wagon
 
     function openAt(s) { section = s; open() }
 
@@ -20,6 +20,7 @@ Dialog {
     readonly property var face: { try { return JSON.parse(library.toolsFace) } catch (e) { return ({}) } }
     readonly property var junk: { try { return JSON.parse(library.toolsJunk) } catch (e) { return ({}) } }
     readonly property var imports: { try { return JSON.parse(library.toolsImports) } catch (e) { return ({}) } }
+    readonly property var removed: { try { return JSON.parse(library.removedList) } catch (e) { return ({}) } }
     property string junkKind: "screenshot"
 
     title: "Tools"
@@ -41,6 +42,7 @@ Dialog {
         if (section === 2) library.loadUnidentified(Math.max(0, face.offset || 0))
         if (section === 3) library.loadJunk(junkKind)
         if (section === 4) library.loadImports()
+        if (section === 5) library.loadRemoved()
     }
     onJunkKindChanged: if (opened && section === 3) library.loadJunk(junkKind)
 
@@ -160,6 +162,7 @@ Dialog {
                 NavRow { index: 2; label: "Unnamed faces"; hint: dlg.face.total !== undefined ? (dlg.face.total + " to go") : "Name them quickly" }
                 NavRow { index: 3; label: "Screenshots & memes"; hint: dlg.junk.total !== undefined ? (dlg.junk.total + (dlg.junk.kind === "meme" ? " memes" : " screenshots")) : "Remove them by group" }
                 NavRow { index: 4; label: "From phones"; hint: dlg.imports.count !== undefined ? (dlg.imports.count + " photos") : "Photos the phones sent" }
+                NavRow { index: 5; label: "Removed from Wagon"; hint: dlg.removed.items !== undefined ? (dlg.removed.items.length + (dlg.removed.items.length === 1 ? " photo" : " photos")) : "Out of the library, kept on disk" }
                 Item { Layout.fillHeight: true }
                 Button { text: "Close"; Layout.fillWidth: true; onClicked: dlg.close() }
             }
@@ -660,6 +663,78 @@ Dialog {
                     text: "They can be restored from the Trash. Albums, favorites and names given to faces on these photos are lost."
                 }
                 Item { Layout.fillHeight: true }
+            }
+
+            // ================= Removed from Wagon =================
+            ColumnLayout {
+                id: removedTool
+                spacing: 12
+                readonly property var items: dlg.removed.items || []
+                function restore(hashes) { library.restoreToWagon(JSON.stringify(hashes)) }
+
+                Label { text: "Removed from Wagon"; color: dlg.theme.text; font.pixelSize: 20; font.weight: Font.DemiBold }
+                Label {
+                    Layout.fillWidth: true; wrapMode: Text.WordWrap; color: dlg.theme.muted; font.pixelSize: 13
+                    text: "Photos taken out of the library with their files left on disk. They are not picked up again — not by a folder scan, not from a phone — until you restore them."
+                }
+                RowLayout {
+                    spacing: 8
+                    Label {
+                        color: dlg.theme.text; font.pixelSize: 15
+                        text: dlg.removed.items === undefined ? "Loading…"
+                            : removedTool.items.length === 0 ? "Nothing removed from Wagon."
+                            : removedTool.items.length + (removedTool.items.length === 1 ? " photo" : " photos")
+                    }
+                    Item { Layout.fillWidth: true }
+                    Button {
+                        text: "Restore all"
+                        visible: removedTool.items.length > 1
+                        onClicked: removedTool.restore(removedTool.items.map(it => it.hash))
+                    }
+                }
+                ListView {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    spacing: 6
+                    model: removedTool.items
+                    ScrollBar.vertical: ScrollBar { }
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: ListView.view.width - 12
+                        height: 64
+                        radius: 6
+                        color: dlg.theme.tile
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 6
+                            spacing: 10
+                            Rectangle {
+                                Layout.preferredWidth: 52; Layout.preferredHeight: 52
+                                radius: 4; clip: true; color: dlg.theme.panel
+                                Image {
+                                    anchors.fill: parent
+                                    source: modelData.thumbUrl || ""
+                                    fillMode: Image.PreserveAspectCrop
+                                    asynchronous: true
+                                    sourceSize.width: 104; sourceSize.height: 104
+                                }
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 2
+                                Label { text: modelData.name || modelData.hash.substring(0, 12); color: dlg.theme.text; font.pixelSize: 13; elide: Text.ElideMiddle; Layout.fillWidth: true }
+                                Label {
+                                    Layout.fillWidth: true; elide: Text.ElideMiddle; font.pixelSize: 11
+                                    color: modelData.exists ? dlg.theme.muted : "#e5484d"
+                                    text: (modelData.exists ? (modelData.path || "") : "The file is no longer at " + (modelData.path || "its place"))
+                                        + " · removed " + (modelData.removedAt || "").substring(0, 10)
+                                }
+                            }
+                            Button { text: "Restore"; onClicked: removedTool.restore([modelData.hash]) }
+                        }
+                    }
+                }
             }
         }
     }

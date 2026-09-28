@@ -305,6 +305,7 @@ ApplicationWindow {
             AppMenuItem { text: "Unnamed Faces…"; onTriggered: toolsDialog.openAt(2) }
             AppMenuItem { text: "Screenshots & Memes…"; onTriggered: toolsDialog.openAt(3) }
             AppMenuItem { text: "Photos from Phones…"; onTriggered: toolsDialog.openAt(4) }
+            AppMenuItem { text: "Removed from Wagon…"; onTriggered: toolsDialog.openAt(5) }
         }
         ThemedMenu {
             title: "Window"
@@ -803,6 +804,7 @@ ApplicationWindow {
                 AppMenuItem { text: "Unnamed Faces…"; onTriggered: toolsDialog.openAt(2) }
                 AppMenuItem { text: "Screenshots & Memes…"; onTriggered: toolsDialog.openAt(3) }
                 AppMenuItem { text: "Photos from Phones…"; onTriggered: toolsDialog.openAt(4) }
+                AppMenuItem { text: "Removed from Wagon…"; onTriggered: toolsDialog.openAt(5) }
                 MenuSeparator {}
                 AppMenuItem { action: actMinimize }
                 AppMenuItem { action: actZoomWindow }
@@ -1015,6 +1017,7 @@ ApplicationWindow {
         onWriteTags: (ids) => library.writeTagsToFiles(JSON.stringify(ids))
         onSetKind: (ids, kind) => library.setKinds(JSON.stringify(ids), kind)
         onRemove: (ids, permanent) => root.removePhotos(ids, permanent)
+        onRemoveFromWagon: (ids) => root.removeFromWagon(ids)
     }
 
     // Delete → the trash, right away (the desktop's trash can restores). Shift+Delete asks.
@@ -1033,6 +1036,26 @@ ApplicationWindow {
         standardButtons: Dialog.Cancel | Dialog.Ok
         Label { text: "The files are removed from the disk, not moved to the trash. This cannot be undone."; color: theme.text; wrapMode: Text.WordWrap; width: 320 }
         onAccepted: { library.deletePhotos(JSON.stringify(deleteAsk.ids), true); grid.clearSelection() }
+    }
+
+    // "Remove from Wagon": out of the library, the file left on disk as it is
+    function removeFromWagon(ids) {
+        if (!ids.length) return
+        wagonAsk.ids = ids
+        wagonAsk.open()
+    }
+    Dialog {
+        id: wagonAsk
+        property var ids: []
+        modal: true
+        anchors.centerIn: parent
+        title: ids.length === 1 ? "Remove this photo from Wagon?" : "Remove " + ids.length + " photos from Wagon?"
+        standardButtons: Dialog.Cancel | Dialog.Ok
+        Label {
+            text: "The file stays on disk, untouched. The photo leaves the library and is not picked up again — not by a folder scan, not from a phone. Restore it any time in Tools › Removed from Wagon."
+            color: theme.text; wrapMode: Text.WordWrap; width: 340
+        }
+        onAccepted: { library.removeFromWagon(JSON.stringify(wagonAsk.ids)); grid.clearSelection() }
     }
 
     MergeSuggestion {

@@ -10,6 +10,21 @@ import photowagon.core.library.dates : DateTree;
 import photowagon.core.library.photos : Filter, PhotoRepo;
 import photowagon.core.library.roots : RootRepo;
 import photowagon.core.library.kindjob : KindService;
+import photowagon.core.jobs.scheduler : jobs;
+import vibe.core.concurrency : async;
+
+import photowagon.core.util.fastsha : fileSha256;
+
+/// [size, mtime ms (seconds precision, as the scanner reads it)] of a file, [-1, -1] if absent.
+long[2] statOf(string path) nothrow
+{
+	import std.file : getSize, timeLastModified;
+
+	try
+		return [cast(long) getSize(path), timeLastModified(path).toUnixTime!long * 1000];
+	catch (Exception)
+		return [-1L, -1L];
+}
 
 void registerLibraryApi(Registry r, RootRepo roots, PhotoRepo photos, DateTree dates, Indexer indexer, Events events,
 		KindService kinds = null, void delegate() scanFaces = null)
@@ -163,6 +178,126 @@ import photowagon.core.jobs.scheduler : jobs;
 			events.emit("people.changed", JSONValue.emptyObject);
 		}
 		return JSONValue(["deleted": JSONValue(deleted), "failed": JSONValue(failed)]);
+	});
+
+	// {ids: [...]} → {removed}: "Remove from Wagon" — the photos leave the library, their files
+	// stay on disk untouched, and their content stays out (a folder scan skips it, a phone
+	// offering it is turned away) until restored. Unlike photo.delete nothing goes to the trash.
+	r.add("photo.removeFromWagon", (JSONValue p) {
+		if (p.type != JSONType.object || !("ids" in p) || p["ids"].type != JSONType.array)
+			throw new ApiError("bad_params", "ids: [...] wanted");
+		long[] ids;
+		foreach (v; p["ids"].array)
+			if (v.type == JSONType.integer)
+				ids ~= v.integer;
+		// Each photo in turn: what its file's bytes hash to NOW (tags written into a file keep
+		// the row's hash), read on a worker and bracketed by two stats — a file rewritten
+		// meanwhile (a tag write finishing) is read again — then its quarantine record is made
+		// at once, with the size and time it had, before anything else can run: a tag write
+		// that finishes later finds the record and updates it.
+		long n;
+		foreach (id; ids)
+		{
+			string[long] fh;
+			long[2][long] fs;
+			try
+			{
+				immutable path = photos.get(id).path;
+				if (path.length)
+					foreach (attempt; 0 .. 3)
+					{
+						import photowagon.core.metadata.filetags : tagWritesDone;
+
+						immutable gen = tagWritesDone;
+						immutable before = statOf(path);
+						immutable h = jobs.foreground({ return async(&fileSha256, path).getResult(); });   // the user's own request: no yielding to itself
+						immutable after = statOf(path);
+						if (before == after && gen == tagWritesDone && h.length)
+						{
+							fh[id] = h;
+							fs[id] = after;
+							break;
+						}
+					}
+			}
+			catch (Exception)
+			{
+			}
+			n += photos.removeFromWagon([id], fh, fs);
+		}
+		if (n)
+		{
+			events.emit("library.changed", JSONValue.emptyObject);
+			events.emit("people.changed", JSONValue.emptyObject);
+		}
+		return JSONValue(["removed": JSONValue(n)]);
+	});
+
+	// → {items: [{hash, path, name, size, takenAt, kind, removedAt, exists, thumbUrl}]}: what
+	// was removed from Wagon, the most recent first.
+	r.add("library.removed", (JSONValue p) {
+		JSONValue[] items;
+		foreach (row; photos.removedList())
+			items ~= photos.removedToJson(row);
+		return JSONValue(["items": JSONValue(items)]);
+	});
+
+	// {hashes: [...]} → {restored, missing}: out of quarantine; a file still on disk under a
+	// library folder is indexed again (the rest simply stops being turned away — a phone may
+	// send it again).
+	r.add("photo.restoreToWagon", (JSONValue p) {
+		import std.file : exists;
+		import std.algorithm.searching : startsWith;
+
+		if (p.type != JSONType.object || !("hashes" in p) || p["hashes"].type != JSONType.array)
+			throw new ApiError("bad_params", "hashes: [...] wanted");
+		string[] hashes;
+		foreach (v; p["hashes"].array)
+			if (v.type == JSONType.string)
+				hashes ~= v.str;
+		long restored, missing;
+		auto rootList = roots.list();
+		foreach (row; photos.restoreHashes(hashes))
+		{
+			restored++;
+			bool there;
+			try
+				there = row.path.length && row.path.exists;
+			catch (Exception)
+			{
+			}
+			// only the photo that was removed: another file now at that path is not it
+			if (there)
+				try
+				{
+					immutable path = row.path;
+					immutable h = jobs.foreground({ return async(&fileSha256, path).getResult(); });   // the user's own request: no yielding to itself
+					there = h == row.hash || (row.fileHash.length && h == row.fileHash);
+				}
+				catch (Exception)
+					there = false;
+			if (!there)
+			{
+				missing++;
+				continue;
+			}
+			// the deepest library folder holding it
+			long rootId;
+			size_t best;
+			foreach (root; rootList)
+				if (root.path.length > best && row.path.startsWith(root.path ~ "/"))
+				{
+					rootId = root.id;
+					best = root.path.length;
+				}
+			if (rootId)
+				indexer.indexOne(rootId, row.path);
+			else
+				missing++;   // no longer under any library folder: it stays out of the grid
+		}
+		if (restored)
+			events.emit("library.changed", JSONValue.emptyObject);
+		return JSONValue(["restored": JSONValue(restored), "missing": JSONValue(missing)]);
 	});
 
 	r.add("photo.favorite", (JSONValue p) {

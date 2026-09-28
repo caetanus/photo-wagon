@@ -207,6 +207,146 @@ final class PhotoRepo
 		s.run();
 	}
 
+	// ---- removed from Wagon (a quarantine: the file stays, the photo leaves) --------------
+
+	/// One photo removed from Wagon, as it was when it left.
+	struct Removed
+	{
+		string hash, fileHash, path;
+		long size, mtimeMs;
+		string takenAt, thumbHash, kind, removedAt;
+	}
+
+	/// The photos `ids` leave the library without their files being touched: their content
+	/// (hash) is remembered, so a folder scan does not bring them back and a phone offering
+	/// them is turned away — until restoreHashes. Faces and album entries go with the rows.
+	/// Returns how many left.
+	long removeFromWagon(const(long)[] ids, string[long] fileHashes = null, long[2][long] fileStats = null)
+	{
+		long n;
+		foreach (id; ids)
+		{
+			auto q = db.prepare("SELECT hash, path, size, mtime_ms, taken_at, thumb_hash, kind FROM photos WHERE id = ?");
+			q.bind(1, id);
+			if (!q.step())
+				continue;
+			immutable hash = q.getString(0);
+			if (!hash.length)
+				continue;   // a remote placeholder: nothing on disk to quarantine
+			// the file's bytes may no longer hash to the recorded hash (tags written into the
+			// file keep the row's hash): remember those too, or a moved copy would come back
+			string fileHash = fileHashes.get(id, null);
+			if (fileHash == hash)
+				fileHash = null;
+			// the file as it is now (size, mtime) when the caller read it, else as on record
+			long size = q.getLong(2), mtime = q.getLong(3);
+			if (auto st = id in fileStats)
+			{
+				size = (*st)[0];
+				mtime = (*st)[1];
+			}
+			auto i = db.prepare("INSERT OR REPLACE INTO removed_hashes (hash, file_hash, path, size, mtime_ms, taken_at, thumb_hash, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+			i.bind(1, hash).bind(2, fileHash).bind(3, q.isNull(1) ? null : q.getString(1)).bind(4, size).bind(5, mtime)
+				.bind(6, q.isNull(4) ? null : q.getString(4)).bind(7, q.isNull(5) ? null : q.getString(5))
+				.bind(8, q.isNull(6) ? null : q.getString(6));
+			i.run();
+			remove(id);
+			n++;
+		}
+		return n;
+	}
+
+	bool isRemoved(string hash)
+	{
+		if (!hash.length)
+			return false;
+		auto s = db.prepare("SELECT 1 FROM removed_hashes WHERE hash = ? OR file_hash = ?");
+		s.bind(1, hash).bind(2, hash);
+		return s.step();
+	}
+
+	/// A file a scan meets again as it was when removed (same path, size and time): skipped
+	/// without being hashed.
+	bool removedAsIs(string path, long size, long mtimeMs)
+	{
+		auto s = db.prepare("SELECT 1 FROM removed_hashes WHERE path = ? AND size = ? AND mtime_ms = ?");
+		s.bind(1, path).bind(2, size).bind(3, mtimeMs);
+		return s.step();
+	}
+
+	/// Everything removed from Wagon, the most recent first.
+	Removed[] removedList()
+	{
+		Removed[] out_;
+		auto s = db.prepare("SELECT hash, file_hash, path, size, mtime_ms, taken_at, thumb_hash, kind, removed_at FROM removed_hashes ORDER BY removed_at DESC");
+		while (s.step())
+			out_ ~= Removed(s.getString(0), s.isNull(1) ? null : s.getString(1), s.isNull(2) ? null : s.getString(2),
+				s.getLong(3), s.getLong(4), s.isNull(5) ? null : s.getString(5), s.isNull(6) ? null : s.getString(6),
+				s.isNull(7) ? null : s.getString(7), s.getString(8));
+		return out_;
+	}
+
+	/// One removed photo for the UI: what it was, its kept thumbnail, whether its file is
+	/// still where it was.
+	JSONValue removedToJson(Removed r)
+	{
+		import std.file : exists;
+		import std.path : baseName;
+
+		bool there;
+		try
+			there = r.path.length && r.path.exists;
+		catch (Exception)
+		{
+		}
+		JSONValue j = [
+			"hash": JSONValue(r.hash),
+			"path": r.path is null ? JSONValue(null) : JSONValue(r.path),
+			"name": r.path is null ? JSONValue(null) : JSONValue(r.path.baseName),
+			"size": JSONValue(r.size),
+			"takenAt": r.takenAt is null ? JSONValue(null) : JSONValue(r.takenAt),
+			"kind": r.kind is null ? JSONValue(null) : JSONValue(r.kind),
+			"removedAt": JSONValue(r.removedAt),
+			"exists": JSONValue(there),
+		];
+		j["thumbUrl"] = JSONValue(null);
+		if (r.thumbHash.length)
+			try
+			{
+				immutable tp = store.pathFor(r.thumbHash);
+				if (tp.exists)
+					j["thumbUrl"] = JSONValue(fileUrl(tp));
+			}
+			catch (Exception)
+			{
+			}
+		return j;
+	}
+
+	/// Take `hashes` out of quarantine; returns what they were (the caller indexes the files
+	/// that are still there).
+	Removed[] restoreHashes(const(string)[] hashes)
+	{
+		Removed[] back;
+		foreach (h; hashes)
+		{
+			auto s = db.prepare("SELECT hash, file_hash, path, size, mtime_ms, taken_at, thumb_hash, kind, removed_at FROM removed_hashes WHERE hash = ?");
+			s.bind(1, h);
+			if (!s.step())
+				continue;
+			back ~= Removed(s.getString(0), s.isNull(1) ? null : s.getString(1), s.isNull(2) ? null : s.getString(2),
+				s.getLong(3), s.getLong(4), s.isNull(5) ? null : s.getString(5), s.isNull(6) ? null : s.getString(6),
+				s.isNull(7) ? null : s.getString(7), s.getString(8));
+			auto d = db.prepare("DELETE FROM removed_hashes WHERE hash = ?");
+			d.bind(1, h);
+			d.run();
+			// restoring is asking for it back: a decline from an earlier deletion goes too
+			undecline(h);
+			undecline(back[$ - 1].fileHash);
+		}
+		return back;
+	}
+
 	/// The photos whose file lies under `dir` (the phones' imports folder): how many, and their
 	/// bytes on record.
 	long[2] countUnder(string dir)
@@ -971,4 +1111,40 @@ unittest
 	auto r2 = repo.removeUnder(imports, (string path) {});
 	assert(r2 == [2L, 0L]);   // e.jpg and stuck.jpg (dispose does not refuse now)
 	assert(!repo.hasHash("i5") && repo.hasHash("o1"));
+}
+
+unittest
+{
+	// removed from Wagon: the row leaves, the content is remembered (scan skip by path/size/
+	// mtime, refusal by hash), the list shows it, restore takes it out of quarantine
+	import photowagon.core.db.schema : migrate;
+	import std.file : tempDir;
+	import std.path : buildPath;
+
+	auto db = new Database(":memory:");
+	scope (exit)
+		db.close();
+	migrate(db);
+	auto repo = new PhotoRepo(db, new ContentStore(buildPath(tempDir, "pw-removed-ut-store")));
+	Photo a = {hash: "q1", path: "/p/a.jpg", size: 5, mtimeMs: 1000, takenAt: "2020-01-01T00:00:00Z", thumbHash: "t1", kind: "photo"};
+	Photo b = {hash: "q2", path: "/p/b.jpg", size: 6, mtimeMs: 2000, takenAt: "x"};
+	repo.insert(a);
+	repo.insert(b);
+	immutable ida = repo.byHash("q1").get.id;
+	assert(repo.removeFromWagon([ida, 999_999]) == 1);
+	assert(!repo.hasHash("q1") && repo.hasHash("q2"));
+	assert(repo.isRemoved("q1") && !repo.isRemoved("q2") && !repo.isRemoved(""));
+	assert(repo.removedAsIs("/p/a.jpg", 5, 1000));
+	assert(!repo.removedAsIs("/p/a.jpg", 5, 1001));   // touched since: hashed again (and judged by hash)
+	auto l = repo.removedList();
+	assert(l.length == 1 && l[0].hash == "q1" && l[0].path == "/p/a.jpg" && l[0].thumbHash == "t1" && l[0].removedAt.length);
+	// a tagged file's bytes hash differently from the row: both keys are kept out
+	immutable idb = repo.byHash("q2").get.id;
+	repo.decline("q2");
+	assert(repo.removeFromWagon([idb], [idb: "q2file"]) == 1);
+	assert(repo.isRemoved("q2") && repo.isRemoved("q2file"));
+	assert(repo.restoreHashes(["q2"]).length == 1 && !repo.isRemoved("q2file") && !repo.isDeclined("q2"));
+	auto back = repo.restoreHashes(["q1", "nope"]);
+	assert(back.length == 1 && back[0].path == "/p/a.jpg");
+	assert(!repo.isRemoved("q1") && repo.removedList().length == 0);
 }

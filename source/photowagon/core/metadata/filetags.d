@@ -155,6 +155,12 @@ private string writeJoined(string path, string joined)
 /// library knows about the photo, the classifiers' word included. Photos are queued
 /// by the services when the user changes something about them, and by
 /// `files.writeTags` for the rest.
+
+/// Tag writes finished so far (on the event loop): "Remove from Wagon" hashes a file on a
+/// worker and reads it again if a write finished meanwhile — the size and time may not
+/// change (the writer keeps the mtime; a tag of the same length keeps the size).
+__gshared ulong tagWritesDone;
+
 final class FileTagWriter
 {
 	private Database db;
@@ -240,10 +246,20 @@ final class FileTagWriter
 			string joined;
 			foreach (i, k; s.encode())
 				joined ~= (i ? "\x1f" : "") ~ k;
+			// the photo's identity before the write: if it is removed from Wagon meanwhile, its
+			// quarantine record (by this hash, not by path) follows the rewritten file
+			string rowHash;
+			{
+				auto hq = db.prepare("SELECT hash FROM photos WHERE id = ?");
+				hq.bind(1, id);
+				if (hq.step() && !hq.isNull(0))
+					rowHash = hq.getString(0);
+			}
 			auto err = jobs.background({ return async(&writeJoined, path, joined).getResult(); });
 			if (err is null)
 			{
 				written++;
+				tagWritesDone++;   // (a removal hashing a file meanwhile reads it again)
 				// the file grew or shrank by its metadata; the indexer must not take it for a new
 				// file (the hash on record stays the import-time one — the one the phone knows)
 				try
@@ -257,6 +273,26 @@ final class FileTagWriter
 					auto dd = db.prepare("DELETE FROM photo_digest WHERE hash = (SELECT hash FROM photos WHERE id = ?)");
 					dd.bind(1, id);
 					dd.run();
+					// removed from Wagon while this was being written: its quarantine record
+					// follows the file, so a scan still passes it by
+					bool quarantined;
+					if (rowHash.length)
+					{
+						auto qq = db.prepare("SELECT 1 FROM removed_hashes WHERE hash = ? AND path = ?");
+						qq.bind(1, rowHash).bind(2, path);
+						quarantined = qq.step();
+					}
+					if (quarantined)
+					{
+						import std.file : timeLastModified;
+						import photowagon.core.util.fastsha : fileSha256;
+
+						immutable fh = jobs.background({ return async(&fileSha256, path).getResult(); });
+						auto q = db.prepare("UPDATE removed_hashes SET size = ?, mtime_ms = ?, file_hash = ? WHERE hash = ?");
+						q.bind(1, cast(long) getSize(path)).bind(2, timeLastModified(path).toUnixTime!long * 1000)
+							.bind(3, fh.length ? fh : null).bind(4, rowHash);
+						q.run();
+					}
 				}
 				catch (Exception)
 				{

@@ -57,6 +57,25 @@ ubyte[32] sha256Of(scope const(void)[] data) pure nothrow @nogc @trusted
     return digest;
 }
 
+/// The sha256 (lower hex) of a file's bytes, streamed in 1 MiB reads; "" if it cannot be
+/// read. Blocking: for a worker thread.
+string fileSha256(string path)
+{
+    import std.stdio : File;
+    import std.digest : toHexString, LetterCase;
+
+    try
+    {
+        SHA256 h;
+        auto f = File(path, "rb");
+        foreach (chunk; f.byChunk(1 << 20))
+            h.put(chunk);
+        return toHexString!(LetterCase.lower)(h.finish()).idup;
+    }
+    catch (Exception)
+        return "";
+}
+
 unittest
 {
     import std.digest.sha : stdSha = sha256Of;

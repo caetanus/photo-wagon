@@ -71,6 +71,8 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 		auto known = photos.byHash(hash);
 		if (!known.isNull)
 			return JSONValue(["id": JSONValue(known.get.id), "existed": JSONValue(true), "path": JSONValue(known.get.path)]);
+		if (photos.isRemoved(hash))   // removed from Wagon: taken as delivered, kept out
+			return JSONValue(["existed": JSONValue(true), "removed": JSONValue(true)]);
 		immutable month = monthFolder(takenAt);
 		immutable dir = buildPath(importsRoot, month);
 		mkdirRecurse(dir);
@@ -105,6 +107,16 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 			}
 			return JSONValue(["id": JSONValue(known.get.id), "existed": JSONValue(true), "path": JSONValue(known.get.path)]);
 		}
+		if (photos.isRemoved(hash))
+		{
+			// removed from Wagon: taken as delivered (the phone stops sending it), kept out
+			try
+				remove(src);
+			catch (Exception)
+			{
+			}
+			return JSONValue(["existed": JSONValue(true), "removed": JSONValue(true)]);
+		}
 		immutable month = monthFolder(takenAt);
 		immutable dir = buildPath(importsRoot, month);
 		mkdirRecurse(dir);
@@ -136,8 +148,8 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 				continue;   // ignore a malformed entry rather than fail the whole batch
 			if (photos.hasHash(h.str))
 				have ~= h;
-			else if (photos.isDeclined(h.str))
-				refuse ~= h;
+			else if (photos.isDeclined(h.str) || photos.isRemoved(h.str))
+				refuse ~= h;   // deleted here, or removed from Wagon: not taken back
 		}
 		return JSONValue(["have": JSONValue(have), "refuse": JSONValue(refuse)]);
 	});
@@ -188,6 +200,8 @@ void registerImportApi(Registry r, Config cfg, RootRepo roots, PhotoRepo photos,
 			auto have = photos.byHash(h);
 			if (!have.isNull)
 				return JSONValue(["id": JSONValue(have.get.id), "existed": JSONValue(true), "path": JSONValue(have.get.path)]);
+			if (photos.isRemoved(h))   // removed from Wagon: nothing to send
+				return JSONValue(["existed": JSONValue(true), "removed": JSONValue(true)]);
 			// Not here yet — but part of it may be: tell the phone where to resume from, so an
 			// interrupted push continues instead of restarting the whole file (`have` = bytes
 			// spooled on the offset pipe; `pieces` = how many 1 MiB pieces the piece store holds).

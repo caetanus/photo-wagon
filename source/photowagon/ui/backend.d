@@ -41,6 +41,7 @@ version (WithUi)
     Signal!() toolsThumbsChanged;
     Signal!() toolsJunkChanged;
     Signal!() toolsImportsChanged;
+    Signal!() removedListChanged;
     Signal!() mediaReadyChanged;
     Signal!() revealRowChanged;
     Signal!() navTargetChanged;
@@ -61,6 +62,8 @@ version (WithUi)
     private string junkKind;
     /// Tools: the photos the phones sent {count, bytes}, then {removed, failed} once removed
     @Property("toolsImportsChanged") string toolsImports = `{}`;
+    /// library.removed: {items: [...]} — the photos removed from Wagon (Tools)
+    @Property("removedListChanged") string removedList = `{}`;
     /// Tools: {offset, total, clusters, loose, item?, candidates: [person]}
     @Property("toolsFaceChanged") string toolsFace = `{}`;
     /// The phone grid's rows (a QAbstractListModel built in D, updated by key on every page:
@@ -1960,6 +1963,52 @@ version (WithUi)
             if (currentGone) closePhoto();
             reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));
             loadDates(); loadStats(); loadPeople();
+        });
+    }
+
+    /// "Remove from Wagon": the selection leaves the library, the files stay on disk untouched
+    /// and are not picked up again (Tools › Removed from Wagon restores them).
+    @Slot void removeFromWagon(string idsJson)
+    {
+        auto ids = parseJSON(idsJson);
+        bool currentGone;
+        if (current.length)
+        {
+            immutable cid = parseJSON(current)["id"].integer;
+            foreach (v; ids.array) if (v.integer == cid) currentGone = true;
+        }
+        client.request("photo.removeFromWagon", JSONValue(["ids": ids]), (r, e) {
+            if (e.type != JSONType.null_) { report("remove from Wagon", e); return; }
+            immutable n = r["removed"].integer;
+            setStatus(true, indexing, "removed from Wagon: " ~ n.to!string ~ (n == 1 ? " photo" : " photos") ~ " (the files stay on disk)");
+            if (currentGone) closePhoto();
+            reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));
+            loadDates(); loadStats(); loadPeople();
+            if (removedList.length > 2) loadRemoved();
+        });
+    }
+
+    /// Tools: what was removed from Wagon → removedList.
+    @Slot void loadRemoved()
+    {
+        client.request("library.removed", JSONValue.emptyObject, (r, e) {
+            if (e.type != JSONType.null_) { report("removed", e); return; }
+            removedList = r.toString();
+            removedListChanged.emit();
+        });
+    }
+
+    /// Back into Wagon: the files still there are indexed again.
+    @Slot void restoreToWagon(string hashesJson)
+    {
+        client.request("photo.restoreToWagon", JSONValue(["hashes": parseJSON(hashesJson)]), (r, e) {
+            if (e.type != JSONType.null_) { report("restore", e); return; }
+            immutable n = r["restored"].integer, missing = r["missing"].integer;
+            setStatus(true, indexing, "restored: " ~ (n - missing).to!string ~ (n - missing == 1 ? " photo" : " photos")
+                ~ (missing ? " · " ~ missing.to!string ~ " no longer in a library folder" : ""));
+            loadRemoved();
+            reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit));
+            loadDates(); loadStats();
         });
     }
 

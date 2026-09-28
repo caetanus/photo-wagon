@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 20;
+enum currentVersion = 21;
 
 void migrate(Database db)
 {
@@ -62,6 +62,8 @@ void migrate(Database db)
 			db.exec(schemaV19);
 		if (have < 20)
 			db.exec(schemaV20);
+		if (have < 21)
+			db.exec(schemaV21);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -295,6 +297,27 @@ CREATE TABLE photo_digest (
 private enum schemaV20 = `
 ALTER TABLE photos ADD COLUMN stack_id INTEGER;
 CREATE INDEX photos_stack ON photos(stack_id) WHERE stack_id IS NOT NULL;
+`;
+
+// v21: photos "removed from Wagon" — a quarantine: the file stays on disk untouched, the
+// photo leaves the library and does not come back (the indexer skips its content, a phone
+// offering it is turned away) until restored. Keyed by content hash, so a moved or renamed
+// file stays out; path/size/mtime let a folder scan skip it without hashing it again. The
+// timestamp is the hook for replicating removals to other computers.
+private enum schemaV21 = `
+CREATE TABLE removed_hashes (
+    hash       TEXT PRIMARY KEY,
+    file_hash  TEXT,               -- the file's bytes when removed, if they differ (tags written in)
+    path       TEXT,
+    size       INTEGER,
+    mtime_ms   INTEGER,
+    taken_at   TEXT,
+    thumb_hash TEXT,
+    kind       TEXT,
+    removed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX removed_hashes_path ON removed_hashes(path);
+CREATE INDEX removed_hashes_file ON removed_hashes(file_hash) WHERE file_hash IS NOT NULL;
 `;
 
 private void migrateV18(Database db)

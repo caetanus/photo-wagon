@@ -174,6 +174,9 @@ final class Indexer
 		auto known = photos.byPath(c.path);
 		if (!known.isNull && known.get.size == c.size && known.get.mtimeMs == c.mtimeMs)
 			return false;
+		// removed from Wagon and untouched since: not even hashed again
+		if (known.isNull && photos.removedAsIs(c.path, c.size, c.mtimeMs))
+			return false;
 		if (!known.isNull)
 			logDiagnostic("indexer: changed %s (size %s → %s, mtime %s → %s)", c.path, known.get.size, c.size,
 				known.get.mtimeMs, c.mtimeMs);
@@ -205,6 +208,12 @@ final class Indexer
 		// one streamed pass: the sha256, the piece hashes and the fingerprint together, kept
 		immutable dg = jobs.background({ return async(&digestForIndex, c.path).getResult(); });
 		immutable hash = dg.sha;
+		if (photos.isRemoved(hash))
+		{
+			// removed from Wagon (moved, renamed, copied): the content stays out
+			logDiagnostic("indexer: %s is removed from Wagon — skipped", c.path);
+			return false;
+		}
 		photos.setDigest(hash, dg.fingerprint, dg.pieces, dg.size);
 		auto same = photos.byHash(hash);
 		if (!same.isNull && same.get.path != c.path)
@@ -244,6 +253,8 @@ final class Indexer
 			pv.kind = "video";
 			if (pv.kindBy != "user")
 				pv.kindBy = "auto";
+			if (!pv.id && photos.isRemoved(hash))
+				return false;   // removed from Wagon while this was being read
 			if (pv.id)
 				photos.update(pv);
 			else
@@ -295,6 +306,8 @@ final class Indexer
 			p.kindBy = "auto";
 		}
 
+		if (!p.id && photos.isRemoved(hash))
+			return false;   // removed from Wagon while this was being read
 		if (p.id)
 			photos.update(p);
 		else

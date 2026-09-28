@@ -41,6 +41,7 @@ version (WithUi)
     Signal!() toolsThumbsChanged;
     Signal!() toolsJunkChanged;
     Signal!() toolsImportsChanged;
+    Signal!() toolsTakeoutChanged;
     Signal!() removedListChanged;
     Signal!() mediaReadyChanged;
     Signal!() revealRowChanged;
@@ -62,6 +63,8 @@ version (WithUi)
     private string junkKind;
     /// Tools: the photos the phones sent {count, bytes}, then {removed, failed} once removed
     @Property("toolsImportsChanged") string toolsImports = `{}`;
+    /// Tools › Google Photos: takeout.status — {running, total, done, report{…}, reportFile?}
+    @Property("toolsTakeoutChanged") string toolsTakeout = `{}`;
     /// library.removed: {items: [...]} — the photos removed from Wagon (Tools)
     @Property("removedListChanged") string removedList = `{}`;
     /// Tools: {offset, total, clusters, loose, item?, candidates: [person]}
@@ -2417,6 +2420,14 @@ version (WithUi)
             loadStats();
             reload(0, pageLimit);
             break;
+        case "takeout.progress":
+            // an import from Google Photos: its progress for Tools, and when it ends, the new
+            // albums in the sidebar (the timeline follows library.changed)
+            toolsTakeout = data.toString();
+            toolsTakeoutChanged.emit();
+            if ("running" in data && data["running"].type == JSONType.false_)
+                loadAlbums();
+            break;
         case "people.changed":
             loadPeople();
             if (openId)
@@ -2594,6 +2605,36 @@ version (WithUi)
             toolsJunk = r.toString();
             toolsJunkChanged.emit();
         });
+    }
+
+    /// Tools › Google Photos: where the import is (takeout.status → toolsTakeout).
+    @Slot void loadTakeout()
+    {
+        client.request("takeout.status", JSONValue.emptyObject, (r, e) {
+            if (e.type != JSONType.null_) { report("takeout", e); return; }
+            toolsTakeout = r.toString();
+            toolsTakeoutChanged.emit();
+        });
+    }
+
+    /// Tools › Google Photos: imports the unpacked Takeout at `folder` (a path or a file:// URL).
+    @Slot void takeoutImport(string folder)
+    {
+        import std.uri : decodeComponent;
+        import std.string : startsWith;
+
+        string path = folder;
+        if (path.startsWith("file://"))
+            path = decodeComponent(path["file://".length .. $]);
+        client.request("takeout.import", JSONValue(["path": JSONValue(path)]), (r, e) {
+            if (e.type != JSONType.null_) { report("takeout", e); }
+            loadTakeout();
+        });
+    }
+
+    @Slot void takeoutCancel()
+    {
+        client.request("takeout.cancel", JSONValue.emptyObject, (r, e) { loadTakeout(); });
     }
 
     /// Tools: how many photos the phones sent here (library.removeImports, dry run).

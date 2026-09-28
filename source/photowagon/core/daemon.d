@@ -16,6 +16,8 @@ import vibe.core.log : logInfo, logWarn, logError;
 import libp2p.util.fibers : FiberGroup;
 
 import photowagon.core.api.album_api : registerAlbumApi;
+import photowagon.core.api.takeout_api : registerTakeoutApi;
+import photowagon.core.library.takeout : TakeoutImporter;
 import photowagon.core.api.daemon_api : registerDaemonApi;
 import photowagon.core.api.device_api : registerDeviceApi;
 import photowagon.core.api.edit_api : registerEditApi;
@@ -113,6 +115,7 @@ final class Daemon : ServerControl
 version (PW_NoVision) {} else private StackService stacks;
 	version (PW_NoVision) {} else private PlaceModel placeModel;
 	private FileTagWriter fileTags;
+	private TakeoutImporter takeout;
 	private Node node;
 	private Sharing sharing;
 	private bool stopped;
@@ -246,6 +249,12 @@ version (PW_NoVision) {} else private StackService stacks;
 			places.onUserChange = (const(long)[] ids) { fileTags.enqueue(ids); if (placeModel) placeModel.relearn(); };
 		indexer.onFileSubjects = (long id, string[] subjects) { applyFileSubjects(db, id, subjects); };
 		version (PW_NoVision) {} else registerTagsApi(registry, scenes, keywords, photos, fileTags);
+		{
+			// Google Photos: an unpacked Takeout export into the library, with its sidecars' data
+			takeout = new TakeoutImporter(cfg.dataDir, photos, albums, keywords, roots, indexer, events);
+			takeout.onFinished = () { places.geocodePending(); };
+			registerTakeoutApi(registry, takeout);
+		}
 		version (PW_NoVision) {} else registerSearchApi(registry, photos, db);
 		version (PW_NoVision) {} else registerToolsApi(registry, db, photos, scenes, store, own);
 		registerEditApi(registry, cfg, photos, store, events, (string path) {
@@ -561,6 +570,8 @@ version (PW_NoVision) {} else private StackService stacks;
 			inproc.close();
 		if (ipc)
 			ipc.close();
+		if (takeout)
+			takeout.close();   // before what it imports into goes away
 		if (indexer)
 			indexer.close();
 		if (kinds)

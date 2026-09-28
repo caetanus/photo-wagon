@@ -598,6 +598,20 @@ final class PhotoRepo
 			throw new ApiError("not_found", "no photo " ~ idString(id));
 	}
 
+	/// Gives a photo a location when it has none (no coordinates, or the 0,0 of a missing
+	/// fix) — what an import that knows better (a Google Takeout sidecar) brings. Never
+	/// overwrites a real one. True when it was set.
+	bool setLocationIfMissing(long id, double lat, double lon)
+	{
+		if ((lat == 0 && lon == 0) || lat < -90 || lat > 90 || lon < -180 || lon > 180 || lat != lat || lon != lon)
+			return false;
+		auto s = db.prepare("UPDATE photos SET lat = ?, lon = ? WHERE id = ?"
+			~ " AND (lat IS NULL OR lon IS NULL OR (lat = 0 AND lon = 0))");
+		s.bind(1, lat).bind(2, lon).bind(3, id);
+		s.run();
+		return db.changes() > 0;
+	}
+
 	/// The row goes (faces and album entries follow by cascade); the file is the caller's business.
 	void remove(long id)
 	{

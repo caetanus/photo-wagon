@@ -67,6 +67,14 @@ final class AlbumRepo
 		}
 	}
 
+	/// Whether the photo is in the album.
+	bool contains(long albumId, long photoId)
+	{
+		auto s = db.prepare("SELECT 1 FROM album_photos WHERE album_id = ? AND photo_id = ?");
+		s.bind(1, albumId).bind(2, photoId);
+		return s.step();
+	}
+
 	Album get(long id)
 	{
 		auto s = db.prepare(select ~ " WHERE a.id = ?");

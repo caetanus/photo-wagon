@@ -216,10 +216,24 @@ final class Indexer
 		}
 		photos.setDigest(hash, dg.fingerprint, dg.pieces, dg.size);
 		auto same = photos.byHash(hash);
+		bool takeover;   // this file replaces the lost file of an existing row
 		if (!same.isNull && same.get.path !is null && same.get.path != c.path)
 		{
-			logDiagnostic("indexer: duplicate of %s: %s", same.get.path, c.path);
-			return false;
+			// the row's own file really there (as photos.holdsHash judges it: at its size)?
+			if (photos.holdsHash(hash))
+			{
+				logDiagnostic("indexer: duplicate of %s: %s", same.get.path, c.path);
+				return false;
+			}
+			// the row's own file is gone or damaged (deleted, moved, cut short behind our back):
+			// this copy of the same content becomes its file — the row keeps its albums,
+			// favourite and faces, and the date and place it already had (below)
+			logDiagnostic("indexer: %s takes over %s (its file is gone)", c.path, same.get.path);
+			if (known.isNull)
+			{
+				known = same;
+				takeover = true;
+			}
 		}
 		// a remote-only row of this content (a photo seen in a fetched album): the file that
 		// just came is its original — the row gets it, rather than the file being dropped
@@ -247,7 +261,9 @@ final class Indexer
 			pv.size = c.size;
 			pv.mtimeMs = c.mtimeMs;
 			immutable vnamed = dateFromPath(c.path);
-			pv.takenTs = vnamed ? vnamed : c.hintTs > 0 ? c.hintTs : c.mtimeMs / 1000;   // (as for photos: the sender's date before the file time)
+			// (as for photos: the sender's date before the file time; a takeover keeps its own)
+			if (!takeover || pv.takenTs == 0)
+				pv.takenTs = vnamed ? vnamed : c.hintTs != 0 ? c.hintTs : c.mtimeMs / 1000;
 			pv.takenAt = isoTime(pv.takenTs);
 			pv.width = v.width;
 			pv.height = v.height;
@@ -283,16 +299,22 @@ final class Indexer
 		immutable named = exif.takenTs ? 0 : dateFromPath(c.path);
 		// EXIF, then a date in the name (or a real date folder), then what the sender knew
 		// (a phone that sent it), then the file's time
-		p.takenTs = exif.takenTs ? exif.takenTs : named ? named : c.hintTs > 0 ? c.hintTs : c.mtimeMs / 1000;
+		// (a takeover — the same content, a new file — keeps the date it had unless EXIF says)
+		if (!takeover || exif.takenTs || p.takenTs == 0)
+			p.takenTs = exif.takenTs ? exif.takenTs : named ? named : c.hintTs != 0 ? c.hintTs : c.mtimeMs / 1000;
 		p.takenAt = isoTime(p.takenTs);
 		immutable swap = exif.orientation >= 5;
 		p.width = swap ? thumb.srcHeight : thumb.srcWidth;
 		p.height = swap ? thumb.srcWidth : thumb.srcHeight;
 		p.orientation = exif.orientation;
 		p.camera = exif.camera;
-		p.hasGps = exif.hasGps;
-		p.lat = exif.lat;
-		p.lon = exif.lon;
+		// (a takeover keeps a place it had when the file brings none — from a sidecar, say)
+		if (!takeover || exif.hasGps || !p.hasGps)
+		{
+			p.hasGps = exif.hasGps;
+			p.lat = exif.lat;
+			p.lon = exif.lon;
+		}
 		p.thumbHash = thumb.hash;
 
 		if (p.kindBy != "user")

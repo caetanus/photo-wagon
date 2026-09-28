@@ -308,6 +308,7 @@ ApplicationWindow {
             AppMenuItem { text: "Screenshots & Memes…"; onTriggered: toolsDialog.openAt(3) }
             AppMenuItem { text: "Photos from Phones…"; onTriggered: toolsDialog.openAt(4) }
             AppMenuItem { text: "Removed from Wagon…"; onTriggered: toolsDialog.openAt(5) }
+            AppMenuItem { text: "Import from Google Photos…"; onTriggered: toolsDialog.openAt(6) }
         }
         ThemedMenu {
             title: "Window"
@@ -808,6 +809,7 @@ ApplicationWindow {
                 AppMenuItem { text: "Screenshots & Memes…"; onTriggered: toolsDialog.openAt(3) }
                 AppMenuItem { text: "Photos from Phones…"; onTriggered: toolsDialog.openAt(4) }
                 AppMenuItem { text: "Removed from Wagon…"; onTriggered: toolsDialog.openAt(5) }
+                AppMenuItem { text: "Import from Google Photos…"; onTriggered: toolsDialog.openAt(6) }
                 MenuSeparator {}
                 AppMenuItem { action: actMinimize }
                 AppMenuItem { action: actZoomWindow }

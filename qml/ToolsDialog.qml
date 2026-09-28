@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 
 // Tools — clean-up work over the whole library, each one a quick question instead of a hunt
 // photo by photo: small copies of photos (a USB import's thumbnail cache), groups of
@@ -11,7 +12,7 @@ Dialog {
     id: dlg
     required property QtObject theme
     required property QtObject icons
-    property int section: 0               // 0 Thumbnails · 1 Similar photos · 2 Unnamed faces · 3 Screenshots & memes · 4 From phones · 5 Removed from Wagon
+    property int section: 0               // 0 Thumbnails · 1 Similar photos · 2 Unnamed faces · 3 Screenshots & memes · 4 From phones · 5 Removed from Wagon · 6 Google Photos
 
     function openAt(s) { section = s; open() }
 
@@ -21,6 +22,7 @@ Dialog {
     readonly property var junk: { try { return JSON.parse(library.toolsJunk) } catch (e) { return ({}) } }
     readonly property var imports: { try { return JSON.parse(library.toolsImports) } catch (e) { return ({}) } }
     readonly property var removed: { try { return JSON.parse(library.removedList) } catch (e) { return ({}) } }
+    readonly property var takeout: { try { return JSON.parse(library.toolsTakeout) } catch (e) { return ({}) } }
     property string junkKind: "screenshot"
 
     title: "Tools"
@@ -43,6 +45,13 @@ Dialog {
         if (section === 3) library.loadJunk(junkKind)
         if (section === 4) library.loadImports()
         if (section === 5) library.loadRemoved()
+        if (section === 6) library.loadTakeout()
+    }
+    // an import from Google Photos runs in the core: follow it
+    Timer {
+        interval: 1000; repeat: true
+        running: dlg.opened && dlg.section === 6 && dlg.takeout.running === true
+        onTriggered: library.loadTakeout()
     }
     onJunkKindChanged: if (opened && section === 3) library.loadJunk(junkKind)
 
@@ -163,6 +172,7 @@ Dialog {
                 NavRow { index: 3; label: "Screenshots & memes"; hint: dlg.junk.total !== undefined ? (dlg.junk.total + (dlg.junk.kind === "meme" ? " memes" : " screenshots")) : "Remove them by group" }
                 NavRow { index: 4; label: "From phones"; hint: dlg.imports.count !== undefined ? (dlg.imports.count + " photos") : "Photos the phones sent" }
                 NavRow { index: 5; label: "Removed from Wagon"; hint: dlg.removed.items !== undefined ? (dlg.removed.items.length + (dlg.removed.items.length === 1 ? " photo" : " photos")) : "Out of the library, kept on disk" }
+                NavRow { index: 6; label: "Google Photos"; hint: dlg.takeout.running === true ? ("Importing · " + (dlg.takeout.done || 0) + " of " + (dlg.takeout.total || 0)) : "Import a Takeout export" }
                 Item { Layout.fillHeight: true }
                 Button { text: "Close"; Layout.fillWidth: true; onClicked: dlg.close() }
             }
@@ -735,6 +745,76 @@ Dialog {
                         }
                     }
                 }
+            }
+
+            // ================= Google Photos (Takeout) =================
+            ColumnLayout {
+                id: takeoutTool
+                spacing: 12
+                readonly property var rep: dlg.takeout.report || ({})
+                readonly property bool running: dlg.takeout.running === true
+                readonly property bool finished: dlg.takeout.finishedAt !== undefined && !running
+                FolderDialog {
+                    id: takeoutFolder
+                    title: "The unpacked Google Takeout folder"
+                    onAccepted: library.takeoutImport(selectedFolder.toString())
+                }
+
+                Label { text: "Google Photos"; color: dlg.theme.text; font.pixelSize: 20; font.weight: Font.DemiBold }
+                Label {
+                    Layout.fillWidth: true; wrapMode: Text.WordWrap; color: dlg.theme.muted; font.pixelSize: 13
+                    text: "Export your library at takeout.google.com (\u201cGoogle Photos\u201d only), unpack it into one folder and choose it here. Each photo comes with the date it was taken, its location, its description and the people named in Google; named folders become albums. Photos already in the library are not copied again. Nothing is deleted \u2014 not here, not in Google Photos."
+                }
+                RowLayout {
+                    spacing: 8
+                    Button {
+                        text: takeoutTool.running ? "Importing\u2026" : "Choose the Takeout folder\u2026"
+                        enabled: !takeoutTool.running
+                        highlighted: !takeoutTool.running && !takeoutTool.finished
+                        onClicked: takeoutFolder.open()
+                    }
+                    Button { text: "Stop"; visible: takeoutTool.running; onClicked: library.takeoutCancel() }
+                    Button { text: "Open takeout.google.com"; visible: !takeoutTool.running; onClicked: Qt.openUrlExternally("https://takeout.google.com/") }
+                }
+                ProgressBar {
+                    Layout.fillWidth: true
+                    visible: takeoutTool.running || takeoutTool.finished
+                    from: 0; to: Math.max(1, dlg.takeout.total || 0); value: dlg.takeout.done || 0
+                }
+                Label {
+                    visible: takeoutTool.running || takeoutTool.finished
+                    Layout.fillWidth: true; wrapMode: Text.WordWrap; color: dlg.theme.text; font.pixelSize: 14
+                    text: (takeoutTool.running && dlg.takeout.phase === "reading the export" ? "Reading the export\u2026 \u00b7 "
+                           : takeoutTool.running ? (dlg.takeout.done || 0) + " of " + (dlg.takeout.total || 0) + " \u00b7 "
+                           : dlg.takeout.cancelled ? "Stopped \u00b7 " : "Done \u00b7 ")
+                        + (takeoutTool.rep.imported || 0) + " new, " + (takeoutTool.rep.alreadyPresent || 0) + " already here"
+                        + ((takeoutTool.rep.skippedDeleted || 0) > 0 ? ", " + takeoutTool.rep.skippedDeleted + " kept out (deleted in Photo Wagon)" : "")
+                        + ((takeoutTool.rep.failuresTotal || 0) > 0 ? ", " + takeoutTool.rep.failuresTotal + " failed" : "")
+                }
+                Label {
+                    visible: takeoutTool.running || takeoutTool.finished
+                    Layout.fillWidth: true; wrapMode: Text.WordWrap; color: dlg.theme.muted; font.pixelSize: 12
+                    text: (takeoutTool.rep.albumsCreated || 0) + " albums created \u00b7 " + (takeoutTool.rep.albumMemberships || 0) + " photos put in albums \u00b7 "
+                        + (takeoutTool.rep.locations || 0) + " locations \u00b7 " + (takeoutTool.rep.favorites || 0) + " favorites \u00b7 "
+                        + (takeoutTool.rep.keywords || 0) + " words (descriptions, people)"
+                        + ((takeoutTool.rep.withoutSidecar || 0) > 0 ? " \u00b7 " + takeoutTool.rep.withoutSidecar + " without Google data" : "")
+                        + (Object.keys(takeoutTool.rep.unsupported || {}).length > 0
+                           ? " \u00b7 not imported (not photos or videos): " + Object.keys(takeoutTool.rep.unsupported).map(k => takeoutTool.rep.unsupported[k] + " " + k).join(", ") : "")
+                }
+                Label {
+                    visible: takeoutTool.finished && (dlg.takeout.reportFile || "") !== ""
+                    Layout.fillWidth: true; wrapMode: Text.WordWrap; color: dlg.theme.muted; font.pixelSize: 12
+                    text: ((takeoutTool.rep.failuresTotal || 0) === 0 && !dlg.takeout.cancelled
+                           && (takeoutTool.rep.skippedDeleted || 0) === 0 && Object.keys(takeoutTool.rep.unsupported || {}).length === 0
+                           ? "Every photo of the export is in the library. " : "")
+                        + "Full report: " + (dlg.takeout.reportFile || "")
+                }
+                Label {
+                    visible: (dlg.takeout.error || "") !== ""
+                    Layout.fillWidth: true; wrapMode: Text.WordWrap; color: "#e5484d"; font.pixelSize: 13
+                    text: dlg.takeout.error || ""
+                }
+                Item { Layout.fillHeight: true }
             }
         }
     }

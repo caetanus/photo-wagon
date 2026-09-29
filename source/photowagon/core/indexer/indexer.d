@@ -169,7 +169,7 @@ final class Indexer
 	/// The per-file pipeline: hash, dedupe, EXIF, thumbnail, classify, insert. Returns
 	/// true when a row was added or updated, false when the file was already current.
 	/// Shared by the folder scan (Job) and by `indexOne`.
-	package bool importCandidate(long rootId, Candidate c)
+	package bool importCandidate(long rootId, Candidate c, bool again = false)
 	{
 		auto known = photos.byPath(c.path);
 		if (!known.isNull && known.get.size == c.size && known.get.mtimeMs == c.mtimeMs)
@@ -275,6 +275,8 @@ final class Indexer
 				pv.kindBy = "auto";
 			if (!pv.id && photos.isRemoved(hash))
 				return false;   // removed from Wagon while this was being read
+			if (raced(pv.id, hash, c.path))
+				return retry(rootId, c, again);
 			if (pv.id)
 				photos.update(pv);
 			else
@@ -334,6 +336,8 @@ final class Indexer
 
 		if (!p.id && photos.isRemoved(hash))
 			return false;   // removed from Wagon while this was being read
+		if (raced(p.id, hash, c.path))
+			return retry(rootId, c, again);
 		if (p.id)
 			photos.update(p);
 		else
@@ -344,6 +348,28 @@ final class Indexer
 			catch (Exception e)
 				logDiagnostic("indexer: file keywords of %s: %s", c.path, e.msg);
 		return true;
+	}
+
+	/// While this file was being read (the reads yield), another import wrote a row with its
+	/// content or at its path — the same photo arriving twice at once (a phone's retry, a
+	/// folder scan and an import). Writing now would break UNIQUE(hash)/UNIQUE(path) and the
+	/// file would fail at random; instead the decision is taken again against the rows as
+	/// they are. The check and the write below have no yield between them.
+	private bool raced(long id, string hash, string path)
+	{
+		auto h = photos.byHash(hash);
+		if (!h.isNull && h.get.id != id)
+			return true;
+		auto p = photos.byPath(path);
+		return !p.isNull && p.get.id != id;
+	}
+
+	private bool retry(long rootId, Candidate c, bool again)
+	{
+		if (again)
+			throw new Exception("the same photo is being written by another import (twice in a row)");
+		logDiagnostic("indexer: %s arrived twice at once — deciding again", c.path);
+		return importCandidate(rootId, c, true);
 	}
 
 	void close() nothrow

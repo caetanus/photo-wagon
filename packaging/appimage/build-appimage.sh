@@ -48,7 +48,7 @@ export APPIMAGE_EXTRACT_AND_RUN=1          # no FUSE in a container
 export QMAKE="$QT_PREFIX/bin/qmake"
 export QML_SOURCES_PATHS="$SRC/qml"
 export EXTRA_QT_MODULES="location;positioning;waylandclient;svg;imageformats"
-export EXTRA_PLATFORM_PLUGINS="libqwayland.so"
+export EXTRA_PLATFORM_PLUGINS="libqwayland.so;libqoffscreen.so"   # offscreen: headless runs and the smoke test
 export LD_LIBRARY_PATH="$APPDIR/usr/lib/photo-wagon:$QT_PREFIX/lib${DEPS:+:$DEPS/openssl/lib}"
 export LDAI_OUTPUT="$OUT/Photo_Wagon-$VERSION-x86_64.AppImage"
 export VERSION

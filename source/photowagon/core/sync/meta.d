@@ -26,7 +26,7 @@
 ///   face  hash|x|y|w|h → the name of the person on that face ("" = unnamed). People are
 ///         clusters that differ from computer to computer, so a NAME travels per face: the
 ///         receiving computer finds its own face on that photo that overlaps the box and names
-///         it (face.setPerson — an unnamed group takes the name as a whole). Each computer then
+///         it (directly, FaceService.nameFaceFromPeer — an unnamed group takes the name as a whole). Each computer then
 ///         states the name for its own box too; both converge on the same name.
 ///
 /// A fact about a photo that is not here yet (the mirror has not brought it, its faces have
@@ -166,7 +166,8 @@ final class MetaStore
 	private void put(string kind, string key, string value, string hlc)
 	{
 		auto s = db.prepare("INSERT OR REPLACE INTO meta_state (kind, key, value, hlc, seq) VALUES (?, ?, ?, ?, ?)");
-		s.bind(1, kind).bind(2, key).bind(3, value).bind(4, hlc).bind(5, nextSeq());
+		// "" read back from sqlite is a null slice (getString's idup), which would bind as NULL
+		s.bind(1, kind).bind(2, key).bind(3, value is null ? "" : value).bind(4, hlc).bind(5, nextSeq());
 		s.run();
 	}
 
@@ -386,6 +387,11 @@ final class MetaSync
 	/// Keywords taken from another computer go in here directly, NOT rewriting the file (see
 	/// KeywordService.add); null (tests): through photo.addKeywords.
 	KeywordService keywords;
+	/// Names a face with a name from another computer, directly (FaceService.nameFaceFromPeer),
+	/// and settles a batch of them; null (no vision here): the face.setPerson API.
+	void delegate(long faceId, string name) nameFace;
+	void delegate() settleFaces;
+	private long seenDirty = -1;   // meta_dirty.n right after the last full refresh (-1: never)
 	/// The guard (see the module comment); fields so a test can lower them.
 	long massDeletionCount = massDeletion;
 	double massDeletionFraction = massDeletionShare;
@@ -440,6 +446,13 @@ final class MetaSync
 		}
 		if (!arrived.length)
 			return 0;
+		events.hold();
+		scope (exit)
+			events.release();
+		bool faces;
+		scope (exit)
+			if (faces)
+				settle();
 		foreach (h; arrived)
 		{
 			// the marker goes only once this photo's facts are all applied again: meanwhile
@@ -452,22 +465,31 @@ final class MetaSync
 			}
 			// every fact about this photo (a deletion or a removal is not re-applied: the
 			// mirror never brings such a photo, and a file the user put back by hand is theirs)
+			// (kw/face keys start with the hash: a key RANGE, which the primary key serves — a
+			// case-insensitive LIKE scanned all of meta_state for every photo that arrived)
 			auto s = db.prepare("SELECT kind, key, value, hlc, seq FROM meta_state WHERE kind IN ('fav', 'kind') AND key = ?"
-				~ " UNION ALL SELECT kind, key, value, hlc, seq FROM meta_state WHERE kind IN ('kw', 'face') AND key LIKE ? || '|%'"
+				~ " UNION ALL SELECT kind, key, value, hlc, seq FROM meta_state WHERE kind IN ('kw', 'face') AND key >= ? AND key < ?"
 				~ " UNION ALL SELECT kind, key, value, hlc, seq FROM meta_state WHERE kind = 'ap' AND key LIKE '%|' || ?");
-			s.bind(1, h).bind(2, h).bind(3, h);
-			MetaRow[] facts;
+			s.bind(1, h).bind(2, h ~ "|").bind(3, h ~ "}").bind(4, h);
+			MetaRow[] facts, faceRows;
 			while (s.step())
 				facts ~= MetaRow(s.getString(0), s.getString(1), s.getString(2), s.getString(3), s.getLong(4));
+			PullResult ignored;
 			foreach (row; facts)
 			{
 				// what was taken OFF counts too (a keyword the file still carries, re-read at
 				// the re-import, must not come back); an unnamed face says nothing
-				if (row.kind == "face" && !row.value.length)
+				if (row.kind == "face")
+				{
+					if (row.value.length)
+						faceRows ~= row;
 					continue;
-				PullResult ignored;
+				}
 				applyOrWait(row, ignored, /*replay*/ true);
 			}
+			// this photo's names together, before its marker goes (settled once, at the end)
+			applyFaces(faceRows, ignored, /*replay*/ true, /*take*/ false);
+			faces = faces || faceRows.length > 0;
 		}
 		return cast(long) arrived.length;
 	}
@@ -479,6 +501,15 @@ final class MetaSync
 	{
 		if (replay)
 			reapplyArrivals();
+		// nothing it replicates changed here and nothing was taken from a peer since the last
+		// scan: the answer is the same — no scan (it read every face, keyword and album; per
+		// served page and per pull that was O(library) of garbage each time)
+		immutable dirty = dirtyCount();
+		if (dirty >= 0 && dirty == seenDirty && !hasArrivals())
+			return 0;
+		// read AFTER the scan: its own records bump the counter too (meta_state has triggers)
+		scope (success)
+			seenDirty = dirtyCount();
 		// photos just made whose facts were not applied again yet (serving does not replay):
 		// their empty rows say nothing
 		auto fresh = set("SELECT hash FROM meta_arrived");
@@ -601,6 +632,23 @@ final class MetaSync
 			}
 			return n;
 		});
+	}
+
+	private long dirtyCount()
+	{
+		try
+		{
+			auto s = db.prepare("SELECT n FROM meta_dirty WHERE id = 1");
+			return s.step() ? s.getLong(0) : -1;
+		}
+		catch (Exception)
+			return -1;   // no counter (an older schema in a test): always scan
+	}
+
+	private bool hasArrivals()
+	{
+		auto s = db.prepare("SELECT 1 FROM meta_arrived LIMIT 1");
+		return s.step();
 	}
 
 	// the photo a key is about
@@ -797,10 +845,20 @@ final class MetaSync
 			r.held = trashing.length;
 			logWarn("meta: %s in-app deletion(s) from %s… held for the user (a mass deletion)", trashing.length, peer.length > 12 ? peer[0 .. 12] : peer);
 		}
+		// one change notice for the whole batch, and the face names applied together
+		events.hold();
+		scope (exit)
+			events.release();
+		MetaRow[] faceRows;
 		foreach (row; rows)
 		{
 			if (row.kind == "del" && ((row.key in heldNow) !is null || (row.key in skip) !is null))
 				continue;   // not taken: nothing here says it was deleted, until the user agrees
+			if (row.kind == "face")
+			{
+				faceRows ~= row;   // taken with its apply, in the batch's transaction
+				continue;
+			}
 			if (!store.take(row))
 				continue;
 			r.taken++;
@@ -808,6 +866,9 @@ final class MetaSync
 				store.unhold(row.key);   // a newer fact about it: an older held deletion is moot
 			applyOrWait(row, r);
 		}
+		applyFaces(faceRows, r, false, /*take*/ true);
+		if (faceRows.length)
+			settle();
 		return r;
 	}
 
@@ -831,11 +892,44 @@ final class MetaSync
 		}
 	}
 
+	/// A batch of face names in one transaction (`take`: accepting each fact too, so none is
+	/// taken without its apply or its pending marker). The caller settles (see nameFace).
+	private void applyFaces(MetaRow[] rows, ref PullResult r, bool replay, bool take)
+	{
+		if (!rows.length)
+			return;
+		db.transaction!void({
+			foreach (ref row; rows)
+			{
+				if (take)
+				{
+					if (!store.take(row))
+						continue;
+					r.taken++;
+				}
+				applyOrWait(row, r, replay);
+			}
+		});
+	}
+
+	private void settle()
+	{
+		if (settleFaces !is null)
+			try
+				settleFaces();
+			catch (Exception e)
+				logWarn("meta: settling faces: %s", e.msg);
+	}
+
 	/// Facts whose photo was not here: try them again. Returns how many still wait.
 	long retryPending()
 	{
+		events.hold();
+		scope (exit)
+			events.release();
 		long left;
-		foreach (row; store.pending())
+		bool faces;
+		void one(ref MetaRow row)
 		{
 			bool done;
 			try
@@ -843,10 +937,26 @@ final class MetaSync
 			catch (Exception)
 				done = false;
 			if (done)
+			{
 				store.dropPending(row.kind, row.key);
+				faces = faces || row.kind == "face";
+			}
 			else
 				left++;
 		}
+		MetaRow[] faceRows;
+		foreach (row; store.pending())
+			if (row.kind == "face")
+				faceRows ~= row;
+			else
+				one(row);   // (not in a transaction: a deletion moves a file and may yield)
+		if (faceRows.length)
+			db.transaction!void({
+				foreach (ref row; faceRows)
+					one(row);
+			});
+		if (faces)
+			settle();
 		return left;
 	}
 
@@ -872,6 +982,9 @@ final class MetaSync
 		scope (exit)
 			applying.unlock();
 		long n;
+		events.hold();
+		scope (exit)
+			events.release();
 		if (apply_)
 			foreach (row; store.held(peer))
 			{
@@ -1097,12 +1210,21 @@ final class MetaSync
 		{
 			// the name was taken off that face there: off here too (an unnamed face stays so)
 			if (bestNamed)
-				call("face.setPerson", JSONValue(["faceId": JSONValue(best), "personId": JSONValue(0L)]));
+			{
+				if (nameFace !is null)
+					nameFace(best, "");
+				else
+					call("face.setPerson", JSONValue(["faceId": JSONValue(best), "personId": JSONValue(0L)]));
+			}
 			return true;
 		}
 		if (bestNamed && bestName == row.value)
 			return true;
-		call("face.setPerson", JSONValue(["faceId": JSONValue(best), "name": JSONValue(row.value)]));
+		// directly: no look-alike "following" (see FaceService.nameFaceFromPeer)
+		if (nameFace !is null)
+			nameFace(best, row.value);
+		else
+			call("face.setPerson", JSONValue(["faceId": JSONValue(best), "name": JSONValue(row.value)]));
 		return true;
 	}
 

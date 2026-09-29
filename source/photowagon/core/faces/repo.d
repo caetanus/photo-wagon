@@ -109,14 +109,52 @@ final class FaceRepo
 		const(float)[] embedding;
 	}
 
-	/// Every stored face, oldest first (the order faces were found in).
+	/// Every stored face, oldest first (the order faces were found in). `f.embedding` is
+	/// sqlite's own memory: valid only inside the callback — copy what you keep.
 	void eachFace(scope void delegate(ref StoredFace f) dg)
 	{
 		auto s = db.prepare(`SELECT f.id, f.person_id, pe.name IS NOT NULL, f.score, f.w * p.width, f.embedding, f.photo_id
 			FROM faces f JOIN photos p ON p.id = f.photo_id LEFT JOIN persons pe ON pe.id = f.person_id ORDER BY f.id`);
+		walkFaces(s, dg);
+	}
+
+	/// The faces of these persons only (as eachFace; the embedding valid inside the callback).
+	void eachFaceOf(long a, long b, scope void delegate(ref StoredFace f) dg)
+	{
+		auto s = db.prepare(`SELECT f.id, f.person_id, pe.name IS NOT NULL, f.score, f.w * p.width, f.embedding, f.photo_id
+			FROM faces f JOIN photos p ON p.id = f.photo_id LEFT JOIN persons pe ON pe.id = f.person_id
+			WHERE f.person_id IN (?, ?) ORDER BY f.id`);
+		s.bind(1, a).bind(2, b);
+		walkFaces(s, dg);
+	}
+
+	/// The ids of a person's faces, oldest first.
+	long[] faceIdsOf(long personId)
+	{
+		auto s = db.prepare("SELECT id FROM faces WHERE person_id = ? ORDER BY id");
+		s.bind(1, personId);
+		long[] out_;
+		while (s.step())
+			out_ ~= s.getLong(0);
+		return out_;
+	}
+
+	/// The photos a person has a face in.
+	bool[long] photosOf(long personId)
+	{
+		auto s = db.prepare("SELECT DISTINCT photo_id FROM faces WHERE person_id = ?");
+		s.bind(1, personId);
+		bool[long] out_;
+		while (s.step())
+			out_[s.getLong(0)] = true;
+		return out_;
+	}
+
+	private void walkFaces(ref Statement s, scope void delegate(ref StoredFace f) dg)
+	{
 		while (s.step())
 		{
-			auto blob = s.getBlob(5);
+			auto blob = s.getBlobView(5);
 			if (blob.length != faceDim * float.sizeof)
 				continue;
 			StoredFace f;

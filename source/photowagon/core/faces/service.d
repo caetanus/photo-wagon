@@ -661,18 +661,63 @@ final class FaceService
 		return personId;
 	}
 
+	/// A name another of the user's computers gave this face (organization sync): set
+	/// DIRECTLY — the face, and an unnamed automatic group it sits in, take the name. No
+	/// look-alike "following": that was the other computer's own inference (it syncs its
+	/// result face by face anyway), and it scanned every face per replicated fact. "" takes
+	/// the name off this face. No event: the caller settles a whole batch (settleFromPeers).
+	void nameFaceFromPeer(long faceId, string name)
+	{
+		auto before = faces.face(faceId);
+		auto e = faces.embeddingOf(faceId);
+		if (!name.length)
+		{
+			if (before.personId)
+			{
+				faces.setFacePerson(faceId, 0);
+				cluster.remove(before.personId, e);
+			}
+			return;
+		}
+		immutable existing = faces.personByName(name);
+		if (!existing && before.personId && faces.person(before.personId).name is null)
+		{
+			// an automatic group: the name is the whole group's (as a user naming it)
+			faces.renamePerson(before.personId, name);
+			cluster.setNamed(before.personId, true);
+			return;
+		}
+		immutable target = existing ? existing : faces.createPerson(name);
+		if (target == before.personId)
+			return;
+		faces.setFacePerson(faceId, target);
+		if (before.personId)
+			cluster.remove(before.personId, e);
+		cluster.add(target, e, true);
+		// one face of a person per photo: another face of hers in the same photo is not her
+		foreach (other; faces.sameFacesInPhoto(faceId, target))
+		{
+			faces.setFacePerson(other, 0);
+			auto oe = faces.embeddingOf(other);
+			cluster.remove(target, oe);
+		}
+	}
+
+	/// After a batch of nameFaceFromPeer: empty groups go, the UI hears it once.
+	void settleFromPeers()
+	{
+		faces.pruneEmptyPersons();
+		events.emit("people.changed", JSONValue.emptyObject);
+	}
+
 	/// Every face of `from` joins `into`, except those in a photo where `into`
 	/// already has a face (they become unassigned). `keepId` always moves.
 	private long mergeRespectingPhotos(long from, long into, long keepId)
 	{
-		bool[long] photoTaken;
-		long[] fromFaces;
-		faces.eachFace((ref FaceRepo.StoredFace f) {
-			if (f.personId == into)
-				photoTaken[f.photoId] = true;
-			else if (f.personId == from)
-				fromFaces ~= f.id;
-		});
+		// the two persons' faces only (a scan of every face, copying each embedding, was ~25 MB
+		// of garbage per call on a 12k-face library)
+		bool[long] photoTaken = faces.photosOf(into);
+		long[] fromFaces = faces.faceIdsOf(from);
 		long moved;
 		db.transaction!void({
 			// the face the user pointed at goes first, so it wins its photo
@@ -707,7 +752,7 @@ final class FaceService
 	{
 		SplitFace[] ofFrom;
 		const(float[faceDim])[] ofInto;
-		faces.eachFace((ref FaceRepo.StoredFace f) {
+		faces.eachFaceOf(from, into, (ref FaceRepo.StoredFace f) {
 			if (f.id == seedId)
 				return;
 			float[faceDim] e = f.embedding[0 .. faceDim];
@@ -735,11 +780,7 @@ final class FaceService
 		if (movedSet.length == 0)
 			return 0;
 		// one face per photo: photos where `into` already has a face keep it
-		bool[long] photoTaken;
-		faces.eachFace((ref FaceRepo.StoredFace f) {
-			if (f.personId == into)
-				photoTaken[f.photoId] = true;
-		});
+		bool[long] photoTaken = faces.photosOf(into);
 		long count;
 		db.transaction!void({
 			foreach (ref f; ofFrom)

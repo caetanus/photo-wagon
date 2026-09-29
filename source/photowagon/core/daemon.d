@@ -341,6 +341,13 @@ version (PW_NoVision) {} else private StackService stacks;
 
 					computers.meta = new MetaSync(db, () nothrow => nd.hsKeyHex(), photos, registry, events);
 					computers.meta.keywords = keywords;   // taken keywords: the library, not the files
+					// face names from the other computer: set directly, settled per batch
+					version (PW_NoVision) {} else if (facesService !is null)
+					{
+						auto fs = facesService;
+						computers.meta.nameFace = (long faceId, string name) { fs.nameFaceFromPeer(faceId, name); };
+						computers.meta.settleFaces = () { fs.settleFromPeers(); };
+					}
 				}
 				computers.register(registry);
 				computers.start();

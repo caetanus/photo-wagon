@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 25;
+enum currentVersion = 26;
 
 void migrate(Database db)
 {
@@ -77,6 +77,8 @@ void migrate(Database db)
 				db.exec("ALTER TABLE photo_changes ADD COLUMN old_ts INTEGER");
 			db.exec(schemaV25);
 		}
+		if (have < 26)
+			db.exec(schemaV26);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -387,6 +389,41 @@ CREATE TABLE meta_held (
 // back as a NEW row (its file deleted outside the app and brought back, re-imported) gets its
 // facts back instead of its empty new row reading as "the user took them all off" (row ids can
 // be reused, so the trigger, not an id comparison, says a row is new).
+// V26: one counter every change the organization sync reads bumps (triggers): its refresh
+// scans the library only when something it replicates changed, not on every page it serves
+// and every pull — a full scan (faces joined to photos, keywords, albums) per call was the
+// same per-change O(library) garbage as the listing's.
+private enum schemaV26 = `
+CREATE TABLE IF NOT EXISTS meta_dirty (id INTEGER PRIMARY KEY CHECK (id = 1), n INTEGER NOT NULL);
+INSERT OR IGNORE INTO meta_dirty (id, n) VALUES (1, 1);
+CREATE TRIGGER IF NOT EXISTS meta_dirty_ph_ins AFTER INSERT ON photos BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_ph_del AFTER DELETE ON photos BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_ph_upd AFTER UPDATE OF favorite, kind, kind_by, path, hash ON photos BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_dec_ins AFTER INSERT ON declined_hashes BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_dec_del AFTER DELETE ON declined_hashes BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_rm_ins AFTER INSERT ON removed_hashes BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_rm_del AFTER DELETE ON removed_hashes BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_kw_ins AFTER INSERT ON photo_keywords BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_kw_del AFTER DELETE ON photo_keywords BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_al_ins AFTER INSERT ON albums BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_al_del AFTER DELETE ON albums BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_al_upd AFTER UPDATE OF name, uid, origin_peer ON albums BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_ap_ins AFTER INSERT ON album_photos BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_ap_del AFTER DELETE ON album_photos BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_fa_ins AFTER INSERT ON faces BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_fa_del AFTER DELETE ON faces BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_fa_upd AFTER UPDATE OF person_id, x, y, w, h ON faces BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_pe_upd AFTER UPDATE OF name ON persons BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_pe_del AFTER DELETE ON persons BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_ms_ins AFTER INSERT ON meta_state BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_ms_upd AFTER UPDATE ON meta_state BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_ms_del AFTER DELETE ON meta_state BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_mp_ins AFTER INSERT ON meta_pending BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_mp_del AFTER DELETE ON meta_pending BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_ma_ins AFTER INSERT ON meta_arrived BEGIN UPDATE meta_dirty SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS meta_dirty_ma_del AFTER DELETE ON meta_arrived BEGIN UPDATE meta_dirty SET n = n + 1; END;
+`;
+
 // V24: a log of the photo rows the listing shows that changed (added, updated in a column
 // the grid lays out or files by, removed; a scene/holiday/weather tag) — the UI asks for the
 // rows changed since its cursor instead of rebuilding the whole listing on every arrival

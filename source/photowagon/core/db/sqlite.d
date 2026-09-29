@@ -279,6 +279,18 @@ struct Statement
 		return (cast(const(char)*) p)[0 .. n].idup;
 	}
 
+	/// A BLOB column WITHOUT copying it: sqlite's own memory, valid only until the next
+	/// step/reset of this statement (empty for NULL). For scans that read a blob and move on
+	/// — a copy per row of every face's 2 KB embedding was megabytes of garbage per scan.
+	const(ubyte)[] getBlobView(int col)
+	{
+		auto p = sqlite3_column_blob(stmt, col);
+		immutable n = sqlite3_column_bytes(stmt, col);
+		if (p is null || n <= 0)
+			return null;
+		return (cast(const(ubyte)*) p)[0 .. n];
+	}
+
 	/// A copy of a BLOB column (empty for NULL).
 	ubyte[] getBlob(int col)
 	{

@@ -1,268 +1,257 @@
-> _"…we all got a chicken duck woman thing waiting for us."_
-
-<p align="center">
-  <img src="docs/img/chicken-duck-woman.png" width="300" alt="a chicken duck woman thing, waiting for us">
-</p>
+49 times... I've got her picture on my photo-wagon
 
 <div align="center">
-  <img src="docs/img/icon.png" width="128" alt="Photo Wagon">
+  <img src="docs/img/icon.png" width="128" alt="Photo Wagon icon">
   <h1>Photo Wagon</h1>
+  <p><strong>A full photo library for Linux. Your photos, on your own devices.</strong></p>
 </div>
 
-**A local-first photo manager written in D** — a Qt Quick desktop app, an indexer,
-and a libp2p node for sharing albums directly between your machines, all in one
-program.
+Photo Wagon is a local-first photo app with an ambitious goal: become a
+**feature-complete alternative to Google Photos and Apple Photos**, with
+peer-to-peer sharing through **Hyperswarm** instead of cloud storage.
 
-Everything runs on your computer. Nothing is uploaded anywhere unless you choose
-to share an album with a peer.
+Linux is the priority. It deserves a photo app that makes a lifetime of pictures
+easy to browse, search, organize, edit, and share. Photo Wagon also runs on
+Windows and macOS, and has an Android companion. Building a great Linux photo
+app on a cross-platform foundation means every platform benefits from that work.
 
-> 🎵 *"I've got her picture on my photo-wagon, and she probably love to honky tonk…"*
-> — Bad Lip Reading, **"Bushes of Love"** — where the name comes from.
-
----
-
-## Highlights
-
-- **Photos-style desktop** — a years → months → days timeline, a fast grid, and a full viewer.
-- **Faces & people** — on-device detection and clustering (YuNet + SFace); name a face once.
-- **Places** — offline GPS → city (compiled-in GeoNames), or set a place by hand.
-- **Scenes, moods, weather & holidays** — zero-shot CLIP tags, fully offline.
-- **Tags that live in the files** — written to XMP/IPTC, so they travel with the photo.
-- **Non-destructive editing** — filters, adjustments, crop; the original is never touched.
-- **Similar photos** — nearest-neighbour over CLIP embeddings, stored in sqlite-vec.
-- **Peer-to-peer sharing** — sync with your phone and other machines over libp2p, no cloud.
-
----
-
-## Screenshots
+**The goal is feature completeness; the project is still in active development.**
+There is already a working library, editor, on-device analysis, and device sync.
+The sections below describe what is available today and where work is ongoing.
 
 <p align="center">
-  <img src="docs/img/desktop.png" width="900" alt="Photo Wagon desktop — the library grid with the timeline, scenes, moods and weather">
+  <img src="docs/img/desktop.png" width="900" alt="Photo Wagon desktop library with a photo grid and sidebar for dates, people, places, and tags">
 </p>
-<p align="center"><sub>The desktop library — the years → months → days timeline, scene / mood / weather tags, and the grid.</sub></p>
+<p align="center"><sub>The real desktop app, browsing the demo library. All people and photos are AI-generated.</sub></p>
+
+Try the [demo inside the app](docs/demo-photos/README.md): Lucy, Alice, Joe, Nina,
+and Leo at the beach, by the pool, celebrating birthdays, going out, and on
+vacation. It includes dated photos, named people, places, favorites, and albums.
+After building the app and installing its face models:
+
+```sh
+python3 tools/demo.py --open
+```
+
+The demo creates its own library and settings, separate from your personal photos.
+
+## What you can do today
+
+- **Browse your library** by year, month, day, or moment, with favorites, albums,
+  a zoomable grid, and a full-screen viewer.
+- **Find people** with local face detection and clustering. Name people, correct
+  matches, and choose their portraits.
+- **Explore places** using offline GPS-to-city lookup, or add a place by hand.
+- **Search your photos** by file name, tags, people, dates, and text recognized in
+  images. With the CLIP models installed, search by meaning and find visually
+  similar photos.
+- **Organize automatically** with on-device scene, mood, and weather suggestions,
+  holiday tags, and separate views for photos, screenshots, and memes.
+- **Edit without replacing the original image**: filters, brightness, contrast,
+  saturation, warmth, crop, rotate, and flip. Revert edits or save a copy.
+- **Rediscover memories** through On This Day, throwbacks, and collections of
+  people, places, and moments.
+- **Bring your phone into the library** with QR pairing, resumable transfers, and
+  people names shared between phone and desktop.
+- **Show photos on a TV** through Google Cast or DLNA, including slideshows.
+
+See the [desktop guide](docs/desktop.md) for controls, keyboard shortcuts,
+metadata behavior, and details about each feature.
 
 <p align="center">
-  <img src="docs/img/mobile.png" width="250" alt="Photo Wagon on the phone — the camera roll, synced peer-to-peer">
+  <img src="docs/img/people.png" width="900" alt="Photo Wagon People view with Lucy, Alice, Joe, Nina, and Leo and their photo counts">
 </p>
-<p align="center"><sub>On the phone — a libp2p peer of your computer.<br><i>(all photos shown are procedurally-generated placeholders)</i></sub></p>
+<p align="center"><sub>The demo's recurring people, named in the actual library.</sub></p>
 
----
+<p align="center">
+  <img src="docs/img/viewer.png" width="900" alt="A beach photo of Lucy and Alice open in Photo Wagon, with the filmstrip and photo information">
+</p>
 
-## The desktop app
+## Your library stays yours
 
-### Dates
-Taken-time comes from EXIF first; then the file name or folder (WhatsApp,
-screenshots, camera and Pixel names, `2020/02/13/` folders); and only then the
-file's modification time.
+The library, thumbnails, face analysis, and search index live on your devices.
+Browsing, organizing, editing, and running the local models do not require a
+cloud account or a hosted photo service. Models are downloaded separately;
+photo analysis then runs locally.
 
-### Browsing
-- **Sidebar** — Library, Favorites, People, Places, Imports; the **years → months → days**
-  tree with counts (one click jumps to a day, the same node again clears it); Media
-  Types (Photos, Screenshots, Memes); your albums; the phone and peers; a
-  connection / indexing status line in the footer.
-- **Toolbar** — Years / Months / Days / All Photos, a zoom slider, and search.
-- **Grid** — click selects, ⌘/Ctrl-click extends, double-click opens, hover shows the
-  heart (and the scene / holiday / weather).
-- The Library timeline shows photographs; screenshots and memes live under Media
-  Types (an album or a search shows everything).
+Adding a folder indexes the photos where they already live. Photo Wagon keeps
+its database and derived files separately. It reads standard EXIF, XMP, and IPTC
+metadata, and supports writing keywords back to XMP/IPTC so other applications
+can use them. **Image edits are non-destructive; metadata writeback does modify
+file metadata.** See [Tags](docs/desktop.md#tags) for that distinction.
 
-### The viewer
-Opens in place of the grid, with a caption line (date, camera, size, file), a
-filmstrip, and an **ⓘ Info** panel.
+Sharing is explicit: publish an album or pair a device to exchange photos.
+Peer-to-peer sharing still needs connectivity between devices; it does not put
+a permanent copy of your library on a hosted service.
 
-- **Zoom** — wheel, double-click, `+` / `−` / `0`, or drag. **Full screen** — `F`.
-- **Right-click a photo or selection** — copy files, copy paths, show in folder,
-  favorite, add to an album, set the place, mark as photo / screenshot / meme,
-  move to trash, delete permanently (`Delete` and `Shift+Delete` from the keyboard).
+### Hyperswarm and the current transport
 
-### People & faces
-On-device face detection and clustering (YuNet + SFace, via one C++ shim).
+Hyperswarm is the direction for peer discovery and device-to-device sharing.
+The repository includes a D Hyperswarm integration, alongside the existing
+libp2p transport.
 
-- The **ⓘ Info** panel lists the people in a photo with round portraits, and "Name"
-  for the unnamed ones.
-- Naming a face lists the likely people first, then everyone alphabetically with
-  portraits, narrowed as you type (↑/↓ and Return pick one).
-- "Use as portrait" makes that face the person's picture; right-clicking a face
-  can change or rename the person, use it as the portrait, remove the tag, or mark
-  it as not a face.
-- A **People** page shows everyone with round portraits.
+**The migration is ongoing:** the current default still uses libp2p. The desktop
+Hyperswarm path is experimental and enabled with `PW_HS=1`; the phone requires a
+matching Hyperswarm build. This is not yet a completed transport replacement.
+Both paths serve the same goal: sharing between your devices without a cloud
+photo library.
 
-### Places
-- A **Places** page: one card per city with its newest photo and count; the cities
-  appear in the sidebar too.
-- A photo with GPS lands in the nearest city — a compiled-in **GeoNames** table,
-  fully offline (a `0,0` position from a phone with location off counts as none).
-- Set the rest by hand: select → right-click → **Set Place…**, which suggests your
-  own places first, then the world's cities as you type, or keeps any name you enter.
+## On your phone
 
-### Scenes, moods, weather & holidays
-Every photograph is tagged offline by **CLIP** (ViT-B/32, zero-shot):
+<p align="center">
+  <img src="docs/img/mobile.png" width="250" alt="Photo Wagon Android app showing the phone photo library">
+  <img src="docs/img/android-people.png" width="250" alt="People and their portraits in the Android app">
+  <img src="docs/img/android-viewer.png" width="250" alt="An AI-generated picnic photo open in the Android viewer">
+</p>
+<p align="center"><sub>The Android APK running in headless Waydroid, captured at 1080×2400 with the same AI-generated demo photos.</sub></p>
 
-| Axis | Examples |
-|---|---|
-| **Scene** | Beach, Pool, Snow, Mountains, Party, Birthday, Food, Pets, Baby, Selfie, Night… |
-| **Mood** | Joyful, Calm, Romantic, Energetic, Nostalgic, Cozy, Festive, Melancholic… |
-| **Weather** | Sunny, Cloudy, Rainy, Stormy, Foggy, Snowy, Hot, Cold |
-| **Holiday** | Christmas, New Year, Carnival, Easter, Halloween, Festa Junina, Mother's / Father's / Children's / Valentine's Day (from the calendar, Brazilian dates); Birthday, Wedding, Graduation (from the picture) |
+The Android app browses the camera roll, sends photos and videos to the desktop,
+and brings the desktop's library and people names into the phone experience.
+Transfers use a persistent queue with progress in an Android notification.
 
-Each is a sidebar section with counts, a row in the ⓘ Info panel (with the model's
-top guesses), and a right-click submenu to correct it. The vocabulary lives in
-`data/scenes/labels.tsv`.
+To pair, open **Phone** on the desktop and scan its QR code from the phone's
+settings. Use **Send all** or **Send to computer** in the viewer to transfer photos.
+The [Android guide](ANDROID.md) covers building, installing, pairing, and debugging.
 
-### Tags
-- A **tag strip** under every open photo shows its chips — scene, mood, weather,
-  holiday, place, and your own tags (**+ Tag**, any words, comma-separated; × removes
-  one). Clicking a chip shows every photo that shares it.
-- Your tags are a sidebar section too, and **Add Tags…** (menu or toolbar) applies
-  them to a whole selection.
-- **Tags live in the files.** Your keywords, the scene / mood / weather / holiday,
-  and the place are written into the XMP and IPTC keyword fields (`praia 2020`,
-  `Scene: Beach`, `Place: Peruíbe, Brazil`) — automatically after you change a photo,
-  and on request for the rest (**Write Tags to Files**). Pixels and modification
-  times are left untouched, and a file that arrives with keywords brings them into
-  the library.
+## Build and run
 
-### Editing
-The sliders icon, or `E`:
+The instructions below target Linux development. The build currently expects
+several sibling repositories and native libraries; it is not yet a standalone
+checkout-and-build setup. Desktop packaging and easier installation remain work
+in progress.
 
-- Twelve Instagram-style **filters**, previewed on the photo itself.
-- **Adjustments** — brightness, contrast, saturation, warmth, fade, vignette,
-  sharpen, sepia — plus rotate, flip, and a crop frame with draggable corners and
-  aspect presets.
-- Rendered by the core (**libvips**); the original file is never written to.
-  **Save** keeps the result in the library (thumbnail and viewer follow; **Revert**
-  undoes it); **Save as Copy** writes a JPEG next to the original.
+### Dependencies
 
-### Similar photos
-A chip under every photo lists the ones that look like it — a nearest-neighbour
-query over the CLIP embeddings. Those, like the face clusters' centroids, live in
-[sqlite-vec](https://github.com/asg017/sqlite-vec) tables inside the library
-database (compiled in, `csrc/sqlite-vec.c`), never in memory.
+- **D compiler and build tool:** LDC (`ldc2`, 1.42+) and DUB. The desktop binding
+  also has a DMD configuration.
+- **Qt 6.11 and DSide:** `../qt-dlang-gen`, with the generated bindings under
+  `generated/qt-6.11/cxx-quick` and the matching archives under
+  `.build/qt-6.11-cxx-quick/` (`libbinding_ldc2.a` and `libshims.a` for LDC).
+- **Networking:** `../libp2p-dlang` (and its sibling `d-webrtc-v3`) and
+  `../d-hyperswarm`.
+- **Desktop theming:** a built `qml-css-engine` at `~/lab/qml-css-engine`, or set
+  `QMLCSS` to its location. The desktop configuration links `csrc/libcss.a`,
+  produced from its `build/libqmlcssengine.a` by the native build script.
+- **Native build tools:** a C/C++ toolchain and `pkg-config`.
+- **System libraries:** SQLite, gexiv2, libvips, GLib/GObject, qrencode, libcurl,
+  libsodium, c-ares, OpenSSL 3.5+, ngtcp2 with its OpenSSL backend, OpenCV 5,
+  Tesseract, and Leptonica. The OpenCV pkg-config name defaults to `opencv5`;
+  override it with `OPENCV_PC` if needed.
 
-Light or dark follows the system theme.
+[dub.sdl](dub.sdl) and [csrc/build.sh](csrc/build.sh) define the build dependencies.
 
----
-
-## Requirements
-
-- `ldc2` (1.42+) or `dmd`, and `dub`
-- Qt 6.11 with the DSide binding built at `../qt-dlang-gen`
-  (`generated/qt-6.11/cxx-quick` + `.build/qt-6.11-cxx-quick/libbinding_ldc2.a`)
-- `libp2p-dlang` checked out at `../libp2p-dlang` (and its sibling `d-webrtc-v3`)
-- System libraries: `sqlite3`, `gexiv2`, `vips`, `libsodium`, `openssl`, `c-ares`,
-  `qrencode`, and OpenCV 5 (`opencv5.pc`; only for the face scan — see `csrc/`)
-- The face models in `models/` — `face_detection_yunet_2023mar.onnx` and
-  `face_recognition_sface_2021dec.onnx` (from the OpenCV zoo); `--models DIR` points
-  elsewhere
-
-## Build & run
+### Desktop
 
 ```sh
-dub build --compiler=ldc2       # → ./photo-wagon
-./photo-wagon                   # data in ~/.local/share/photowagon
-./photo-wagon --data /tmp/lib   # ...or somewhere else
+dub build --compiler=ldc2
+QT_FORCE_STDERR_LOGGING=1 ./photo-wagon
 ```
 
-**Headless** (a server, a TV box, CI — no Qt binding needed):
+Choose **Add Folder to Library…** to index an existing photo folder. On Linux,
+app data defaults to `$XDG_DATA_HOME/photowagon`, or
+`~/.local/share/photowagon` when `XDG_DATA_HOME` is unset. To use another location:
 
 ```sh
-dub build -c headless --compiler=ldc2   # → ./photo-wagon-headless, core only
-./photo-wagon --headless                # the full binary can do it too
+QT_FORCE_STDERR_LOGGING=1 ./photo-wagon --data /path/to/library-data
 ```
 
-Headless mode speaks the protocol in `docs/ipc.md` on loopback TCP, writing its
-port to `$XDG_RUNTIME_DIR/photowagon/daemon.port`:
+Install the desktop launcher and icon for your user with:
 
 ```sh
-printf '{"id":1,"method":"daemon.hello"}\n' \
-  | nc 127.0.0.1 "$(cat "$XDG_RUNTIME_DIR/photowagon/daemon.port")"
+sh share/install-desktop.sh
 ```
 
-**Desktop icon & launcher** — `sh share/install-desktop.sh` installs
-`photo-wagon.desktop` and the icon under `~/.local/share` (Wayland reads the icon
-from there by the app id `photo-wagon`; X11 gets it from the binary).
+### Local models
 
-**Scene / mood model** — the scene and mood tags need the CLIP image encoder next
-to the face models: `models/clip_vision.onnx` is `onnx/vision_model.onnx` from
-[Xenova/clip-vit-base-patch32](https://huggingface.co/Xenova/clip-vit-base-patch32)
-(335 MB, fp32). Without it everything else works and those two sections stay empty.
-`data/scenes/make-prompts.py` regenerates the text side after you edit the vocabulary.
+Put models in `models/` beside the executable, or choose a directory with
+`--models DIR`.
 
-**Natural-language search model** — searching by meaning ("a dog on the beach") adds
-the CLIP *text* tower: `models/clip_text.onnx` is `onnx/text_model.onnx` from the same
-[Xenova/clip-vit-base-patch32](https://huggingface.co/Xenova/clip-vit-base-patch32)
-(243 MB, fp32). Without it search still matches file names, the OCR text, tags, people
-and dates — only the by-meaning results drop out. The BPE tokenizer's vocabulary and
-merges are compiled in from `data/clip` (extracted from the model's `tokenizer.json`).
+| Feature | Model files |
+| --- | --- |
+| Face detection and recognition | `face_detection_yunet_2023mar.onnx`, `face_recognition_sface_2021dec.onnx` from the OpenCV Zoo |
+| Scene suggestions and similar photos | `clip_vision.onnx` — the CLIP ViT-B/32 image encoder |
+| Search by meaning | `clip_text.onnx` — the matching CLIP text encoder, in addition to the image encoder |
 
-**OCR** — reading the text in screenshots, memes and documents uses **Tesseract**
-(a system package; `por` here, add `tesseract-data-eng` for more English). No model to
-fetch; if Tesseract is absent the build says so and OCR is simply off.
+The CLIP files used by the project are `onnx/vision_model.onnx` and
+`onnx/text_model.onnx` from
+[Xenova/clip-vit-base-patch32](https://huggingface.co/Xenova/clip-vit-base-patch32),
+using the fp32 versions, renamed as above. Without the CLIP models, ordinary
+library browsing and text search still work; the corresponding visual analysis features are unavailable.
+OCR uses Tesseract's installed language data.
 
-## Resource discipline
+### Headless
 
-Background work runs on a leash (`core/jobs/scheduler.d`):
-
-- Indexing, the media-kinds pass, faces, scenes, and the tag writer are **passes**
-  that queue on one lane and run one at a time — new photos first.
-- Every native operation (a decode, a model, a render) takes one of `--jobs N`
-  permits (default 2) and steps aside while a request from the window or the phone
-  is being answered.
-- The **CLIP model** (about a gigabyte inside OpenCV) never lives in the app: a
-  child process (`photo-wagon --clip-worker`) encodes for one pass and is then
-  killed. Faces are detected on a reduced decode of big JPEGs; libvips keeps a 64 MB
-  operation cache; each pass ends with a garbage collection that returns memory to
-  the system. The viewer doesn't cache the 4096 px decodes of photos you open.
-- A core started by a script should get `--exit-with-parent` — it dies with its
-  parent. A **memory guard** watches resident size: above `--memory-limit` MB
-  (default 1536) the process aborts itself with `SIGSEGV` on purpose, so the core
-  dump shows what grew.
-
-## Phone
-
-`mobile/` is Photo Wagon on the phone — a libp2p peer of the computer's node (the
-pairing QR carries its addresses). It:
-
-- keeps the computer up to date by itself (a persistent queue, progress in an
-  Android notification),
-- shows the computer's faces and names on the phone's own photos, and names them
-  back,
-- shows the phone's own photos and sends them to the computer's library.
-
-Click **Phone** on the computer, scan the QR with the app (⚙ → Scan QR code), then
-**Send all** or **Send to computer** in the viewer. `mobile/build-android.sh`
-builds the arm64 APK, installs it, and launches it on the attached phone;
-`ANDROID.md` has the toolchain and pairing details. The same client builds for the
-desktop for offscreen tests: `cd mobile && dub build -c desktop --compiler=ldc2`.
-
-## Tests
+Run the core without the desktop UI, for example on an always-on device of your
+own:
 
 ```sh
-dub test --compiler=ldc2                          # unit tests of every core module
-tests/e2e.py /folder/with/nine/images             # two headless nodes: index, publish, fetch over libp2p
-tests/faces.py /folder/with/the/lena+messi/set    # detection, clustering, naming, merging
-QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software PW_SHOT=/tmp/shot.png ./photo-wagon   # UI screenshot
+dub build -c headless --compiler=ldc2
+./photo-wagon-headless
 ```
 
-## Project layout
+The full desktop binary also supports `--headless`. A smaller sync-node
+configuration omits OpenCV and the vision features:
 
-```
-source/photowagon/core/   indexer, store, SQLite, gexiv2, vips, faces, libp2p node, IPC
-source/photowagon/ui/     app, Library facade, bridge to the core thread
-source/photowagon/main.d  picks UI + core thread, or headless
-csrc/                     the one C++ file: OpenCV's YuNet + SFace behind a C surface
-mobile/                   the phone client (D, TcpBridge), Android packaging and toolchain
-qml/                      the interface; qml/mobile/ the phone layout
-docs/ipc.md               the line protocol between UI and core
-tests/                    unit test runner, e2e.py, faces.py
-models/                   face-detection models
-legacy/                   the previous C++/Qt + D prototype, kept for reference only
+```sh
+dub build -c node --compiler=ldc2
+./photo-wagon-node
 ```
 
-See `ARCHITECTURE.md` for how the pieces fit together and `ROADMAP.md` for status.
+Headless mode exposes the [IPC protocol](docs/ipc.md) on loopback TCP. It writes
+`daemon.port` under `$XDG_RUNTIME_DIR/photowagon`, falling back to the data
+directory when `XDG_RUNTIME_DIR` is unset.
 
----
+## Development
 
-<div align="center">
-<sub>🌳 Named for Bad Lip Reading's <b>"Bushes of Love"</b> — <i>"I've got her picture on my photo-wagon…"</i> — and yes, we'd hide in the bushes of love, oh, <b>49 times</b>.</sub>
-</div>
+Photo Wagon is written in **D**, with a **Qt Quick** interface through DSide.
+The desktop runs the UI on the main thread and a **vibe-core** event loop on a
+second thread. SQLite stores the library; libvips handles image processing;
+gexiv2 handles metadata; OpenCV and CLIP provide local image analysis.
+
+The separate core thread is the current implementation. DSide supports a shared
+Qt/vibe-core loop; the [integration investigation](docs/event-loop.md) documents
+the working driver and the remaining migration requirements.
+
+| Location | Responsibility |
+| --- | --- |
+| `source/photowagon/core/` | Indexing, database, storage, metadata, analysis, and peer networking |
+| `source/photowagon/ui/` | Qt application, Library facade, and bridge to the core |
+| `qml/` | Desktop interface, with phone components under `qml/mobile/` |
+| `mobile/` | Phone client and Android build tooling |
+| `csrc/` | Native library integration and embedded sqlite-vec |
+| `tests/` | Core tests and integration scripts |
+| `legacy/` | Earlier prototype, kept for reference |
+
+Read [AGENTS.md](AGENTS.md) for repository conventions,
+[ARCHITECTURE.md](ARCHITECTURE.md) for the UI/core boundary, and
+[docs/ipc.md](docs/ipc.md) for the protocol. [ROADMAP.md](ROADMAP.md) tracks
+milestones; some historical entries predate the current implementation.
+
+Contributions toward everyday usability, search and organization, reliable P2P
+sharing, Linux packaging, and cross-platform support are welcome. The ambition
+is a complete photo app, and improvements on any platform help the whole project.
+
+### Verification
+
+```sh
+dub build --compiler=ldc2
+dub test --compiler=ldc2
+
+# Two headless nodes: index, publish an album, and fetch over libp2p.
+tests/e2e.py /folder/with/nine/images
+
+# Capture the desktop without a display.
+QT_FORCE_STDERR_LOGGING=1 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
+  PW_SHOT=/tmp/photo-wagon.png ./photo-wagon
+```
+
+## Why “Photo Wagon”?
+
+> “I think my cooking is awesome, I've got her picture on my photo-wagon…”
+
+The name comes from **“Bushes of Love” by Bad Lip Reading**. A photo wagon seemed
+like a good place to keep your pictures.
+
+<p align="center">
+  <img src="docs/img/chicken-duck-woman.png" width="220" alt="A chicken duck woman thing, a nod to Bushes of Love">
+</p>

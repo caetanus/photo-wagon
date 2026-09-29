@@ -1,0 +1,395 @@
+[
+  {
+    "file": "lucy-alice-praia.png",
+    "date": "2026/07/18",
+    "place": "Ubatuba",
+    "albums": [
+      "Praia",
+      "Férias 2026"
+    ],
+    "tags": {
+      "scene": "Beach",
+      "mood": "Joyful",
+      "weather": "Sunny"
+    },
+    "keywords": [
+      "Praia",
+      "Férias 2026",
+      "Demo"
+    ],
+    "people": [
+      "Lucy",
+      "Alice"
+    ],
+    "favorite": true,
+    "portrait": false
+  },
+  {
+    "file": "joe-lucy-piscina.png",
+    "date": "2026/07/19",
+    "place": "Ubatuba",
+    "albums": [
+      "Piscina",
+      "Férias 2026"
+    ],
+    "tags": {
+      "scene": "Pool",
+      "mood": "Playful",
+      "weather": "Sunny"
+    },
+    "keywords": [
+      "Piscina",
+      "Férias 2026",
+      "Demo"
+    ],
+    "people": [
+      "Joe",
+      "Lucy"
+    ],
+    "favorite": true,
+    "portrait": false
+  },
+  {
+    "file": "aniversario-alice.png",
+    "date": "2026/08/08",
+    "place": "São Paulo",
+    "albums": [
+      "Aniversário da Alice",
+      "Festa"
+    ],
+    "tags": {
+      "scene": "Party",
+      "mood": "Festive",
+      "weather": "Indoors"
+    },
+    "keywords": [
+      "Aniversário da Alice",
+      "Festa",
+      "Demo"
+    ],
+    "people": [
+      "Lucy",
+      "Alice",
+      "Joe"
+    ],
+    "favorite": true,
+    "portrait": false
+  },
+  {
+    "file": "alice-joe-balada.png",
+    "date": "2026/08/15",
+    "place": "São Paulo",
+    "albums": [
+      "Balada",
+      "Festa"
+    ],
+    "tags": {
+      "scene": "Party",
+      "mood": "Energetic",
+      "weather": "Indoors"
+    },
+    "keywords": [
+      "Balada",
+      "Festa",
+      "Demo"
+    ],
+    "people": [
+      "Alice",
+      "Joe"
+    ],
+    "favorite": true,
+    "portrait": false
+  },
+  {
+    "file": "lucy-joe-ferias.png",
+    "date": "2026/06/14",
+    "place": "Campos do Jordão",
+    "albums": [
+      "Férias 2026",
+      "Trilhas"
+    ],
+    "tags": {
+      "scene": "Mountains",
+      "mood": "Adventurous",
+      "weather": "Cloudy"
+    },
+    "keywords": [
+      "Férias 2026",
+      "Trilhas",
+      "Demo"
+    ],
+    "people": [
+      "Lucy",
+      "Joe"
+    ],
+    "favorite": true,
+    "portrait": false
+  },
+  {
+    "file": "amigos-cafe-ferias.png",
+    "date": "2026/07/20",
+    "place": "Paraty",
+    "albums": [
+      "Férias 2026"
+    ],
+    "tags": {
+      "scene": "Food",
+      "mood": "Cozy",
+      "weather": "Sunny"
+    },
+    "keywords": [
+      "Férias 2026",
+      "Demo"
+    ],
+    "people": [
+      "Lucy",
+      "Alice",
+      "Joe"
+    ],
+    "favorite": true,
+    "portrait": false
+  },
+  {
+    "file": "nina-leo-praia.png",
+    "date": "2026/07/18",
+    "place": "Ubatuba",
+    "albums": [
+      "Praia",
+      "Férias 2026"
+    ],
+    "tags": {
+      "scene": "Beach",
+      "mood": "Joyful",
+      "weather": "Sunny"
+    },
+    "keywords": [
+      "Praia",
+      "Férias 2026",
+      "Demo"
+    ],
+    "people": [
+      "Nina",
+      "Leo"
+    ],
+    "favorite": true,
+    "portrait": false
+  },
+  {
+    "file": "amigos-piquenique.png",
+    "date": "2026/08/23",
+    "place": "São Paulo",
+    "albums": [
+      "Fim de semana"
+    ],
+    "tags": {
+      "scene": "Garden",
+      "mood": "Calm",
+      "weather": "Sunny"
+    },
+    "keywords": [
+      "Fim de semana",
+      "Demo"
+    ],
+    "people": [
+      "Alice",
+      "Nina",
+      "Leo"
+    ],
+    "favorite": true,
+    "portrait": false
+  },
+  {
+    "file": "praia.png",
+    "date": "2026/01/10",
+    "place": "Florianópolis",
+    "albums": [
+      "Praia",
+      "Verão"
+    ],
+    "tags": {
+      "scene": "Beach",
+      "mood": "Calm",
+      "weather": "Sunny"
+    },
+    "keywords": [
+      "Praia",
+      "Verão",
+      "Demo"
+    ],
+    "people": [],
+    "favorite": false,
+    "portrait": false
+  },
+  {
+    "file": "piscina.png",
+    "date": "2026/01/11",
+    "place": "Florianópolis",
+    "albums": [
+      "Piscina",
+      "Verão"
+    ],
+    "tags": {
+      "scene": "Pool",
+      "mood": "Joyful",
+      "weather": "Sunny"
+    },
+    "keywords": [
+      "Piscina",
+      "Verão",
+      "Demo"
+    ],
+    "people": [],
+    "favorite": false,
+    "portrait": false
+  },
+  {
+    "file": "festa.png",
+    "date": "2025/12/20",
+    "place": "São Paulo",
+    "albums": [
+      "Festa"
+    ],
+    "tags": {
+      "scene": "Party",
+      "mood": "Festive",
+      "weather": "Indoors"
+    },
+    "keywords": [
+      "Festa",
+      "Demo"
+    ],
+    "people": [],
+    "favorite": false,
+    "portrait": false
+  },
+  {
+    "file": "cachorro.png",
+    "date": "2026/08/23",
+    "place": "São Paulo",
+    "albums": [
+      "Fim de semana"
+    ],
+    "tags": {
+      "scene": "Pets",
+      "mood": "Playful",
+      "weather": "Sunny"
+    },
+    "keywords": [
+      "Fim de semana",
+      "Demo"
+    ],
+    "people": [],
+    "favorite": true,
+    "portrait": false
+  },
+  {
+    "file": "lucy.png",
+    "date": "2025/11/15",
+    "place": "São Paulo",
+    "albums": [
+      "Amigos"
+    ],
+    "tags": {
+      "scene": "Group",
+      "mood": "Joyful",
+      "weather": "Sunny"
+    },
+    "keywords": [
+      "Amigos",
+      "Demo"
+    ],
+    "people": [
+      "Lucy"
+    ],
+    "favorite": false,
+    "portrait": true
+  },
+  {
+    "file": "alice.png",
+    "date": "2025/11/15",
+    "place": "São Paulo",
+    "albums": [
+      "Amigos"
+    ],
+    "tags": {
+      "scene": "Group",
+      "mood": "Joyful",
+      "weather": "Sunny"
+    },
+    "keywords": [
+      "Amigos",
+      "Demo"
+    ],
+    "people": [
+      "Alice"
+    ],
+    "favorite": false,
+    "portrait": true
+  },
+  {
+    "file": "joe.png",
+    "date": "2025/11/15",
+    "place": "São Paulo",
+    "albums": [
+      "Amigos"
+    ],
+    "tags": {
+      "scene": "Group",
+      "mood": "Joyful",
+      "weather": "Sunny"
+    },
+    "keywords": [
+      "Amigos",
+      "Demo"
+    ],
+    "people": [
+      "Joe"
+    ],
+    "favorite": false,
+    "portrait": true
+  },
+  {
+    "file": "nina.png",
+    "date": "2025/11/15",
+    "place": "São Paulo",
+    "albums": [
+      "Amigos"
+    ],
+    "tags": {
+      "scene": "Group",
+      "mood": "Joyful",
+      "weather": "Sunny"
+    },
+    "keywords": [
+      "Amigos",
+      "Demo"
+    ],
+    "people": [
+      "Nina"
+    ],
+    "favorite": false,
+    "portrait": true
+  },
+  {
+    "file": "leo.png",
+    "date": "2025/11/15",
+    "place": "São Paulo",
+    "albums": [
+      "Amigos"
+    ],
+    "tags": {
+      "scene": "Group",
+      "mood": "Joyful",
+      "weather": "Sunny"
+    },
+    "keywords": [
+      "Amigos",
+      "Demo"
+    ],
+    "people": [
+      "Leo"
+    ],
+    "favorite": false,
+    "portrait": true
+  }
+]

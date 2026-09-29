@@ -10,10 +10,16 @@ Photo Wagon is one D program with two threads.
  ~/.local/share/photowagon/   library.db · store/ab/cdef… (thumbnails, shared blobs)
 ```
 
-Why a thread and not the same loop: the UI binding pins every `QObject` to the
-thread that created it and aborts on a violation, while libp2p-dlang and the
-indexer live on vibe-core fibers with their own event loop. Each loop gets its
-own thread; they share nothing but the two queues. The UI is woken through a
+This describes the current implementation, not a requirement of DSide. DSide
+provides a Qt eventcore driver that lets Qt and vibe-core share the main thread:
+install `QtEventDriver`, then enter vibe's `runEventLoop()` instead of
+`QCoreApplication.exec()`. QObject thread affinity does not require a separate
+core thread when both run on the same thread. See the
+[event-loop investigation](docs/event-loop.md) for verified behavior and the
+worker-initialization issue that must be addressed before migrating.
+
+Currently, each loop has its own thread; they share the two message queues.
+The UI is woken through a
 `QSocketNotifier` on a pipe, so a response is handled on the Qt thread; the core
 is woken through a shared vibe `ManualEvent`, so a request is handled on a fiber.
 

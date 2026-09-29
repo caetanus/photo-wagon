@@ -105,6 +105,17 @@ int main()
         environment["QT_QUICK_CONTROLS_STYLE"] = "Material";
     version (Android)
     {
+        // Video: Qt 6's default FFmpeg backend found no hardware decoder here and decoded in
+        // software on the CPU ("No HW decoder found"), then copied every frame to a texture —
+        // a phone's 1080p/4K video stuttered badly. The native backend plays through Android's
+        // own MediaPlayer/MediaCodec (the hardware decoder) straight into a SurfaceTexture.
+        // OPT-IN (PW_VIDEO_HW=1) until it is understood: on the phone, with it on by default,
+        // no video played at all.
+        if ("QT_MEDIA_BACKEND" !in environment && environment.get("PW_VIDEO_HW", "") == "1")
+            environment["QT_MEDIA_BACKEND"] = "android";
+    }
+    version (Android)
+    {
         // Diagnostics OFF by default: QSG_RENDER_TIMING logs the polish/sync/render/swap of
         // EVERY frame to logcat — at 60 fps that per-frame logging is itself a drag on the
         // scrolling it is meant to measure. Turn them on only when chasing a stall, by setting

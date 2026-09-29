@@ -7,7 +7,7 @@
 name: Packages
 on:
   push:
-    branches: [master]
+    branches: [master, "ci/**"]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:

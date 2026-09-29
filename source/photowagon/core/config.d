@@ -17,8 +17,9 @@ struct Config
 	bool headless = false;
 	/// die with the process that started us (tests, scripts): no core outlives its harness
 	bool exitWithParent = false;
-	/// past this many MB resident the process kills itself with SIGSEGV for the dump (0 = off)
-	long memoryLimitMb = 1536;
+	/// past this many MB resident the process kills itself with SIGSEGV for the dump (0 = off);
+	/// by default a share of the machine's RAM (defaultMemoryLimitMb), `--memory-limit N` fixes it
+	long memoryLimitMb = -1;   // -1 = automatic, resolved by parseArgs
 	/// `--vision-worker CLIP YUNET SFACE`: this process is the OpenCV child (core/vision/worker.d)
 	bool visionWorker;
 	string[3] visionModels;
@@ -227,6 +228,8 @@ Config parseArgs(string[] args)
 			throw new Exception("unknown option " ~ args[i] ~ "\n" ~ usage);
 		}
 	}
+	if (c.memoryLimitMb < 0)
+		c.memoryLimitMb = defaultMemoryLimitMb();
 	return c;
 }
 
@@ -237,3 +240,43 @@ enum usage = `photo-wagon [--headless] [--serve] [--ipc-address ADDR] [--port N]
 --serve exposes the protocol of docs/ipc.md on ADDR:N (default 127.0.0.1, random
 port). With --ipc-address 0.0.0.0 any device on the network can drive the
 library: only do that on a network you trust (the mobile app needs it).`;
+
+/// The memory guard's default: 15% of the machine's RAM, between 2 GB and 8 GB. A fixed
+/// 1.5 GB was set for a library of a few thousand photos; at ~20k (a Google Takeout and a
+/// second computer mirrored in) the desktop crossed it in normal use and was killed every
+/// few minutes. The guard is for leaks, which still hit this ceiling.
+long defaultMemoryLimitMb() nothrow
+{
+	enum long floorMb = 2048, ceilMb = 8192;
+	long totalMb;
+	version (linux)
+	{
+		try
+		{
+			import std.stdio : File;
+			import std.algorithm.searching : startsWith;
+			import std.string : split;
+			import std.conv : to;
+
+			foreach (line; File("/proc/meminfo").byLine)
+				if (line.startsWith("MemTotal:"))
+				{
+					totalMb = line.split[1].to!long / 1024;
+					break;
+				}
+		}
+		catch (Exception)
+		{
+		}
+	}
+	if (totalMb <= 0)
+		return floorMb;
+	immutable share = totalMb * 15 / 100;
+	return share < floorMb ? floorMb : share > ceilMb ? ceilMb : share;
+}
+
+unittest
+{
+	immutable m = defaultMemoryLimitMb();
+	assert(m >= 2048 && m <= 8192);
+}

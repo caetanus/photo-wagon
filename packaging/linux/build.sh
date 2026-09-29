@@ -252,6 +252,10 @@ stage() {
 [ "${SKIP_DEPS:-}" = 1 ] || install_build_deps
 install_ldc
 export PATH="$DEPS/ldc/bin:$PATH"
+# xiboca type-checks generated snippets with `dmd -o-`; LDC's dmd-compatible driver does that
+mkdir -p "$DEPS/dmd-shim"
+ln -sf "$(command -v ldmd2)" "$DEPS/dmd-shim/dmd"
+export PATH="$PATH:$DEPS/dmd-shim"
 [ -d "$TOP/qt-dlang-gen" ] || { echo "build: the sibling repositories are missing (packaging/fetch-sources.sh)" >&2; exit 1; }
 [ "${QT_SOURCE:-}" = qtio ] && fetch_qt
 build_openssl

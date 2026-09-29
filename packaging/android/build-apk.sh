@@ -57,7 +57,10 @@ ldc() {
         curl -fsSL "$base/ldc2-$LDC_ANDROID_VERSION-android-aarch64.tar.xz" | tar -xJ -C "$WORK"
     fi
     export LDC=$LDC_HOST/bin/ldc2
-    export PATH="$LDC_HOST/bin:$PATH"
+    # xiboca type-checks generated snippets with `dmd -o-`; LDC's dmd-compatible driver does that
+    mkdir -p "$WORK/dmd-shim"
+    ln -sf "$LDC_HOST/bin/ldmd2" "$WORK/dmd-shim/dmd"
+    export PATH="$LDC_HOST/bin:$PATH:$WORK/dmd-shim"
 }
 
 qt() {

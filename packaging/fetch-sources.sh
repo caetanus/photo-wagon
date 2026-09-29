@@ -1,18 +1,20 @@
 #!/bin/sh
 # Clones the sibling repositories photo-wagon builds against (dub.sdl names them as ../<dir>)
-# next to this checkout, at the refs pinned in packaging/versions.env. A directory that already
+# next to this checkout, at the commits pinned in packaging/versions.env. A directory that already
 # exists is left alone, so a developer tree is never touched.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/versions.env"
 TOP=$(cd "$HERE/../.." && pwd)
 
-clone() {   # <url> <ref> <dir>
+clone() {   # <url> <commit> <dir>
     if [ -d "$TOP/$3/.git" ]; then
         echo "fetch-sources: $3 already present, left as is"
         return
     fi
-    git clone --quiet --depth 1 --branch "$2" "$1" "$TOP/$3"
+    git init --quiet "$TOP/$3"
+    git -C "$TOP/$3" fetch --quiet --depth 1 "$1" "$2"
+    git -C "$TOP/$3" checkout --quiet FETCH_HEAD
     echo "fetch-sources: $3 @ $(git -C "$TOP/$3" rev-parse --short HEAD)"
 }
 clone "$DSIDE_REPO" "$DSIDE_REF" qt-dlang-gen

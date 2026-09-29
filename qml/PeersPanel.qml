@@ -19,7 +19,7 @@ Popup {
     readonly property var peerNames: JSON.parse(library.peerNames)
 
     // A short, readable stand-in for a raw 12D3Koo… peer id.
-    function short(id) {
+    function shortId(id) {   // not `short`: a reserved word to the QML parser before Qt 6.11
         return (id && id.length > 15) ? id.slice(0, 8) + "…" + id.slice(-4) : (id || "")
     }
 
@@ -100,7 +100,7 @@ Popup {
                     width: parent.width
                     Label {
                         Layout.fillWidth: true
-                        text: peerRow.nick.length ? peerRow.nick : panel.short(peerRow.pid)
+                        text: peerRow.nick.length ? peerRow.nick : panel.shortId(peerRow.pid)
                         color: theme.text
                         font.pixelSize: 13
                         font.bold: peerRow.nick.length > 0

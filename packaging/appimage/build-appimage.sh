@@ -40,6 +40,9 @@ done
 # qt.io's TIFF image plugin links libtiff.so.5, which 24.04 no longer ships; TIFF thumbnails
 # and previews come from libvips anyway.
 rm -f "$QT_PREFIX/plugins/imageformats/libqtiff.so"
+# ...and the NMEA position plugin (serial GPS receivers) needs QtSerialPort, which the app has
+# no use for: photo locations come from EXIF.
+rm -f "$QT_PREFIX/plugins/position/libqtposition_nmea.so"
 export PATH="$DEPS/bin:$QT_PREFIX/bin:$PATH"
 export APPIMAGE_EXTRACT_AND_RUN=1          # no FUSE in a container
 export QMAKE="$QT_PREFIX/bin/qmake"

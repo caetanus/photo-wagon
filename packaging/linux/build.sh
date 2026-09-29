@@ -58,7 +58,7 @@ install_build_deps() {
     fedora)
         dnf install -y -q \
             gcc gcc-c++ make cmake ninja-build meson pkgconf-pkg-config git curl xz python3 file \
-            patchelf rpm-build \
+            patchelf rpm-build which \
             clang clang-devel llvm-devel \
             qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtdeclarative-devel \
             qt6-qtmultimedia-devel qt6-qtlocation-devel qt6-qtpositioning-devel \
@@ -68,7 +68,7 @@ install_build_deps() {
         ;;
     arch)
         pacman -Syu --noconfirm --needed \
-            base-devel cmake ninja meson git curl python file patchelf \
+            base-devel cmake ninja meson git curl python file patchelf which \
             clang llvm \
             qt6-base qt6-declarative qt6-multimedia qt6-location qt6-positioning \
             sqlite libgexiv2 libvips glib2 qrencode curl libsodium c-ares openssl \
@@ -166,14 +166,24 @@ build_ngtcp2() {
 }
 
 # ---------------------------------------------------------------- DSide binding for this Qt
+# xiboca links -lclang; Debian/Ubuntu keep libclang.so only under llvm-config's libdir.
+libclang_path() {
+    for d in "$(llvm-config --libdir 2>/dev/null)" /usr/lib/llvm-*/lib; do
+        if [ -n "$d" ] && [ -e "$d/libclang.so" ]; then
+            export LIBRARY_PATH="$d${LIBRARY_PATH:+:$LIBRARY_PATH}"
+            export LD_LIBRARY_PATH="$d${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            return
+        fi
+    done
+}
 build_binding() {
     minor=$(qt_minor)
     b="$TOP/qt-dlang-gen/.build/qt-$minor-cxx-quick"
     say "DSide quick binding for Qt $minor"
     cd "$TOP/qt-dlang-gen"
+    libclang_path
     if [ ! -f "$b/libbinding_ldc2.a" ] || [ ! -f "$b/libshims.a" ]; then
-        dub run --quiet --compiler=ldc2 reggae -- -b binary . --reggaefile-import-path "$PWD/reggae" --dc=ldc2
-        ./build ".build/qt-$minor-cxx-quick/libbinding_ldc2.a" ".build/qt-$minor-cxx-quick/libshims.a"
+        sh "$SRC/packaging/dside-binding.sh" "$TOP/qt-dlang-gen"
     fi
     # dub.sdl names the 6.11 tree; on another Qt minor the binding for THIS Qt answers to it.
     if [ "$minor" != 6.11 ]; then

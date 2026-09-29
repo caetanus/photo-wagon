@@ -85,10 +85,22 @@ toolchain_files() {
     export LDC_CONF=$TCW/ldc2-android.conf
 }
 
+# xiboca links -lclang; Debian/Ubuntu keep libclang.so only under llvm-config's libdir.
+libclang_path() {
+    for d in "$(llvm-config --libdir 2>/dev/null)" /usr/lib/llvm-*/lib; do
+        if [ -n "$d" ] && [ -e "$d/libclang.so" ]; then
+            export LIBRARY_PATH="$d${LIBRARY_PATH:+:$LIBRARY_PATH}"
+            export LD_LIBRARY_PATH="$d${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            return
+        fi
+    done
+}
+
 binding() {
     local b=$TOP/qt-dlang-gen/.build/qt-6.11-android-arm64-cxx-quick
     [ -f "$b/libbinding_ldc2.a" ] && [ -f "$b/libshims.a" ] && return
     say "DSide quick binding for Qt $QT_VERSION android arm64"
+    libclang_path
     (cd "$TOP/qt-dlang-gen/xiboca" && dub build --quiet --compiler=ldc2)
     DSIDE=$TOP/qt-dlang-gen NDK=$NDK QT_ANDROID=$QT_ANDROID SPEC=$TCW/spec_cxx_quick_android.json \
         PKGCONF_DIR=$TCW/pkgconfig ABI=arm64 sh "$SRC/mobile/toolchain/build-binding.sh" generate

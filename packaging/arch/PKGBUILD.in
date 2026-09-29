@@ -10,7 +10,7 @@ license=(MIT)
 depends=(qt6-base qt6-declarative qt6-multimedia qt6-location qt6-positioning qt6-imageformats
          qt6-wayland sqlite libgexiv2 libvips glib2 qrencode curl libsodium c-ares openssl
          tesseract leptonica)
-makedepends=(git ldc dub cmake ninja meson clang llvm patchelf python)
+makedepends=(git ldc dub cmake ninja meson clang llvm patchelf python which)
 optdepends=('tesseract-data-por: read text in Portuguese screenshots and documents')
 options=(!debug !lto)
 source=("photo-wagon::git+https://github.com/caetanus/photo-wagon.git#commit=@PW_COMMIT@"

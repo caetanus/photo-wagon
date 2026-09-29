@@ -211,6 +211,15 @@ build_app() {
     export LIBRARY_PATH="$DEPS/opencv/lib:$DEPS/ngtcp2/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
     export CPATH="$DEPS/ngtcp2/include${CPATH:+:$CPATH}"
     export QMLCSS="$TOP/qml-css-engine"
+    # gexiv2 0.16 (Fedora 44) installs as gexiv2-0.16 / -lgexiv2-0.16; the calls the app makes are
+    # the same there (deprecated, not removed). dub resolves `libs "gexiv2"` through pkg-config,
+    # so a gexiv2.pc that points at it is all the link needs.
+    if ! pkg-config --exists gexiv2 && pkg-config --exists gexiv2-0.16; then
+        mkdir -p "$DEPS/pc-compat"
+        sed 's/^Name:.*/Name: gexiv2/' "$(pkg-config --variable=pcfiledir gexiv2-0.16)/gexiv2-0.16.pc" \
+            > "$DEPS/pc-compat/gexiv2.pc"
+        export PKG_CONFIG_PATH="$DEPS/pc-compat:$PKG_CONFIG_PATH"
+    fi
     rm -f csrc/*.a csrc/*.o
     dub build --compiler=ldc2 -c app -b package
 }

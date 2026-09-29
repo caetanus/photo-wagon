@@ -22,10 +22,13 @@ deb() {
     # dpkg-shlibdeps wants a debian/control to exist; it only reads the package list from it.
     mkdir -p "$work/debian"
     printf 'Source: photo-wagon\n\nPackage: photo-wagon\nArchitecture: any\n' > "$work/debian/control"
-    shlibs=$(cd "$work" && dpkg-shlibdeps -O -l"$ROOT/usr/lib/photo-wagon" \
-        "$ROOT/usr/bin/photo-wagon" "$ROOT"/usr/lib/photo-wagon/libopencv_*.so.*.*.* 2>/dev/null \
+    # --ignore-missing-info: the private OpenCV libraries belong to no package, so they have no
+    # shlibs entry; everything they and the app link from the system still gets its dependency.
+    shlibs=$(cd "$work" && dpkg-shlibdeps -O --ignore-missing-info -l"$ROOT/usr/lib/photo-wagon" \
+        "$ROOT/usr/bin/photo-wagon" "$ROOT"/usr/lib/photo-wagon/libopencv_*.so.*.*.* \
         | sed -n 's/^shlibs:Depends=//p')
     rm -rf "$work"
+    [ -n "$shlibs" ] || { echo "package: dpkg-shlibdeps found no dependencies" >&2; exit 1; }
     # What the ELF dependencies cannot see: the QML modules and Qt plugins loaded at run time.
     qml="qml6-module-qtquick, qml6-module-qtquick-controls, qml6-module-qtquick-layouts,
  qml6-module-qtquick-window, qml6-module-qtquick-dialogs, qml6-module-qtquick-effects,

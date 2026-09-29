@@ -104,32 +104,41 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # Each package installs into a FRESH container of its flavour (with network: the package
+  # manager resolves every declared dependency), then the app runs in that image with
+  # --network=none — see packaging/linux/smoke.sh for why the run is offline.
   linux-smoke:
-    needs: linux
+    needs: [linux, arch]
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { flavour: ubuntu-lts,     image: "ubuntu:latest" }
-          - { flavour: ubuntu-current, image: "ubuntu:rolling" }
-          - { flavour: debian,         image: "debian:stable" }
-          - { flavour: fedora,         image: "fedora:latest" }
+          - { flavour: ubuntu-lts,     image: "ubuntu:latest",    pkg: "*.deb" }
+          - { flavour: ubuntu-current, image: "ubuntu:rolling",   pkg: "*.deb" }
+          - { flavour: debian,         image: "debian:stable",    pkg: "*.deb" }
+          - { flavour: fedora,         image: "fedora:latest",    pkg: "*.rpm" }
+          - { flavour: arch,           image: "archlinux:latest", pkg: "*.pkg.tar.zst" }
     runs-on: ubuntu-24.04
-    container: ${{ matrix.image }}
     steps:
       - id: skip
         run: |
-          . /etc/os-release
-          if [ "${{ matrix.flavour }}" = ubuntu-current ] && echo "$VERSION" | grep -q LTS; then echo "skip=1" >> "$GITHUB_OUTPUT"; fi
+          if [ "${{ matrix.flavour }}" = ubuntu-current ] \
+             && docker run --rm "${{ matrix.image }}" grep -q '^VERSION=.*LTS' /etc/os-release; then
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v4
         if: steps.skip.outputs.skip != '1'
         with: { sparse-checkout: packaging }
       - uses: actions/download-artifact@v4
         if: steps.skip.outputs.skip != '1'
         with: { name: "pkg-${{ matrix.flavour }}", path: dist }
-      - name: Install into a fresh ${{ matrix.image }} and start the app
+      - name: Install into a fresh ${{ matrix.image }}, then start the app offline
         if: steps.skip.outputs.skip != '1'
-        run: sh packaging/linux/smoke.sh dist/* "$PWD/shot-${{ matrix.flavour }}.png"
+        run: |
+          f=$(cd dist && ls ${{ matrix.pkg }} | head -1)
+          docker run --name inst -v "$PWD:/w" "${{ matrix.image }}" sh /w/packaging/linux/smoke.sh install "/w/dist/$f"
+          docker commit inst pw-smoke >/dev/null
+          docker run --rm --network=none -v "$PWD:/w" pw-smoke sh /w/packaging/linux/smoke.sh run "/w/shot-${{ matrix.flavour }}.png"
       - uses: actions/upload-artifact@v4
         if: steps.skip.outputs.skip != '1'
         with: { name: "shot-${{ matrix.flavour }}", path: "shot-*.png" }
@@ -171,27 +180,31 @@ jobs:
       matrix:
         image: ["ubuntu:24.04", "debian:stable", "fedora:latest"]
     runs-on: ubuntu-24.04
-    container: ${{ matrix.image }}
     steps:
       - uses: actions/download-artifact@v4
         with: { name: pkg-appimage, path: dist }
-      - name: Run it (it installs itself into ~/.local first)
+      - name: Run it offline on ${{ matrix.image }} (it installs itself into ~/.local first)
         run: |
-          . /etc/os-release
-          case "$ID" in
-            fedora) dnf install -y -q mesa-libEGL mesa-libGL fontconfig libxkbcommon ;;
-            *) apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libegl1 libgl1 libfontconfig1 libxkbcommon0 ;;
-          esac
+          chmod +x dist/*.AppImage
+          cat > run.sh <<'EOF'
+          set -eu
           export HOME=/tmp/h APPIMAGE_EXTRACT_AND_RUN=1
           mkdir -p "$HOME"
-          chmod +x dist/*.AppImage
-          QT_FORCE_STDERR_LOGGING=1 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software PW_SHOT=$HOME/shot.png \
-            timeout 300 dist/*.AppImage --data "$HOME/library"
-          test -s "$HOME/shot.png"
+          QT_FORCE_STDERR_LOGGING=1 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software PW_SHOT=/w/shot.png \
+            timeout 180 /w/dist/*.AppImage --data "$HOME/library"
+          test -s /w/shot.png
           test -x "$HOME/.local/bin/photo-wagon"
           test -f "$HOME/.local/share/applications/photo-wagon.desktop"
           test -f "$HOME/.local/share/icons/hicolor/256x256/apps/photo-wagon.png"
-          echo "AppImage ok on $PRETTY_NAME"
+          . /etc/os-release; echo "AppImage ok on $PRETTY_NAME"
+          EOF
+          # the base libraries an AppImage leaves to the system (GL, fontconfig, xkbcommon)
+          docker run --name inst "${{ matrix.image }}" sh -c '. /etc/os-release; case "$ID" in
+            fedora) dnf install -y -q mesa-libEGL mesa-libGL fontconfig libxkbcommon ;;
+            *) apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libegl1 libgl1 libfontconfig1 libxkbcommon0 ;;
+          esac'
+          docker commit inst pw-smoke >/dev/null
+          docker run --rm --network=none -v "$PWD:/w" pw-smoke sh /w/run.sh
 
   arch:
     needs: meta
@@ -216,8 +229,6 @@ jobs:
           cd aur
           sudo -u builder makepkg --syncdeps --noconfirm
           sudo -u builder makepkg --printsrcinfo > .SRCINFO
-      - name: Install it and start the app
-        run: sh photo-wagon/packaging/linux/smoke.sh aur/photo-wagon-*.pkg.tar.zst "$PWD/shot-arch.png"
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-arch
@@ -267,7 +278,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux-smoke, appimage-smoke, arch, apk, meta]
+    needs: [linux-smoke, appimage-smoke, apk, meta]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

@@ -44,7 +44,10 @@ install_build_deps() {
             libfontconfig1-dev libfreetype-dev libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4
             libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0
             libxcb-xinerama0 libxcb-xkb1 libwayland-client0 libwayland-cursor0 libwayland-egl1
-            libdbus-1-3 libpulse0 libasound2t64 libgstreamer-plugins-base1.0-0"
+            libdbus-1-3 libpulse0 libasound2t64 libgstreamer-plugins-base1.0-0
+            libx11-6 libx11-xcb1 libxext6 libxrandr2 libxrender1 libxfixes3 libxi6 libxcomposite1
+            libxdamage1 libxtst6 libsm6 libice6 libdrm2 libva2 libva-drm2 libva-x11-2 libvdpau1
+            libxcb-xfixes0 libxcb-sync1 libxcb-shm0 libxcb-render0 libxcb-util1 libxcb-glx0"
         apt-get update -qq
         # shellcheck disable=SC2086
         apt-get install -y -qq --no-install-recommends $qtpkgs \

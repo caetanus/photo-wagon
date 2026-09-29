@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 24;
+enum currentVersion = 25;
 
 void migrate(Database db)
 {
@@ -70,6 +70,13 @@ void migrate(Database db)
 			db.exec(schemaV23);
 		if (have < 24)
 			db.exec(schemaV24);
+		if (have < 25)
+		{
+			auto c = db.prepare("SELECT 1 FROM pragma_table_info('photo_changes') WHERE name = 'old_ts'");
+			if (!c.step())
+				db.exec("ALTER TABLE photo_changes ADD COLUMN old_ts INTEGER");
+			db.exec(schemaV25);
+		}
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -384,6 +391,23 @@ CREATE TABLE meta_held (
 // the grid lays out or files by, removed; a scene/holiday/weather tag) — the UI asks for the
 // rows changed since its cursor instead of rebuilding the whole listing on every arrival
 // (22k items per imported file blew the GC heap up; see library.changes). Trimmed by the API.
+// V25: a move in time or a deletion also says where the photo WAS (stacks re-walk that
+// stretch too), and a new CLIP embedding is a change (it can join or split a stack).
+private enum schemaV25 = `
+DROP TRIGGER IF EXISTS photo_changes_upd;
+CREATE TRIGGER photo_changes_upd AFTER UPDATE OF taken_ts, width, height, kind, favorite, duration_ms,
+    stack_id, thumb_hash, path, origin_peer, hash, size, root_id ON photos BEGIN
+    INSERT INTO photo_changes (photo_id, old_ts) VALUES (new.id, old.taken_ts);
+END;
+DROP TRIGGER IF EXISTS photo_changes_del;
+CREATE TRIGGER photo_changes_del AFTER DELETE ON photos BEGIN
+    INSERT INTO photo_changes (photo_id, old_ts) VALUES (old.id, old.taken_ts);
+END;
+CREATE TRIGGER IF NOT EXISTS photo_changes_clip AFTER INSERT ON photo_clip BEGIN
+    INSERT INTO photo_changes (photo_id) VALUES (new.photo_id);
+END;
+`;
+
 private enum schemaV24 = `
 CREATE TABLE IF NOT EXISTS photo_changes (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,

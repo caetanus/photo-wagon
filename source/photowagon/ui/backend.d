@@ -2244,6 +2244,17 @@ version (WithUi)
 
     private QTimer timelineLater;   // a library.changed inside the 3 s window, deferred to its end
 
+    /// "Faces: 3,200 of 7,400 — in the background"
+    private static string backgroundProgress(string stage, JSONValue data)
+    {
+        static string grouped(long n)
+        {
+            import std.format : format;
+            return format("%,d", n);
+        }
+        return stage ~ ": " ~ grouped(data["done"].integer) ~ " of " ~ grouped(data["total"].integer) ~ " — in the background";
+    }
+
     private void refreshTimeline()
     {
         if (timelineLater !is null)
@@ -2510,8 +2521,7 @@ version (WithUi)
             }
             break;
         case "tags.progress":
-            setStatus(true, true, "finding scenes and moods: " ~ data["done"].integer.to!string
-                ~ " / " ~ data["total"].integer.to!string);
+            setStatus(true, true, backgroundProgress("Moods", data));
             break;
         case "tags.done":
             setStatus(true, indexing, data["tagged"].integer.to!string ~ " of " ~ data["photos"].integer.to!string ~ " photos got a scene or mood");
@@ -2549,8 +2559,7 @@ version (WithUi)
             loadPeers();
             break;
         case "faces.progress":
-            setStatus(true, true, "faces: " ~ data["done"].integer.to!string ~ " / " ~ data["total"].integer.to!string
-                ~ " photos, " ~ data["faces"].integer.to!string ~ " found");
+            setStatus(true, true, backgroundProgress("Faces", data));
             break;
         case "faces.done":
             setStatus(true, indexing, data["faces"].integer.to!string ~ " face" ~ (data["faces"].integer == 1 ? "" : "s")
@@ -2558,12 +2567,10 @@ version (WithUi)
             loadPeople();
             break;
         case "kinds.progress":
-            setStatus(true, true, "sorting photos, screenshots and memes: " ~ data["done"].integer.to!string
-                ~ " / " ~ data["total"].integer.to!string);
+            setStatus(true, true, backgroundProgress("Sorting", data));
             break;
         case "kinds.done":
-            loadStats();
-            reload(0, pageLimit);
+            refreshTimeline();   // what changed kind, not the whole library again
             break;
         case "takeout.progress":
             // an import from Google Photos: its progress for Tools, and when it ends, the new

@@ -8,9 +8,10 @@
 /// Protocol (one line each way, the worker answers "ready" first):
 ///   clip <path>                       → ok f0 … f511 | err <message>
 ///   face <maxEdge> <edgeHint> <path>  → ok <n> {x y w h score e0 … e127}×n | err <message>
-/// Blocking I/O, meant for a worker thread (`async`), serialised by a mutex.
+/// Blocking I/O, meant for a worker thread (`async`); a few workers at once (a pool).
 module photowagon.core.vision.worker;
 
+import core.sync.condition : Condition;
 import core.sync.mutex : Mutex;
 import std.array : split;
 import std.conv : to;
@@ -29,14 +30,31 @@ struct VisionModels
 
 // ---- the parent side ---------------------------------------------------------------
 
+// A small pool: a pass works on a few photos at once (Scheduler.ordered), each request takes
+// an idle worker or starts one more — while the machine has the memory for another (a worker
+// with CLIP is about a gigabyte) — else waits for one to come free. One at least, always.
+private final class Slot
+{
+	ProcessPipes proc;
+	bool busy;
+	bool retire;   // released while busy: ends when its request is answered
+	bool warm;     // has answered: its model is loaded, the memory it takes is in use
+}
+
+private enum maxWorkers = 10;
+private enum workerMb = 1024;   // a worker with CLIP loaded, about
+
 private __gshared Mutex lock;
-private __gshared ProcessPipes proc;
-private __gshared bool up;
+private __gshared Condition freed;
+private __gshared Slot[] slots;          // live workers
+private __gshared int starting;          // being spawned (outside the lock)
+private __gshared uint releases;         // releaseVision() calls: one during a spawn retires it
 private __gshared VisionModels models;
 
 shared static this()
 {
 	lock = new Mutex;
+	freed = new Condition(lock);
 }
 
 /// Which models a worker started from now on will load.
@@ -67,7 +85,7 @@ bool isVisionUnavailable(const Exception e) pure nothrow @safe
 	return cast(const VisionUnavailable) e !is null || e.msg.startsWith(unavailableMark);
 }
 
-private void spawn()
+private ProcessPipes spawn(VisionModels m)
 {
 	// The worker is this same program. /proc/self/exe, not the path: rebuilding the binary
 	// while the app runs leaves that path "(deleted)" and every spawn failed — hundreds of
@@ -79,107 +97,221 @@ private void spawn()
 		import std.file : thisExePath;
 		immutable exe = thisExePath;
 	}
+	ProcessPipes p;
 	try
-		proc = pipeProcess([exe, "--vision-worker", models.clip, models.yunet, models.sface, "--exit-with-parent"],
+		p = pipeProcess([exe, "--vision-worker", m.clip, m.yunet, m.sface, "--exit-with-parent"],
 			Redirect.stdin | Redirect.stdout);
 	catch (Exception e)
-	{
-		up = false;
 		throw new VisionUnavailable("vision worker: " ~ e.msg);
-	}
-	auto first = proc.stdout.readln().strip;
+	auto first = p.stdout.readln().strip;
 	if (first != "ready")
 	{
-		try
-		{
-			kill(proc.pid);
-			wait(proc.pid);
-		}
-		catch (Exception)
-		{
-		}
-		up = false;
+		end(p);
 		throw new VisionUnavailable("vision worker did not start: " ~ (first.length ? first : "no answer"));
 	}
-	up = true;
+	return p;
 }
 
-/// Starts the worker now (a pass calls this first, so the load is not on its first photo).
-void startVision()
-{
-	synchronized (lock)
-		if (!up)
-			spawn();
-}
-
-/// Ends the worker: its memory goes back to the system. The next request starts another.
-void releaseVision() nothrow
+private void end(ref ProcessPipes p) nothrow
 {
 	try
-		synchronized (lock)
+	{
+		p.stdin.close();      // EOF: the worker leaves by itself …
+		import core.thread : Thread;
+		import core.time : msecs;
+		foreach (i; 0 .. 20)
 		{
-			if (!up)
+			if (tryWait(p.pid).terminated)
 				return;
-			up = false;
-			proc.stdin.close();      // EOF: the worker leaves by itself …
-			import core.thread : Thread;
-			import core.time : msecs;
-			foreach (i; 0 .. 20)
-			{
-				if (tryWait(proc.pid).terminated)
-					return;
-				Thread.sleep(50.msecs);
-			}
-			kill(proc.pid);          // … or not
-			wait(proc.pid);
+			Thread.sleep(50.msecs);
 		}
+		kill(p.pid);          // … or not
+		wait(p.pid);
+	}
 	catch (Exception)
 	{
 	}
 }
 
+/// Takes an idle worker, or starts one more when there is room, or waits for one.
+private Slot take()
+{
+	VisionModels m;
+	uint gen;
+	synchronized (lock)
+	{
+		for (;;)
+		{
+			foreach (s; slots)
+				if (!s.busy && !s.retire)
+				{
+					s.busy = true;
+					return s;
+				}
+			immutable n = cast(int) slots.length + starting;
+			int cold = starting;   // started, their model not loaded yet: not in MemAvailable
+			foreach (x; slots)
+				if (!x.warm)
+					cold++;
+			if (n == 0 || (n < maxWorkers && roomForAnother(cold)))
+				break;
+			freed.wait();
+		}
+		starting++;
+		m = models;
+		gen = releases;
+	}
+	ProcessPipes p;
+	scope (failure)
+		synchronized (lock)
+		{
+			starting--;
+			freed.notifyAll();
+		}
+	p = spawn(m);   // (the model loads on the first request; this is only the process)
+	auto s = new Slot;
+	s.proc = p;
+	s.busy = true;
+	synchronized (lock)
+	{
+		starting--;
+		s.retire = releases != gen;   // released while it started: answers this one, then ends
+		slots ~= s;
+	}
+	return s;
+}
+
+/// Hands a worker back; a dead one (or one released meanwhile) is ended and dropped.
+private void give(Slot s, bool dead, bool answered = false) nothrow
+{
+	bool drop;
+	try
+		synchronized (lock)
+		{
+			s.busy = false;
+			if (answered)
+				s.warm = true;
+			drop = dead || s.retire;
+			if (drop)
+			{
+				import std.algorithm : remove;
+				foreach (i, x; slots)
+					if (x is s)
+					{
+						slots = slots.remove(i);
+						break;
+					}
+			}
+			freed.notifyAll();
+		}
+	catch (Exception)
+	{
+	}
+	if (drop)
+		end(s.proc);
+}
+
+/// Room for one more worker: what it and the ones still loading will take, and a fifth of
+/// the machine (at least 3 GB) left over for everything else.
+private bool roomForAnother(int cold) nothrow
+{
+	import photowagon.core.jobs.scheduler : memAvailableMb, memTotalMb;
+
+	immutable avail = memAvailableMb(), total = memTotalMb();
+	if (avail <= 0 || total <= 0)
+		return false;
+	immutable reserve = total / 5 > 3072 ? total / 5 : 3072;
+	return avail >= reserve + workerMb * (cold + 1);
+}
+
+/// Starts a worker now (a pass calls this first, so the load is not on its first photo).
+void startVision()
+{
+	give(take(), false);
+}
+
+/// Ends the workers: their memory goes back to the system. The next request starts another;
+/// a worker still answering someone ends when it has.
+void releaseVision() nothrow
+{
+	Slot[] idle;
+	try
+		synchronized (lock)
+		{
+			releases++;
+			foreach (s; slots)
+				if (s.busy)
+					s.retire = true;
+				else
+					idle ~= s;
+			Slot[] keep;
+			foreach (s; slots)
+				if (s.busy)
+					keep ~= s;
+			slots = keep;
+			freed.notifyAll();
+		}
+	catch (Exception)
+	{
+	}
+	foreach (s; idle)
+		end(s.proc);
+}
+
+/// Workers running now (tests, the log).
+int visionWorkers() nothrow
+{
+	try
+		synchronized (lock)
+			return cast(int) slots.length;
+	catch (Exception)
+		return 0;
+}
+
 /// One request, one answer; a dead worker is replaced once. Throws on "err".
 string visionRequest(string line)
 {
-	synchronized (lock)
+	auto s = take();
+	string answer;
+	try
 	{
-		if (!up)
-			spawn();
-		string answer;
+		s.proc.stdin.writeln(line);
+		s.proc.stdin.flush();
+		answer = s.proc.stdout.readln().strip;
+	}
+	catch (Exception)
+		answer = null;
+	if (answer is null || !answer.length)
+	{
+		// the worker died (a bad file, or its own memory guard): once more with a fresh one
+		give(s, true);
+		s = take();
 		try
 		{
-			proc.stdin.writeln(line);
-			proc.stdin.flush();
-			answer = proc.stdout.readln().strip;
+			s.proc.stdin.writeln(line);
+			s.proc.stdin.flush();
+			answer = s.proc.stdout.readln().strip;
 		}
 		catch (Exception)
 			answer = null;
 		if (answer is null || !answer.length)
 		{
-			// the worker died (a bad file, or its own memory guard): once more with a fresh one
-			up = false;
-			try
-				wait(proc.pid);
-			catch (Exception)
-			{
-			}
-			spawn();
-			proc.stdin.writeln(line);
-			proc.stdin.flush();
-			answer = proc.stdout.readln().strip;
+			give(s, true);
+			throw new Exception("vision worker: no answer to '" ~ line ~ "'");
 		}
-		if (answer.startsWith("err "))
-		{
-			// a model the worker cannot load is this machine's problem, not the photo's: the
-			// pass must stop, not mark every photo done ("cannot load the face models", …)
-			if (answer[4 .. $].startsWith("cannot load the "))
-				throw new VisionUnavailable(answer[4 .. $]);
-			throw new Exception(answer[4 .. $]);
-		}
-		if (!answer.startsWith("ok"))
-			throw new Exception("vision worker: bad answer to '" ~ line ~ "'");
-		return answer.length > 3 ? answer[3 .. $] : "";
 	}
+	give(s, false, true);
+	if (answer.startsWith("err "))
+	{
+		// a model the worker cannot load is this machine's problem, not the photo's: the
+		// pass must stop, not mark every photo done ("cannot load the face models", …)
+		if (answer[4 .. $].startsWith("cannot load the "))
+			throw new VisionUnavailable(answer[4 .. $]);
+		throw new Exception(answer[4 .. $]);
+	}
+	if (!answer.startsWith("ok"))
+		throw new Exception("vision worker: bad answer to '" ~ line ~ "'");
+	return answer.length > 3 ? answer[3 .. $] : "";
 }
 
 // ---- the child --------------------------------------------------------------------

@@ -43,7 +43,7 @@ struct Config
 	int workers = 4;
 	/// native operations (decodes, models, renders) allowed at once; background passes
 	/// also run one at a time (core/jobs/scheduler.d)
-	int heavyJobs = 2;
+	int heavyJobs = 0;   // 0 = by the machine (Scheduler.limit)
 	/// longest edge of a thumbnail in pixels
 	int thumbSize = 512;
 	bool verbose = false;

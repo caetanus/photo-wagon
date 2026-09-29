@@ -325,11 +325,18 @@ final class FaceService
 		return running;
 	}
 
+	/// After a run (or at once when faces are off): the next stage of the enrichment pipeline.
+	void delegate() onDone;
+
 	/// Scans whatever is unscanned. Cheap to call often.
 	void start()
 	{
 		if (!available)
+		{
+			if (onDone)
+				onDone();
 			return;
+		}
 		if (running)
 		{
 			again = true;
@@ -345,6 +352,8 @@ final class FaceService
 				run();
 			}
 			while (again);
+			if (onDone)
+				onDone();
 		});
 	}
 
@@ -376,6 +385,14 @@ final class FaceService
 		claimed.remove(id);
 	}
 
+	/// What the heavy half of a photo's scan brought back: the detections and their crops.
+	private static struct Scanned
+	{
+		bool skipped;         // a device's faces arrived (or are arriving) for it
+		immutable(FaceHit)[] hits;
+		string[] thumbs;      // a crop per hit (null for the ones not kept)
+	}
+
 	private void runPass()
 	{
 		import photowagon.core.vision.worker : isVisionUnavailable;
@@ -383,35 +400,57 @@ final class FaceService
 		auto ids = faces.unscannedPhotos();
 		if (ids.length == 0)
 			return;
-		logInfo("faces: scanning %s photos", ids.length);
+		logInfo("faces: scanning %s photos, up to %s at once", ids.length, jobs.heavyPermits);
 		auto started = MonoTime.currTime;
 		auto lastReport = started;
 		long done, found;
-		foreach (id; ids)
-		{
-			jobs.yieldLane();   // a photo that just arrived goes in first
+		bool[long] mine;   // claimed here: all given back however the pass ends
+		scope (exit)
+			foreach (id; mine.byKey)
+				release(id);
+		// detection + crops a few photos at once; storing + clustering one by one, in order
+		jobs.ordered!(long, Scanned)(ids, (long id) {
+			Scanned r;
 			if (!claim(id))
 			{
-				done++;   // a device's faces arrived (or are arriving) for it
-				continue;
+				r.skipped = true;
+				return r;
+			}
+			mine[id] = true;
+			r.hits = detect(id, r.thumbs);
+			return r;
+		}, (long id, Scanned r, Exception e) {
+			jobs.yieldLane();   // a photo that just arrived goes in first
+			if (r.skipped)
+			{
+				done++;
+				return true;
 			}
 			scope (exit)
-				release(id);
-			try
-				found += scanPhoto(id);
-			catch (InterruptException)
-				throw new InterruptException;
-			catch (Exception e)
 			{
+				release(id);
+				mine.remove(id);
+			}
+			if (e !is null)
+			{
+				if (cast(InterruptException) e)
+					throw new InterruptException;
 				if (isVisionUnavailable(e))
 				{
 					// no worker at all: nothing about THIS photo — stop, mark nothing, the next
 					// pass takes them all again
 					logWarn("faces: pass stopped, %s photos left for later: %s", ids.length - done, e.msg);
-					break;   // (what was found so far is still grouped and announced below)
+					return false;   // (what was found so far is still grouped and announced below)
 				}
 				logWarn("faces: photo %s: %s", id, e.msg);
 			}
+			else
+				try
+					found += ingestHits(id, r.hits, r.thumbs);
+				catch (InterruptException)
+					throw new InterruptException;
+				catch (Exception e2)
+					logWarn("faces: photo %s: %s", id, e2.msg);
 			faces.markScanned(id);
 			done++;
 			if (MonoTime.currTime - lastReport > 300.msecs || done == ids.length)
@@ -421,7 +460,8 @@ final class FaceService
 			}
 			if (found && done % 20 == 0)
 				events.emit("people.changed", JSONValue.emptyObject);
-		}
+			return true;
+		});
 		mergeClose();
 		faces.pruneEmptyPersons();
 		immutable secs = (MonoTime.currTime - started).total!"msecs" / 1000.0;
@@ -430,36 +470,57 @@ final class FaceService
 		events.emit("people.changed", JSONValue.emptyObject);
 	}
 
-	private long scanPhoto(long id)
+	/// The heavy half of a scan (it may run beside others): detection, then a crop for each
+	/// face that will be kept.
+	private immutable(FaceHit)[] detect(long id, out string[] thumbs)
 	{
 		auto photo = photos.get(id);
 		if (photo.path is null)
-			return 0;
+			return null;
 		import std.algorithm : max;
 		immutable edgeHint = max(photo.width, photo.height);
 		auto hits = jobs.background({ return async(&detectFaces, photo.path, edgeHint).getResult(); });
-		return ingestHits(id, hits);
+		thumbs = new string[hits.length];
+		foreach (i, ref hit; hits)
+			if (kept(hit))
+				thumbs[i] = cropOf(photo.path, hit);
+		return hits;
+	}
+
+	private bool kept(const ref FaceHit hit) const
+	{
+		return !(hit.w < 0.01 || hit.h < 0.01 || hit.score < keepScore);
+	}
+
+	private string cropOf(string path, const ref FaceHit hit)
+	{
+		try
+			return jobs.background({ return async(&renderFaceCrop, path, cfg.storeDir, cast(double) hit.x, cast(double) hit.y,
+					cast(double) hit.w, cast(double) hit.h, faceThumbEdge).getResult(); });
+		catch (InterruptException)
+			throw new InterruptException;
+		catch (Exception e)
+		{
+			logWarn("faces: crop failed for %s: %s", path, e.msg);
+			return null;
+		}
 	}
 
 	/// Store + cluster a photo's face hits — from local detection, or handed over by a paired
 	/// device that already ran the SAME r100 model on it. Each crop is rendered from the photo
 	/// file; the clustering into named/automatic people is identical either way.
-	private long ingestHits(long id, const(FaceHit)[] hits)
+	/// `thumbs`: the crops already rendered (the local pass), else they are rendered here.
+	private long ingestHits(long id, const(FaceHit)[] hits, const(string)[] thumbs = null)
 	{
 		auto photo = photos.get(id);
 		if (photo.path is null)
 			return 0;
 		long[] inThisPhoto; // nobody appears twice in one picture
-		foreach (ref hit; hits)
+		foreach (i, ref hit; hits)
 		{
-			if (hit.w < 0.01 || hit.h < 0.01 || hit.score < keepScore)
+			if (!kept(hit))
 				continue;
-			string thumb;
-			try
-				thumb = jobs.background({ return async(&renderFaceCrop, photo.path, cfg.storeDir, cast(double) hit.x, cast(double) hit.y,
-						cast(double) hit.w, cast(double) hit.h, faceThumbEdge).getResult(); });
-			catch (Exception e)
-				logWarn("faces: crop failed for %s: %s", photo.path, e.msg);
+			immutable thumb = thumbs.length == hits.length ? thumbs[i] : cropOf(photo.path, hit);
 			long person;
 			immutable elig = eligible(hit.w * photo.width, hit.score);
 			if (elig)

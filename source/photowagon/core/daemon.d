@@ -176,7 +176,16 @@ version (PW_NoVision) {} else private StackService stacks;
 			startTaggingWhenQuiet();
 		};
 		version (PW_NoVision) {} else scenes = new SceneService(cfg, db, photos, store, events);
-		version (PW_NoVision) {} else kinds.onDone = () { facesService.start(); scenes.start(); };   // both look only at photographs
+		// The enrichment pipeline, in the user's order: faces → places → moods → features.
+		// `kind` is a cheap prerequisite (faces and scenes look only at photographs); places by
+		// GPS are placed at index time; places by look need the CLIP embeddings the scenes/moods
+		// stage computes, so they follow it with OCR and stacks. Each stage works through its
+		// own persistent backlog (the photos not done yet), yielding to arriving photos.
+		version (PW_NoVision) {} else
+		{
+			kinds.onDone = () { facesService.start(); };
+			facesService.onDone = () { scenes.start(); };
+		}
 		// learned places: recognise where a photo was taken by how it looks (no GPS needed),
 		// once the CLIP embeddings are current — and again whenever the user names a new place
 		version (PW_NoVision) {} else

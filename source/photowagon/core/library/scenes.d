@@ -307,45 +307,53 @@ final class SceneService
 		long done, tagged;
 		if (ids.length)
 			logInfo("scenes: encoding %s photos", ids.length);
-		foreach (id; ids)
+		// encodings a few photos at once; storing + tagging one by one, in order
+		static struct Encoded
 		{
-			if (closed)
-				return;
-			jobs.yieldLane();   // a photo that just arrived goes in first
 			float[clipDim] emb;
-			bool encoded;
-			try
+		}
+
+		bool stop;
+		jobs.ordered!(long, Encoded)(ids, (long id) {
+			Encoded r;
+			if (closed)
+				throw new Exception("closing");
+			auto p = photos.get(id);
+			// the stored thumbnail: CLIP looks at 224 px anyway, and no 100 MP decode
+			immutable src = store.pathFor(p.thumbHash);
+			r.emb = jobs.background({ return async(&clipEncode, src).getResult(); });
+			return r;
+		}, (long id, Encoded r, Exception e) {
+			if (closed)
 			{
-				auto p = photos.get(id);
-				// the stored thumbnail: CLIP looks at 224 px anyway, and no 100 MP decode
-				immutable src = store.pathFor(p.thumbHash);
-				emb = jobs.background({ return async(&clipEncode, src).getResult(); });
-				encoded = true;
+				stop = true;
+				return false;
 			}
-			catch (InterruptException)
-				throw new InterruptException;
-			catch (Exception e)
+			jobs.yieldLane();   // a photo that just arrived goes in first
+			if (e !is null)
 			{
+				if (cast(InterruptException) e)
+					throw new InterruptException;
 				if (isVisionUnavailable(e))
 				{
 					// no worker at all, not a bad image: stop, mark nothing — the next pass retries
 					logWarn("scenes: pass stopped: %s", e.msg);
-					break;
+					return false;
 				}
 				logWarn("scenes: photo %s: %s", id, e.msg);
 				markFailed(id);   // an unreadable image is not retried; the zero embedding says so
 			}
-			if (encoded)
+			else
 				try
 				{
-					storeEmbedding(id, emb);
-					if (tagAuto(id, emb))
+					storeEmbedding(id, r.emb);
+					if (tagAuto(id, r.emb))
 						tagged++;
 				}
 				catch (InterruptException)
 					throw new InterruptException;
-				catch (Exception e)
-					logWarn("scenes: photo %s: %s (will be retried)", id, e.msg);
+				catch (Exception e2)
+					logWarn("scenes: photo %s: %s (will be retried)", id, e2.msg);
 			done++;
 			if (MonoTime.currTime - lastReport > 300.msecs || done == ids.length)
 			{
@@ -354,7 +362,10 @@ final class SceneService
 			}
 			if (done % 50 == 0)
 				events.emit("tags.changed", JSONValue.emptyObject);
-		}
+			return true;
+		});
+		if (stop)
+			return;
 		// 2. tags for embedded photos without them (a new vocabulary, or a group added)
 		long rescored = rescoreMissing();
 		if (done || rescored)

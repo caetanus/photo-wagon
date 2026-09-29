@@ -18,7 +18,7 @@ import core.time : MonoTime, msecs, seconds;
 
 import vibe.core.core : sleep;
 import vibe.core.log : logInfo, logDiagnostic;
-import vibe.core.sync : LocalTaskSemaphore;
+import vibe.core.sync : LocalManualEvent, createManualEvent;
 import vibe.core.task : Task;
 
 /// Lane priorities: lower runs first among the passes waiting.
@@ -34,9 +34,12 @@ enum Priority : int
 
 final class Scheduler
 {
-	private LocalTaskSemaphore permits;
 	private int foregroundActive;
-	private immutable int permitCount;
+	private immutable int fixedPermits;   // --jobs N; 0 = by the machine's resources
+	private int inUse;                    // native operations running
+	private LocalManualEvent released;    // a permit came back
+	private int cachedLimit;
+	private MonoTime limitAt;
 
 	private struct Waiter
 	{
@@ -51,10 +54,56 @@ final class Scheduler
 	private int lanePrio;
 	private Task laneOwner;   // the fiber whose pass holds the lane (a borrower while lent)
 
+	/// `heavyPermits` > 0 fixes how many native operations run at once (`--jobs N`); 0 = by
+	/// the machine: up to half its cores (2..10), fewer when memory runs short.
 	this(int heavyPermits)
 	{
-		permitCount = heavyPermits < 1 ? 1 : heavyPermits;
-		permits = new LocalTaskSemaphore(permitCount);
+		fixedPermits = heavyPermits < 0 ? 0 : heavyPermits;
+		released = createManualEvent();
+	}
+
+	/// How many native operations may run now: fixed, or from the cores and the memory
+	/// available (re-read every 2 s): 5–10 on a roomy machine, 1–2 when memory is short.
+	int limit() nothrow
+	{
+		if (fixedPermits > 0)
+			return fixedPermits;
+		immutable now = MonoTime.currTime;
+		if (cachedLimit > 0 && now - limitAt < 2.seconds)
+			return cachedLimit;
+		limitAt = now;
+		import std.parallelism : totalCPUs;
+
+		int base = totalCPUs / 2;
+		base = base < 2 ? 2 : base > 10 ? 10 : base;
+		immutable avail = memAvailableMb();
+		int lim = base;
+		if (avail > 0)
+		{
+			if (avail < 1536)
+				lim = 1;
+			else if (avail < 3072)
+				lim = base < 2 ? base : 2;
+			else if (avail < 6144)
+				lim = base < 4 ? base : 4;
+		}
+		cachedLimit = lim;
+		return lim;
+	}
+
+	private void acquire(bool user)
+	{
+		// the user's own request takes one past the limit rather than wait behind background work
+		auto c = released.emitCount;
+		while (inUse >= (user ? limit() + 1 : limit()))   // (re-read: memory may have freed, or gone)
+			c = released.wait(250.msecs, c);
+		inUse++;
+	}
+
+	private void release() nothrow
+	{
+		inUse--;
+		released.emit();
 	}
 
 	// ---- the user's requests -------------------------------------------------------
@@ -77,9 +126,9 @@ final class Scheduler
 		foregroundBegin();
 		scope (exit)
 			foregroundEnd();
-		permits.lock();
+		acquire(true);
 		scope (exit)
-			permits.unlock();
+			release();
 		return op();
 	}
 
@@ -92,9 +141,9 @@ final class Scheduler
 		auto t0 = MonoTime.currTime;
 		while (foregroundActive > 0 && MonoTime.currTime - t0 < 2.seconds)
 			sleep(10.msecs);
-		permits.lock();
+		acquire(false);
 		scope (exit)
-			permits.unlock();
+			release();
 		return op();
 	}
 
@@ -215,9 +264,62 @@ final class Scheduler
 		return waiting.length;
 	}
 
-	int heavyPermits() const
+	int heavyPermits() nothrow
 	{
-		return permitCount;
+		return limit();
+	}
+
+	/// Works through `items` a few at once: `fetch` — the heavy part, a model or a decode
+	/// through `background` — runs for up to `limit()` items at a time, each on a fiber of its
+	/// own, and `use` gets the results on the calling fiber IN ORDER (so clustering and tags
+	/// come out as if one at a time). `use` gets the exception `fetch` threw, if any, and
+	/// returning false stops: nothing more is started, and everything started is waited for
+	/// before this returns (also when the caller is interrupted).
+	void ordered(T, R)(const(T)[] items, R delegate(T) fetch, bool delegate(T, R, Exception) use)
+	{
+		import vibe.core.core : runTask;
+
+		static struct Slot
+		{
+			R value;
+			Exception err;
+			bool done;
+			Task task;
+		}
+
+		// only the window in flight is held (not a slot per item: a pass may have a million)
+		Slot*[size_t] slots;
+		auto ev = createManualEvent();
+		size_t next;   // the next item to start
+		scope (exit)
+			foreach (sl; slots.byValue)
+				sl.task.joinUninterruptible();
+		foreach (i; 0 .. items.length)
+		{
+			while (next < items.length && next - i < limit())
+			{
+				auto sl = new Slot;
+				slots[next] = sl;
+				sl.task = runTask((Slot* sl, size_t k) nothrow {
+					try
+						sl.value = fetch(items[k]);
+					catch (Exception e)
+						sl.err = e;
+					sl.done = true;
+					ev.emit();
+				}, sl, next);
+				next++;
+			}
+			auto sl = slots[i];
+			auto c = ev.emitCount;
+			while (!sl.done)
+				c = ev.wait(c);
+			slots.remove(i);
+			auto v = sl.value;
+			auto e = sl.err;
+			if (!use(items[i], v, e))
+				break;
+		}
 	}
 }
 
@@ -346,4 +448,81 @@ unittest
 	runEventLoop();
 	assert(maxInside == 1);
 	assert(order == ["faces0", "import", "faces1", "faces2", "faces-b"], order.to!string);
+}
+
+/// MemAvailable in MB (0 when unknown).
+long memAvailableMb() nothrow
+{
+	return meminfoMb("MemAvailable:");
+}
+
+/// MemTotal in MB (0 when unknown).
+long memTotalMb() nothrow
+{
+	return meminfoMb("MemTotal:");
+}
+
+private long meminfoMb(string key) nothrow
+{
+	version (linux)
+	{
+		try
+		{
+			import std.stdio : File;
+			import std.algorithm.searching : startsWith;
+			import std.string : split;
+			import std.conv : to;
+
+			foreach (line; File("/proc/meminfo").byLine)
+				if (line.startsWith(key))
+					return line.split[1].to!long / 1024;
+		}
+		catch (Exception)
+		{
+		}
+	}
+	return 0;
+}
+
+unittest
+{
+	auto s = new Scheduler(0);
+	immutable l = s.limit();
+	assert(l >= 1 && l <= 10);
+	assert(new Scheduler(3).limit() == 3);
+}
+
+unittest
+{
+	import vibe.core.core : runTask, exitEventLoop, runEventLoop, sleep;
+	import core.time : msecs;
+	import std.conv : to;
+
+	// several at once, results in order, a stop waits for what was started
+	auto s = new Scheduler(3);
+	int inside, maxInside;
+	int[] got;
+	runTask(() nothrow {
+		try
+		{
+			s.ordered!(int, int)([1, 2, 3, 4, 5, 6, 7], (int x) {
+				inside++;
+				if (inside > maxInside)
+					maxInside = inside;
+				sleep(((8 - x) * 3).msecs);   // later items finish first
+				inside--;
+				return x * 10;
+			}, (int x, int r, Exception e) {
+				got ~= r;
+				return x < 5;
+			});
+			assert(inside == 0);
+		}
+		catch (Exception e)
+			assert(false, e.msg);
+		exitEventLoop();
+	});
+	runEventLoop();
+	assert(got == [10, 20, 30, 40, 50], got.to!string);
+	assert(maxInside == 3);
 }

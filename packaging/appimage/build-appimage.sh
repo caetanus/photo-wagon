@@ -54,11 +54,14 @@ export LDAI_OUTPUT="$OUT/Photo_Wagon-$VERSION-x86_64.AppImage"
 export VERSION
 
 cd "$WORK"
+# --library: libvips pulls libfribidi, which linuxdeploy leaves to the system and a minimal
+# desktop may not have; bundled explicitly.
 linuxdeploy-x86_64.AppImage --appdir "$APPDIR" \
     --executable "$APPDIR/usr/bin/photo-wagon" \
     --desktop-file "$APPDIR/usr/share/applications/photo-wagon.desktop" \
     --icon-file "$APPDIR/usr/share/icons/hicolor/256x256/apps/photo-wagon.png" \
     --custom-apprun "$HERE/AppRun" \
+    $(for l in /usr/lib/x86_64-linux-gnu/libfribidi.so.0; do [ -e "$l" ] && echo "--library $l"; done) \
     --plugin qt
 # Qt's network stack and the app's QUIC load libssl.so.3 by name: bundle the 3.5 we built,
 # never the older system one.

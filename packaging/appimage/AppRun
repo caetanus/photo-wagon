@@ -32,8 +32,9 @@ install_self() {
     cp -f "$HERE/usr/share/icons/hicolor/scalable/apps/photo-wagon.svg" "$DATA/icons/hicolor/scalable/apps/"
     # Exec takes the path QUOTED, per the desktop-entry spec: inside the quotes " ` $ \ get a
     # backslash, and the value's own escaping then doubles every backslash. awk reads it from the
-    # environment, so nothing in the path (a space, an &) is interpreted on the way.
-    q=$(printf '%s' "$TARGET" | sed -e 's/[\\"`$]/\\&/g' -e 's/\\/\\\\/g')
+    # environment, so nothing in the path (a space, an &) is interpreted on the way; a literal %
+    # is %% (a lone one would read as a field code).
+    q=$(printf '%s' "$TARGET" | sed -e 's/[\\"`$]/\\&/g' -e 's/\\/\\\\/g' -e 's/%/%%/g')
     EXEC_LINE="Exec=\"$q\"" awk '/^Exec=/ { print ENVIRON["EXEC_LINE"]; next } { print }' \
         "$HERE/usr/share/applications/photo-wagon.desktop" > "$DATA/applications/photo-wagon.desktop"
     command -v update-desktop-database >/dev/null && update-desktop-database -q "$DATA/applications" 2>/dev/null

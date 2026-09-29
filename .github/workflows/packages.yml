@@ -1,0 +1,346 @@
+# Linux packages: one per distribution flavour, each built in that flavour's own container
+# against its own Qt (the DSide binding is generated from the installed Qt's headers), then
+# installed into a FRESH container of the same flavour and started — the UI has to load and
+# photograph itself offscreen. Plus an AppImage (Qt from qt.io, bundled) and the Arch package
+# (the AUR PKGBUILD, built with makepkg), and the phone's APK. A v* tag publishes everything as a GitHub release and,
+# when the AUR_SSH_KEY secret is set, pushes the PKGBUILD to the AUR.
+name: Packages
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  meta:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          base=$(sed -n 's/^enum APP_VERSION = "\(.*\)";/\1/p' source/photowagon/ui/app.d)
+          case "$GITHUB_REF" in
+            refs/tags/v*) v=${GITHUB_REF#refs/tags/v} ;;
+            *) v="$base~git$(date -u +%Y%m%d).$(git rev-parse --short HEAD)" ;;
+          esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Version: $v"
+
+  linux:
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { flavour: ubuntu-lts,     image: "ubuntu:latest" }
+          - { flavour: ubuntu-current, image: "ubuntu:rolling" }
+          - { flavour: debian,         image: "debian:stable" }
+          - { flavour: fedora,         image: "fedora:latest" }
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    timeout-minutes: 300
+    steps:
+      - name: Tools the checkout needs
+        run: |
+          . /etc/os-release
+          case "$ID" in
+            fedora) dnf install -y -q git tar xz zstd ;;
+            *) apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git ca-certificates zstd ;;
+          esac
+      # While Ubuntu's current release IS its LTS (April to October), the LTS job covers it.
+      - name: Is this flavour distinct?
+        id: skip
+        run: |
+          . /etc/os-release
+          if [ "${{ matrix.flavour }}" = ubuntu-current ] && echo "$VERSION" | grep -q LTS; then
+            echo "Ubuntu $VERSION_ID is both current and LTS — built by the ubuntu-lts job."
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+          echo "key=$ID-$VERSION_ID" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.skip.outputs.skip != '1'
+        with: { path: photo-wagon }
+      - name: Sibling repositories
+        if: steps.skip.outputs.skip != '1'
+        run: |
+          git config --global --add safe.directory '*'
+          sh photo-wagon/packaging/fetch-sources.sh
+          echo "DSIDE_SHA=$(git -C qt-dlang-gen rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Cache the private dependencies (LDC, OpenCV 5, ngtcp2)
+        if: steps.skip.outputs.skip != '1'
+        uses: actions/cache@v4
+        with:
+          path: /opt/pw-deps
+          key: deps-${{ steps.skip.outputs.key }}-${{ hashFiles('photo-wagon/packaging/versions.env', 'photo-wagon/packaging/linux/build.sh') }}
+      - name: Cache the DSide binding
+        if: steps.skip.outputs.skip != '1'
+        uses: actions/cache@v4
+        with:
+          path: |
+            qt-dlang-gen/.build
+            qt-dlang-gen/generated
+            qt-dlang-gen/xiboca/xiboca
+          key: dside-${{ steps.skip.outputs.key }}-${{ env.DSIDE_SHA }}
+      - name: Build
+        if: steps.skip.outputs.skip != '1'
+        run: sh photo-wagon/packaging/linux/build.sh "$PWD/stage/root"
+      - name: Package
+        if: steps.skip.outputs.skip != '1'
+        run: sh photo-wagon/packaging/linux/package.sh "$PWD/stage/root" "${{ needs.meta.outputs.version }}" "$PWD/dist"
+      - uses: actions/upload-artifact@v4
+        if: steps.skip.outputs.skip != '1'
+        with:
+          name: pkg-${{ matrix.flavour }}
+          path: dist/*
+          if-no-files-found: error
+
+  # Each package installs into a FRESH container of its flavour (with network: the package
+  # manager resolves every declared dependency), then the app runs in that image with
+  # --network=none — see packaging/linux/smoke.sh for why the run is offline.
+  linux-smoke:
+    needs: [linux, arch]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { flavour: ubuntu-lts,     image: "ubuntu:latest",    pkg: "*.deb" }
+          - { flavour: ubuntu-current, image: "ubuntu:rolling",   pkg: "*.deb" }
+          - { flavour: debian,         image: "debian:stable",    pkg: "*.deb" }
+          - { flavour: fedora,         image: "fedora:latest",    pkg: "*.rpm" }
+          - { flavour: arch,           image: "archlinux:latest", pkg: "*.pkg.tar.zst" }
+    runs-on: ubuntu-24.04
+    steps:
+      - id: skip
+        run: |
+          if [ "${{ matrix.flavour }}" = ubuntu-current ] \
+             && docker run --rm "${{ matrix.image }}" grep -q '^VERSION=.*LTS' /etc/os-release; then
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.skip.outputs.skip != '1'
+        with: { sparse-checkout: packaging }
+      - uses: actions/download-artifact@v4
+        if: steps.skip.outputs.skip != '1'
+        with: { name: "pkg-${{ matrix.flavour }}", path: dist }
+      - name: Install into a fresh ${{ matrix.image }}, then start the app offline
+        if: steps.skip.outputs.skip != '1'
+        run: |
+          f=$(cd dist && ls ${{ matrix.pkg }} | head -1)
+          docker run --name inst -v "$PWD:/w" "${{ matrix.image }}" sh /w/packaging/linux/smoke.sh install "/w/dist/$f"
+          docker commit inst pw-smoke >/dev/null
+          docker run --rm --network=none -v "$PWD:/w" pw-smoke sh /w/packaging/linux/smoke.sh run "/w/shot-${{ matrix.flavour }}.png"
+      - uses: actions/upload-artifact@v4
+        if: steps.skip.outputs.skip != '1'
+        with: { name: "shot-${{ matrix.flavour }}", path: "shot-*.png" }
+
+  appimage:
+    needs: meta
+    runs-on: ubuntu-24.04
+    container: ubuntu:24.04
+    timeout-minutes: 300
+    steps:
+      - run: apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git ca-certificates zstd
+      - uses: actions/checkout@v4
+        with: { path: photo-wagon }
+      - name: Sibling repositories
+        run: |
+          git config --global --add safe.directory '*'
+          sh photo-wagon/packaging/fetch-sources.sh
+          echo "DSIDE_SHA=$(git -C qt-dlang-gen rev-parse HEAD)" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: /opt/pw-deps
+          key: deps-appimage-${{ hashFiles('photo-wagon/packaging/versions.env', 'photo-wagon/packaging/linux/build.sh', 'photo-wagon/packaging/appimage/build-appimage.sh') }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            qt-dlang-gen/.build
+            qt-dlang-gen/generated
+            qt-dlang-gen/xiboca/xiboca
+          key: dside-appimage-${{ env.DSIDE_SHA }}
+      - name: Build the AppImage
+        run: sh photo-wagon/packaging/appimage/build-appimage.sh "${{ needs.meta.outputs.version }}" "$PWD/dist"
+      - uses: actions/upload-artifact@v4
+        with: { name: pkg-appimage, path: dist/*.AppImage, if-no-files-found: error }
+
+  appimage-smoke:
+    needs: appimage
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:24.04", "debian:stable", "fedora:latest"]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: pkg-appimage, path: dist }
+      - name: Run it offline on ${{ matrix.image }} (it installs itself into ~/.local first)
+        run: |
+          chmod +x dist/*.AppImage
+          cat > run.sh <<'EOF'
+          set -eu
+          export HOME=/tmp/h APPIMAGE_EXTRACT_AND_RUN=1
+          mkdir -p "$HOME"
+          # every library the image still expects from the system, listed at once
+          cd /tmp && /w/dist/*.AppImage --appimage-extract >/dev/null && cd - >/dev/null
+          missing=$(LD_LIBRARY_PATH=/tmp/squashfs-root/usr/lib ldd /tmp/squashfs-root/usr/bin/photo-wagon | grep 'not found' || true)
+          [ -z "$missing" ] || { echo "AppImage: libraries the system lacks:"; echo "$missing"; exit 1; }
+          QT_FORCE_STDERR_LOGGING=1 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software PW_SHOT=/w/shot.png \
+            timeout 180 /w/dist/*.AppImage --data "$HOME/library"
+          test -s /w/shot.png
+          test -x "$HOME/.local/bin/photo-wagon"
+          test -f "$HOME/.local/share/applications/photo-wagon.desktop"
+          test -f "$HOME/.local/share/icons/hicolor/256x256/apps/photo-wagon.png"
+          . /etc/os-release; echo "AppImage ok on $PRETTY_NAME"
+          EOF
+          # the base an AppImage leaves to the system — what every desktop has (linuxdeploy's
+          # excludelist: GL/EGL, fontconfig, freetype, harfbuzz, X11/xcb, glib, asound, gbm, com_err, gpg-error)
+          docker run --name inst "${{ matrix.image }}" sh -c '. /etc/os-release; case "$ID" in
+            fedora) dnf install -y -q mesa-libEGL mesa-libGL mesa-libgbm fontconfig freetype harfbuzz \
+                      libxkbcommon libxkbcommon-x11 libX11 libX11-xcb libxcb libdrm glib2 alsa-lib libcom_err libgpg-error dejavu-sans-fonts ;;
+            *) apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libegl1 libgl1 libgbm1 \
+                 libfontconfig1 libfreetype6 libharfbuzz0b libxkbcommon0 libxkbcommon-x11-0 libx11-6 libx11-xcb1 \
+                 libxcb1 libdrm2 libglib2.0-0 libasound2 libcom-err2 libgpg-error0 fonts-dejavu-core || apt-get install -y -qq libegl1 libgl1 libgbm1 \
+                 libfontconfig1 libfreetype6 libharfbuzz0b libxkbcommon0 libxkbcommon-x11-0 libx11-6 libx11-xcb1 \
+                 libxcb1 libdrm2 libglib2.0-0t64 libasound2t64 libcom-err2 libgpg-error0 fonts-dejavu-core ;;
+          esac'
+          docker commit inst pw-smoke >/dev/null
+          docker run --rm --network=none -v "$PWD:/w" pw-smoke sh /w/run.sh
+
+  arch:
+    needs: meta
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    timeout-minutes: 300
+    steps:
+      - run: pacman -Syu --noconfirm --needed git base-devel sudo
+      - uses: actions/checkout@v4
+        with: { path: photo-wagon }
+      - name: Sibling repositories and the PKGBUILD for exactly these commits
+        run: |
+          git config --global --add safe.directory '*'
+          sh photo-wagon/packaging/fetch-sources.sh
+          pkgver=$(echo "${{ needs.meta.outputs.version }}" | tr '~-' '._')
+          sh photo-wagon/packaging/arch/make-pkgbuild.sh "$pkgver" "$PWD/aur"
+      - name: makepkg (as an unprivileged builder, as the AUR does)
+        run: |
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+          chown -R builder aur
+          cd aur
+          sudo -u builder makepkg --syncdeps --noconfirm
+          sudo -u builder makepkg --printsrcinfo > .SRCINFO
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-arch
+          path: |
+            aur/PKGBUILD
+            aur/.SRCINFO
+            aur/photo-wagon-*.pkg.tar.zst
+          include-hidden-files: true
+          if-no-files-found: error
+
+  apk:
+    needs: meta
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: photo-wagon }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - name: Room and tools
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq autoconf automake libtool pkg-config clang libclang-dev llvm-dev
+      - name: Sibling repositories
+        run: |
+          sh photo-wagon/packaging/fetch-sources.sh
+          echo "DSIDE_SHA=$(git -C qt-dlang-gen rev-parse HEAD)" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: ~/pw-android
+          key: android-${{ hashFiles('photo-wagon/packaging/android/build-apk.sh', 'photo-wagon/packaging/versions.env', 'photo-wagon/tools/mlphone/convert.sh') }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            qt-dlang-gen/.build/qt-6.11-android-arm64-cxx-quick
+            qt-dlang-gen/generated/qt-6.11-android-arm64
+          key: dside-android-${{ env.DSIDE_SHA }}
+      # The APK is signed with the same key as the app already installed on the phones, so a
+      # release installs as an update. androiddeployqt's gradle build signs debug builds with
+      # ~/.android/debug.keystore; the secret puts that key there. A tag without it fails.
+      - name: The signing key
+        env:
+          ANDROID_SIGNING_KEYSTORE: ${{ secrets.ANDROID_SIGNING_KEYSTORE }}
+        run: |
+          if [ -z "$ANDROID_SIGNING_KEYSTORE" ]; then
+            case "$GITHUB_REF" in
+              refs/tags/v*) echo "::error::ANDROID_SIGNING_KEYSTORE is not set; a release APK needs the persistent key"; exit 1 ;;
+            esac
+            echo "::warning::ANDROID_SIGNING_KEYSTORE is not set; this APK is signed with a throwaway key"
+            exit 0
+          fi
+          mkdir -p ~/.android
+          echo "$ANDROID_SIGNING_KEYSTORE" | base64 -d > ~/.android/debug.keystore
+          echo "EXPECT_CERT=6242a804c6d93759f27e0bc769795bf1abfc346725850337e09c3d4259318de6" >> "$GITHUB_ENV"
+      - name: Build the APK
+        run: bash photo-wagon/packaging/android/build-apk.sh "$PWD/dist"
+      - name: Check its signature
+        if: env.EXPECT_CERT != ''
+        run: |
+          got=$("$ANDROID_SDK_ROOT"/build-tools/36.0.0/apksigner verify --print-certs dist/photo-wagon-mobile-debug.apk \
+                | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          [ "$got" = "$EXPECT_CERT" ] || { echo "::error::APK signed by $got, expected $EXPECT_CERT"; exit 1; }
+          echo "APK signed by the release key ($got)"
+      - name: Name it
+        run: mv dist/photo-wagon-mobile-debug.apk "dist/photo-wagon-${{ needs.meta.outputs.version }}.apk"
+      - uses: actions/upload-artifact@v4
+        with: { name: pkg-apk, path: dist/*.apk, if-no-files-found: error }
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux-smoke, appimage-smoke, apk, meta]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { pattern: "pkg-*", path: dist, merge-multiple: true }
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes \
+            dist/*.deb dist/*.rpm dist/*.AppImage dist/*.pkg.tar.zst dist/PKGBUILD dist/*.apk
+      - name: AUR
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        run: |
+          if [ -z "$AUR_SSH_KEY" ]; then
+            echo "::warning::AUR_SSH_KEY is not set; the PKGBUILD is in the release artifacts but was not pushed to the AUR."
+            exit 0
+          fi
+          mkdir -p ~/.ssh && echo "$AUR_SSH_KEY" > ~/.ssh/aur && chmod 600 ~/.ssh/aur
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur"
+          git clone ssh://aur@aur.archlinux.org/photo-wagon.git aur-repo
+          cp dist/PKGBUILD dist/.SRCINFO aur-repo/
+          cd aur-repo
+          git config user.name "Marcelo A Caetano"
+          git config user.email "rockristao@gmail.com"
+          git add PKGBUILD .SRCINFO
+          git commit -m "photo-wagon ${GITHUB_REF_NAME#v}"
+          git push origin HEAD:master

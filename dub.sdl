@@ -118,6 +118,12 @@ configuration "hsprobe" {
 		"source/photowagon/core/api/search_api.d"
 }
 
+// The release packages (packaging/linux/build.sh): optimized, but asserts and bounds checks
+// stay on — a failed check is a clean abort with a message, never a silent corruption.
+buildType "package" {
+	buildOptions "optimize" "inline"
+}
+
 configuration "unittest" {
 	targetType "executable"
 	targetName "photo-wagon-test"

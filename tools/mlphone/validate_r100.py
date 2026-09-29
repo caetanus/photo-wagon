@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # Validate the r100 TFLite conversion against the ONNX reference: feed the SAME random
 # 112x112 RGB (0-255) to both, L2-normalise the 512-d output, compare cosine. ~1.0 = faithful.
-import sys, glob, numpy as np, onnxruntime as ort, tensorflow as tf
+import os, sys, glob, numpy as np, onnxruntime as ort, tensorflow as tf
 
-ONNX = "models/arcfaceresnet100-8.onnx"
+ONNX = os.environ.get("R100_ONNX", "models/arcfaceresnet100-8.onnx")
 tfl_glob = sys.argv[1] if len(sys.argv) > 1 else "models/tflite/r100/*float32*.tflite"
 tfl_path = sorted(glob.glob(tfl_glob))[0]
 print("tflite:", tfl_path)
@@ -29,3 +29,4 @@ cos = float(onnx_out @ tfl_out)
 print(f"input shape onnx=NCHW(1,3,112,112) tflite={inp['shape'].tolist()} dtype={inp['dtype']}")
 print(f"dim: onnx={onnx_out.shape[0]} tflite={tfl_out.shape[0]}")
 print(f"COSINE onnx-vs-tflite = {cos:.6f}   {'PASS' if cos > 0.999 else 'CHECK'}")
+sys.exit(0 if cos > 0.999 else 1)

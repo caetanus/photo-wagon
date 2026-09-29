@@ -1,0 +1,64 @@
+#!/bin/sh
+# Photo Wagon AppImage entry point.
+#
+# Run from anywhere, the AppImage installs itself for the current user — the image into
+# ~/.local/bin/photo-wagon, the launcher into ~/.local/share/applications, the icons into
+# ~/.local/share/icons — and then starts the app. A newer AppImage replaces the installed one
+# the first time it runs. PW_NO_SELF_INSTALL=1 skips that.
+#
+#   Photo_Wagon-x86_64.AppImage [args]      install/update, then run
+#   … --install | --uninstall               just that
+#   … --fetch-models                        download the local AI models (~870 MB)
+HERE=$(dirname "$(readlink -f "$0")")
+BIN_DIR="$HOME/.local/bin"
+DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
+TARGET="$BIN_DIR/photo-wagon"
+STAMP="$DATA/photowagon/appimage-build-id"
+BUILD_ID=$(cat "$HERE/usr/share/photo-wagon/build-id" 2>/dev/null)
+
+install_self() {
+    [ -n "$APPIMAGE" ] || { echo "photo-wagon: --install works from the AppImage file" >&2; return 1; }
+    mkdir -p "$BIN_DIR" "$DATA/applications" "$DATA/photowagon"
+    if [ "$(readlink -f "$APPIMAGE")" != "$(readlink -f "$TARGET")" ]; then
+        cp -f "$APPIMAGE" "$TARGET.new" && chmod 755 "$TARGET.new" && mv -f "$TARGET.new" "$TARGET" || return 1
+    fi
+    cp -f "$HERE/usr/bin/photo-wagon-fetch-models" "$BIN_DIR/photo-wagon-fetch-models"
+    chmod 755 "$BIN_DIR/photo-wagon-fetch-models"
+    for s in 48 128 256 512; do
+        mkdir -p "$DATA/icons/hicolor/${s}x${s}/apps"
+        cp -f "$HERE/usr/share/icons/hicolor/${s}x${s}/apps/photo-wagon.png" "$DATA/icons/hicolor/${s}x${s}/apps/"
+    done
+    mkdir -p "$DATA/icons/hicolor/scalable/apps"
+    cp -f "$HERE/usr/share/icons/hicolor/scalable/apps/photo-wagon.svg" "$DATA/icons/hicolor/scalable/apps/"
+    # Exec takes the path QUOTED, per the desktop-entry spec: inside the quotes " ` $ \ get a
+    # backslash, and the value's own escaping then doubles every backslash. awk reads it from the
+    # environment, so nothing in the path (a space, an &) is interpreted on the way; a literal %
+    # is %% (a lone one would read as a field code).
+    q=$(printf '%s' "$TARGET" | sed -e 's/[\\"`$]/\\&/g' -e 's/\\/\\\\/g' -e 's/%/%%/g')
+    EXEC_LINE="Exec=\"$q\"" awk '/^Exec=/ { print ENVIRON["EXEC_LINE"]; next } { print }' \
+        "$HERE/usr/share/applications/photo-wagon.desktop" > "$DATA/applications/photo-wagon.desktop"
+    command -v update-desktop-database >/dev/null && update-desktop-database -q "$DATA/applications" 2>/dev/null
+    command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -t "$DATA/icons/hicolor" 2>/dev/null
+    echo "$BUILD_ID" > "$STAMP"
+    echo "photo-wagon: installed in $TARGET (launcher and icons under $DATA)" >&2
+}
+
+uninstall_self() {
+    rm -f "$TARGET" "$BIN_DIR/photo-wagon-fetch-models" "$DATA/applications/photo-wagon.desktop" "$STAMP"
+    rm -f "$DATA"/icons/hicolor/*/apps/photo-wagon.png "$DATA/icons/hicolor/scalable/apps/photo-wagon.svg"
+    command -v update-desktop-database >/dev/null && update-desktop-database -q "$DATA/applications" 2>/dev/null
+    echo "photo-wagon: removed (your library and photos are untouched)" >&2
+}
+
+case "${1:-}" in
+    --install) install_self; exit $? ;;
+    --uninstall) uninstall_self; exit 0 ;;
+    --fetch-models) shift; exec "$HERE/usr/bin/photo-wagon-fetch-models" "$@" ;;
+esac
+
+if [ -n "$APPIMAGE" ] && [ -z "${PW_NO_SELF_INSTALL:-}" ] \
+    && { [ ! -x "$TARGET" ] || [ "$(cat "$STAMP" 2>/dev/null)" != "$BUILD_ID" ]; }; then
+    install_self || echo "photo-wagon: could not install into $BIN_DIR; running from here" >&2
+fi
+
+exec "$HERE/usr/bin/photo-wagon" "$@"

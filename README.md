@@ -115,8 +115,38 @@ debugging.
 Photo Wagon is in **active development** and already a daily driver for its author:
 a working library, editor, on-device analysis, phone sync, and computer-to-computer
 mirroring. Linux is the priority; the Qt + D foundation keeps other platforms within
-reach. Packaging and one-command installs are still on the way — today the build
-expects a few sibling repositories (below).
+reach.
+
+## Install
+
+Every [release](https://github.com/caetanus/photo-wagon/releases) carries a package for
+each supported system. The distribution packages are built against that system's own Qt;
+the AppImage brings its own:
+
+| System | File |
+| --- | --- |
+| Ubuntu (current LTS, and the current release when it differs) | `photo-wagon_…~ubuntu<version>_amd64.deb` |
+| Debian stable | `photo-wagon_…~debian<version>_amd64.deb` |
+| Fedora | `photo-wagon-….fedora<version>.x86_64.rpm` |
+| Arch Linux | `photo-wagon-…-x86_64.pkg.tar.zst`, and the PKGBUILD that builds it |
+| Other x86_64 glibc distributions as new as Ubuntu 24.04 | `Photo_Wagon-…-x86_64.AppImage` — run it once and it installs itself into `~/.local` (launcher and icons included); `--uninstall` removes it |
+| Android | `photo-wagon-….apk` |
+
+```sh
+sudo apt install ./photo-wagon_*.deb      # Ubuntu, Debian
+sudo dnf install ./photo-wagon-*.rpm      # Fedora
+sudo pacman -U photo-wagon-*.pkg.tar.zst  # Arch
+```
+
+Then download the local AI models once (about 870 MB, checked against their published
+hashes; the AppImage does it with `--fetch-models`):
+
+```sh
+photo-wagon-fetch-models
+```
+
+The library, editing, and text search work without them; faces, scenes, and search by
+meaning need them.
 
 ## Build and run
 

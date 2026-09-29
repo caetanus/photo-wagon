@@ -22,15 +22,15 @@ QT_ANDROID=${QT_ANDROID:-$HOME/Qt/6.11.1/$KIT}
 NDK=${NDK:-/opt/android-sdk/ndk/27.2.12479018}
 NDK_BIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
 API=${API:-35}
-CONF=$HERE/ldc2-android.conf
+CONF=${LDC_CONF:-$HERE/ldc2-android.conf}
 # the Android LDC is pinned to 1.42 (its device runtime); the host's PATH ldc2 may be newer
 # and fails on the 1.42 imports ("LDC LLVM version not supported") — as build-android.sh does
 LDC=${LDC:-$HOME/lab/android-d/ldc2-1.42.0-linux-x86_64/bin/ldc2}
-SPEC=$HERE/spec_cxx_quick_android.json
+SPEC=${SPEC:-$HERE/spec_cxx_quick_android.json}
 GEN=$DSIDE/generated/qt-6.11-android-arm64/cxx-quick
 BUILD=$DSIDE/.build/qt-6.11-android-$ABI-cxx-quick
 MODS="Qt6Quick Qt6QmlModels Qt6Qml Qt6Gui Qt6Core"
-export PKG_CONFIG_PATH=$HERE/$PC
+export PKG_CONFIG_PATH=${PKGCONF_DIR:-$HERE/$PC}
 
 generate() {
     (cd "$DSIDE" && ./xiboca/xiboca "$SPEC")

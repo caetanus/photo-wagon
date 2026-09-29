@@ -116,6 +116,9 @@ dub_packages() {
     for p in eventcore@0.9.39 vibe-core@2.14.0 vibe-container@1.7.1 taggedalgebraic@1.0.1 \
              stdx-allocator@2.77.5 libsodiumd@0.2.0+1.0.18 openssl@3.4.0; do
         dub fetch --cache=user "$p" >/dev/null
+        # the build scripts name the old layout, <name>-<version>/; newer dub writes <name>/<version>/
+        local n=${p%@*} v=${p#*@} d=$HOME/.dub/packages
+        [ -d "$d/$n-${v//+/_}" ] || [ ! -d "$d/$n/$v" ] || ln -s "$n/$v" "$d/$n-${v//+/_}"
     done
 }
 

@@ -1404,8 +1404,13 @@ ApplicationWindow {
         onTriggered: { const it = root.pageData.items[0]; grid.selectOnly(it.id); photoMenu.ids = [it.id]; photoMenu.path = root.pathsOf([it.id])[0] || ""; photoMenu.popup(grid, 120, 120) }
     }
     Timer {
-        running: library.shotPath.length > 0
-        interval: library.shotView.startsWith("tools") ? 15000 : 3500
+        // Armed ONCE, not bound: shotPath and shotView notify through statusChanged, and with a
+        // live network the status changes every few seconds — a bound timer was re-armed each
+        // time and never reached its 3.5 s, so the capture waited for ever.
+        Component.onCompleted: if (library.shotPath.length > 0) {
+            interval = library.shotView.startsWith("tools") ? 15000 : 3500
+            start()
+        }
         onTriggered: (library.shotView.startsWith("tools") ? root.contentItem.Window.contentItem : library.shotView === "computers" ? computersPanel.body : library.shotView === "overlay" ? Overlay.overlay : library.shotSend ? phonePanel.body : library.shotView.startsWith("name:") ? viewer.namerBody : library.shotView === "menu" ? photoMenu.contentItem : library.shotView === "facemenu" ? viewer.faceMenuBody : shell).grabToImage(function (r) {
             r.saveToFile(library.shotPath)
             console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length, "source", root.source, "filter", library.filter)

@@ -211,14 +211,27 @@ build_app() {
     export LIBRARY_PATH="$DEPS/opencv/lib:$DEPS/ngtcp2/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
     export CPATH="$DEPS/ngtcp2/include${CPATH:+:$CPATH}"
     export QMLCSS="$TOP/qml-css-engine"
+    # dub resolves each `libs` name through pkg-config first; a .pc under that exact name makes
+    # the link take OUR ngtcp2 (and, for the AppImage, our OpenSSL 3.5) rather than whatever
+    # older copy the distribution has in /usr/lib.
+    mkdir -p "$DEPS/pc-compat"
+    pc() {   # <name> <libs>
+        printf 'Name: %s\nDescription: photo-wagon build compat\nVersion: 0\nLibs: %s\n' "$1" "$2" \
+            > "$DEPS/pc-compat/$1.pc"
+    }
+    pc ngtcp2 "$DEPS/ngtcp2/lib/libngtcp2.a"
+    pc ngtcp2_crypto_ossl "$DEPS/ngtcp2/lib/libngtcp2_crypto_ossl.a"
+    if [ -d "$DEPS/openssl/lib" ]; then
+        pc ssl "-L$DEPS/openssl/lib -lssl"
+        pc crypto "-L$DEPS/openssl/lib -lcrypto"
+    fi
+    export PKG_CONFIG_PATH="$DEPS/pc-compat:$PKG_CONFIG_PATH"
     # gexiv2 0.16 (Fedora 44) installs as gexiv2-0.16 / -lgexiv2-0.16; the calls the app makes are
     # the same there (deprecated, not removed). dub resolves `libs "gexiv2"` through pkg-config,
     # so a gexiv2.pc that points at it is all the link needs.
     if ! pkg-config --exists gexiv2 && pkg-config --exists gexiv2-0.16; then
-        mkdir -p "$DEPS/pc-compat"
         sed 's/^Name:.*/Name: gexiv2/' "$(pkg-config --variable=pcfiledir gexiv2-0.16)/gexiv2-0.16.pc" \
             > "$DEPS/pc-compat/gexiv2.pc"
-        export PKG_CONFIG_PATH="$DEPS/pc-compat:$PKG_CONFIG_PATH"
     fi
     rm -f csrc/*.a csrc/*.o
     dub build --compiler=ldc2 -c app -b package

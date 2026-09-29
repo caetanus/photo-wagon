@@ -10,7 +10,7 @@
 set -eu
 [ $# -eq 3 ] || { echo "usage: $0 <stage-root> <version> <out-dir>" >&2; exit 2; }
 ROOT=$(cd "$1" && pwd)
-VERSION=$2
+PKGVER=$2   # not VERSION: /etc/os-release, sourced below, sets that
 mkdir -p "$3"
 OUT=$(cd "$3" && pwd)
 . /etc/os-release
@@ -36,7 +36,7 @@ deb() {
     rm -rf "$pkg" && mkdir -p "$pkg/DEBIAN"
     cp -a "$ROOT"/. "$pkg"/
     size=$(du -sk "$pkg" | cut -f1)
-    debver="$VERSION-1~$FLAVOUR"
+    debver="$PKGVER-1~$FLAVOUR"
     cat > "$pkg/DEBIAN/control" <<EOF
 Package: photo-wagon
 Version: $debver
@@ -72,7 +72,7 @@ rpm_() {
 %global debug_package %{nil}
 %global __strip /bin/true
 Name:           photo-wagon
-Version:        $VERSION
+Version:        $PKGVER
 Release:        $rel
 Summary:        $SUMMARY
 License:        MIT
@@ -102,7 +102,7 @@ EOF
         --define "_build_name_fmt %%{NAME}-%%{VERSION}-%%{RELEASE}.%%{ARCH}.rpm" \
         -bb "$top/SPECS/photo-wagon.spec"
     rm -rf "$top"
-    echo "$OUT/photo-wagon-$VERSION-$rel.x86_64.rpm"
+    echo "$OUT/photo-wagon-$PKGVER-$rel.x86_64.rpm"
 }
 
 case "$ID" in

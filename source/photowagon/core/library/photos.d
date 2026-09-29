@@ -681,9 +681,19 @@ final class PhotoRepo
 	/// thumbnails on screen (9080 photos: ~40 ms, ~1.7 MB). Same order as page().
 	/// `hashes`: also the start of each content hash and the file size (the phone leaves out
 	/// the computer's copies of its own photos by them).
-	JSONValue[] skeleton(Filter f, bool hashes = false)
+	JSONValue[] skeleton(Filter f, bool hashes = false, const(long)[] onlyIds = null)
 	{
+		import std.conv : to;
+
 		auto w = whereClause(f);
+		if (onlyIds !is null)
+		{
+			// just these rows of the listing (library.changes): ids are integers, inlined
+			string list;
+			foreach (i, id; onlyIds)
+				list ~= (i ? "," : "") ~ id.to!string;
+			w.where ~= " AND p.id IN (" ~ (list.length ? list : "-1") ~ ")";
+		}
 		auto s = db.prepare(`SELECT p.id, p.taken_ts, p.width, p.height, p.kind, p.favorite, p.duration_ms,
 			p.stack_id, p.thumb_hash, p.path, p.origin_peer,
 			(SELECT t.tag FROM photo_tags t WHERE t.photo_id = p.id AND t.grp = 'scene' AND t.tag <> ''),
@@ -721,6 +731,41 @@ final class PhotoRepo
 			out_ ~= j;
 		}
 		return out_;
+	}
+
+	/// The newest entry of the listing's change log (0 when empty) — a cursor for changesSince.
+	long changeCursor()
+	{
+		auto s = db.prepare("SELECT coalesce(max(seq), 0) FROM photo_changes");
+		s.step();
+		return s.getLong(0);
+	}
+
+	/// The oldest entry still in the change log (0 when empty): a cursor before it is too old.
+	long oldestChange()
+	{
+		auto s = db.prepare("SELECT coalesce(min(seq), 0) FROM photo_changes");
+		s.step();
+		return s.getLong(0);
+	}
+
+	/// The photo ids changed after `since` (each once), at most `cap` + 1 (more = too many).
+	long[] changedSince(long since, int cap)
+	{
+		auto s = db.prepare("SELECT DISTINCT photo_id FROM photo_changes WHERE seq > ? LIMIT ?");
+		s.bind(1, since).bind(2, cast(long) cap + 1);
+		long[] out_;
+		while (s.step())
+			out_ ~= s.getLong(0);
+		return out_;
+	}
+
+	/// Keeps the change log bounded: the last `keep` entries.
+	void trimChanges(long keep = 100_000)
+	{
+		auto s = db.prepare("DELETE FROM photo_changes WHERE seq <= (SELECT coalesce(max(seq), 0) FROM photo_changes) - ?");
+		s.bind(1, keep);
+		s.run();
 	}
 
 	/// Photos taken on the same calendar day(s) as any of `seedIds`, minus the seeds
@@ -1202,4 +1247,45 @@ unittest
 	auto back = repo.restoreHashes(["q1", "nope"]);
 	assert(back.length == 1 && back[0].path == "/p/a.jpg");
 	assert(!repo.isRemoved("q1") && repo.removedList().length == 0);
+}
+
+unittest
+{
+	// the listing's change log: inserts, laid-out column updates, tag changes and deletes are
+	// logged; enrichment-only updates are not; skeleton(onlyIds) is the delta's rows
+	import photowagon.core.db.schema : migrate;
+	import std.file : tempDir;
+	import std.path : buildPath;
+	import std.algorithm : canFind;
+	import std.conv : to;
+
+	auto db = new Database(":memory:");
+	scope (exit)
+		db.close();
+	migrate(db);
+	auto repo = new PhotoRepo(db, new ContentStore(buildPath(tempDir, "pw-photos-ut-store2")));
+	assert(repo.changeCursor() == 0);
+	Photo a = {hash: "ca", path: "/ca.jpg", takenTs: 200, takenAt: "x"};
+	Photo b = {hash: "cb", path: "/cb.jpg", takenTs: 100, takenAt: "y"};
+	repo.insert(a);
+	repo.insert(b);
+	immutable c0 = repo.changeCursor();
+	assert(c0 >= 2);
+	assert(repo.changedSince(c0, 10).length == 0);
+	db.exec("UPDATE photos SET faces_scanned = 1 WHERE id = " ~ a.id.to!string);   // enrichment: not logged
+	assert(repo.changedSince(c0, 10).length == 0);
+	repo.setFavorite(b.id, true);
+	auto ch = repo.changedSince(c0, 10);
+	assert(ch == [b.id], ch.to!string);
+	auto rows = repo.skeleton(Filter.init, false, ch);
+	assert(rows.length == 1 && rows[0]["id"].integer == b.id && rows[0]["favorite"].type == JSONType.true_);
+	immutable c1 = repo.changeCursor();
+	repo.remove(a.id);
+	ch = repo.changedSince(c1, 10);
+	assert(ch.canFind(a.id));
+	assert(repo.skeleton(Filter.init, false, ch).length == 0);   // gone: the delta reports it removed
+	// the cap: more than asked for = too many
+	assert(repo.changedSince(0, 1).length == 2);
+	repo.trimChanges(1);
+	assert(repo.oldestChange() == repo.changeCursor());
 }

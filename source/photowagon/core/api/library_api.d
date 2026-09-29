@@ -118,8 +118,41 @@ import photowagon.core.jobs.scheduler : jobs;
 	// → {total, items}
 	r.add("library.skeleton", (JSONValue p) {
 		immutable hashes = p.type == JSONType.object && "hashes" in p && p["hashes"].type == JSONType.true_;
+		immutable cursor = photos.changeCursor();   // before the query: a change meanwhile comes again
 		auto items = photos.skeleton(filterOf(p), hashes);
-		return JSONValue(["total": JSONValue(items.length), "items": JSONValue(items)]);
+		return JSONValue(["total": JSONValue(items.length), "items": JSONValue(items), "cursor": JSONValue(cursor)]);
+	});
+
+	// {since, …the library.skeleton filter} → {cursor, upsert: [lean items], removed: [ids]}, or
+	// {cursor, reset: true} when `since` is unknown, too old or too much changed (reload whole).
+	// What the UI applies instead of rebuilding the whole listing on every photo that arrives.
+	r.add("library.changes", (JSONValue p) {
+		enum cap = 3000;
+		immutable hashes = p.type == JSONType.object && "hashes" in p && p["hashes"].type == JSONType.true_;
+		immutable since = getLong(p, "since");
+		immutable cursor = photos.changeCursor();
+		JSONValue reset = JSONValue(["cursor": JSONValue(cursor), "reset": JSONValue(true)]);
+		if (since <= 0 || since > cursor)
+			return reset;
+		immutable oldest = photos.oldestChange();
+		if (oldest > 0 && since < oldest - 1)
+			return reset;   // trimmed past it
+		auto ids = photos.changedSince(since, cap);
+		if (ids.length > cap)
+			return reset;
+		JSONValue[] upsert;
+		JSONValue[] removed;
+		if (ids.length)
+		{
+			upsert = photos.skeleton(filterOf(p), hashes, ids);
+			bool[long] kept;
+			foreach (ref it; upsert)
+				kept[it["id"].integer] = true;
+			foreach (id; ids)
+				if (id !in kept)
+					removed ~= JSONValue(id);
+		}
+		return JSONValue(["cursor": JSONValue(cursor), "upsert": JSONValue(upsert), "removed": JSONValue(removed)]);
 	});
 
 	// the same filter as library.page (dates ignored): the tree of a person, an album, the favourites…

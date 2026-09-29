@@ -3,7 +3,7 @@ module photowagon.core.db.schema;
 
 import photowagon.core.db.sqlite : Database;
 
-enum currentVersion = 23;
+enum currentVersion = 24;
 
 void migrate(Database db)
 {
@@ -68,6 +68,8 @@ void migrate(Database db)
 			db.exec(schemaV22);
 		if (have < 23)
 			db.exec(schemaV23);
+		if (have < 24)
+			db.exec(schemaV24);
 		db.exec("PRAGMA user_version = " ~ currentVersion.stringof);
 	});
 }
@@ -378,6 +380,44 @@ CREATE TABLE meta_held (
 // back as a NEW row (its file deleted outside the app and brought back, re-imported) gets its
 // facts back instead of its empty new row reading as "the user took them all off" (row ids can
 // be reused, so the trigger, not an id comparison, says a row is new).
+// V24: a log of the photo rows the listing shows that changed (added, updated in a column
+// the grid lays out or files by, removed; a scene/holiday/weather tag) — the UI asks for the
+// rows changed since its cursor instead of rebuilding the whole listing on every arrival
+// (22k items per imported file blew the GC heap up; see library.changes). Trimmed by the API.
+private enum schemaV24 = `
+CREATE TABLE IF NOT EXISTS photo_changes (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    photo_id INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS photo_changes_ins AFTER INSERT ON photos BEGIN
+    INSERT INTO photo_changes (photo_id) VALUES (new.id);
+END;
+CREATE TRIGGER IF NOT EXISTS photo_changes_upd AFTER UPDATE OF taken_ts, width, height, kind, favorite, duration_ms,
+    stack_id, thumb_hash, path, origin_peer, hash, size, root_id ON photos BEGIN
+    INSERT INTO photo_changes (photo_id) VALUES (new.id);
+END;
+CREATE TRIGGER IF NOT EXISTS photo_changes_del AFTER DELETE ON photos BEGIN
+    INSERT INTO photo_changes (photo_id) VALUES (old.id);
+END;
+CREATE TRIGGER IF NOT EXISTS photo_changes_tag_ins AFTER INSERT ON photo_tags
+    WHEN new.grp IN ('scene', 'holiday', 'weather') BEGIN
+    INSERT INTO photo_changes (photo_id) VALUES (new.photo_id);
+END;
+CREATE TRIGGER IF NOT EXISTS photo_changes_tag_upd AFTER UPDATE ON photo_tags
+    WHEN new.grp IN ('scene', 'holiday', 'weather') OR old.grp IN ('scene', 'holiday', 'weather') BEGIN
+    INSERT INTO photo_changes (photo_id) VALUES (new.photo_id);
+END;
+-- bounded whoever writes: every 1000th entry drops what is older than the last 100,000
+CREATE TRIGGER IF NOT EXISTS photo_changes_trim AFTER INSERT ON photo_changes
+    WHEN new.seq % 1000 = 0 BEGIN
+    DELETE FROM photo_changes WHERE seq <= new.seq - 100000;
+END;
+CREATE TRIGGER IF NOT EXISTS photo_changes_tag_del AFTER DELETE ON photo_tags
+    WHEN old.grp IN ('scene', 'holiday', 'weather') BEGIN
+    INSERT INTO photo_changes (photo_id) VALUES (old.photo_id);
+END;
+`;
+
 private enum schemaV23 = `
 DELETE FROM meta_state;
 DELETE FROM meta_cursor;

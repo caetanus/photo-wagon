@@ -262,6 +262,11 @@ version (WithUi)
     }
     private long openId; // photo being opened/shown; faces answers for others are dropped
     private long pageEpoch;   // bumped by each new listing (offset 0): older page replies are dropped
+    private long listingCursor;   // the core's change-log cursor the listing on screen is at (0 = none)
+    private long lastSideHns;     // the last date tree / stats refresh from a library.changed
+    private long lastHeavyHns;    // the last memories / moments refresh from a library.changed
+    import std.array : Appender;
+    private Appender!(char[]) leanBuf;   // the lean page, rebuilt into the same buffer each time
     private int pageLimit = 240;
     private bool skeletonOk = true;   // the core answers library.skeleton (the whole listing)
     private bool indexing;
@@ -1135,6 +1140,13 @@ version (WithUi)
     /// answering with its own photos first, which shrank the grid and threw the scroll away.
     private void reload(int offset, int limit, bool refresh = false)
     {
+        if (offset == 0)
+        {
+            // a new listing, whatever kind: an answer still out for the previous one (a page,
+            // a delta) is dropped, and no delta applies until this one says where it is
+            ++pageEpoch;
+            listingCursor = 0;
+        }
         if (fSemantic.length)
         {
             if (offset > 0)
@@ -1294,7 +1306,7 @@ version (WithUi)
         if (refresh && offset == 0)
             params["refresh"] = true;
         immutable off = offset;
-        immutable epoch = offset == 0 ? ++pageEpoch : pageEpoch;
+        immutable epoch = pageEpoch;   // (bumped above for a new listing)
         // The whole listing at once, lean (library.skeleton): the grid lays out every photo and
         // loads only the thumbnails on screen. A core without it (an older one) pages as before.
         // (not for a core across the network: its thumbnails would all come as data URLs at once)
@@ -1329,6 +1341,7 @@ version (WithUi)
                 foreach (it; r["items"].array)
                     items ~= it;
                 total = r["total"].integer;
+                listingCursor = "cursor" in r && r["cursor"].type == JSONType.integer ? r["cursor"].integer : 0;
                 if (remote)
                     fetchThumbs(0);
                 else
@@ -1336,6 +1349,7 @@ version (WithUi)
             });
             return;
         }
+        listingCursor = 0;   // a paged listing: no delta to apply to it
         client.request("library.page", params, (r, e) {
             if (epoch != pageEpoch)
                 return;   // a newer listing replaced this one
@@ -2234,13 +2248,144 @@ version (WithUi)
     {
         if (timelineLater !is null)
             timelineLater.stop();
-        lastTimelineHns = Clock.currStdTime;
-        loadDates();
-        loadStats();
-        loadMemories();
-        loadMoments();
+        immutable now = Clock.currStdTime;
+        lastTimelineHns = now;
+        // What a library.changed refreshes besides the grid is computed over the whole library:
+        // during a stream of arrivals (a phone, the other computer, a Takeout) the date tree and
+        // counts follow every 10 s, memories and moments every minute — not on every photo.
+        refreshSide(now);
+        refreshHeavy(now);
+        if (deltaEligible())
+        {
+            applyChanges();
+            return;
+        }
         immutable onScreen = items.length > 0;
         reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit), onScreen);   // keep what was scrolled to
+    }
+
+    private QTimer sideLater, heavyLater;   // a skipped side refresh, run at its window's end
+
+    private void refreshSide(long now)
+    {
+        immutable wait = lastSideHns + 100_000_000 - now;   // 10 s
+        if (wait <= 0)
+        {
+            lastSideHns = now;
+            loadDates();
+            loadStats();
+            return;
+        }
+        if (sideLater is null)
+        {
+            sideLater = new QTimer(cast(cppq.QObject) null);
+            sideLater.setSingleShot(true);
+            sideLater.connectTimeout({ refreshSide(Clock.currStdTime); });
+        }
+        if (!sideLater.isActive())
+        {
+            sideLater.setInterval(cast(int) (wait / 10_000) + 1);
+            sideLater.start();
+        }
+    }
+
+    private void refreshHeavy(long now)
+    {
+        immutable wait = lastHeavyHns + 600_000_000 - now;   // 60 s
+        if (wait <= 0)
+        {
+            lastHeavyHns = now;
+            loadMemories();
+            loadMoments();
+            return;
+        }
+        if (heavyLater is null)
+        {
+            heavyLater = new QTimer(cast(cppq.QObject) null);
+            heavyLater.setSingleShot(true);
+            heavyLater.connectTimeout({ refreshHeavy(Clock.currStdTime); });
+        }
+        if (!heavyLater.isActive())
+        {
+            heavyLater.setInterval(cast(int) (wait / 10_000) + 1);
+            heavyLater.start();
+        }
+    }
+
+    /// Whether the listing on screen can take the rows changed since its cursor instead of a
+    /// whole new listing: the timeline (or a date, a kind, favourites, a folder), from a local
+    /// core that answered library.skeleton. Views whose membership hangs on other tables (a
+    /// person, an album and its order, a place, tags, keywords, a text search) reload whole.
+    private bool deltaEligible() const
+    {
+        return listingCursor > 0 && skeletonOk && !remote && items.length > 0
+            && !fSemantic.length && !fSimilar && !fMoment.length && !fMemory.length
+            && !fAlbum && !fPerson && !fText.length && !fPlace.length && !fTag.length && !fKeyword.length;
+    }
+
+    /// library.changes since the cursor, applied to the listing: rows gone or out of this view
+    /// removed, new or changed rows put in their place (newest first, as the listing is) — the
+    /// cost is the change, not the library (a whole 22k-photo listing per arriving file blew up
+    /// the heap and made each import slower the bigger the library).
+    private void applyChanges()
+    {
+        JSONValue params = JSONValue.emptyObject;
+        params["since"] = listingCursor;
+        if (fYear)  params["year"]  = fYear;
+        if (fMonth) params["month"] = fMonth;
+        if (fDay)   params["day"]   = fDay;
+        if (fRoot)   params["rootId"] = fRoot;
+        if (fFavorites) params["favorites"] = true;
+        if (kindParam().length) params["kind"] = kindParam();
+        if (hideSent) params["hideSent"] = true;
+        immutable epoch = pageEpoch;
+        client.request("library.changes", params, (r, e) {
+            if (epoch != pageEpoch)
+                return;   // a new listing replaced this one meanwhile
+            if (e.type != JSONType.null_ || ("reset" in r && r["reset"].type == JSONType.true_))
+            {
+                // an older core, a cursor too old, too much changed: the whole listing again
+                listingCursor = 0;
+                reload(0, cast(int) (items.length > pageLimit ? (items.length > 2000 ? 2000 : items.length) : pageLimit), true);
+                return;
+            }
+            listingCursor = r["cursor"].integer;
+            auto ups = "upsert" in r ? r["upsert"].array : null;
+            auto rem = "removed" in r ? r["removed"].array : null;
+            if (ups.length == 0 && rem.length == 0)
+                return;
+            bool[long] drop;
+            foreach (v; rem)
+                drop[v.integer] = true;
+            foreach (ref it; ups)
+                drop[it["id"].integer] = true;   // replaced by its new version below
+            import std.algorithm : sort;
+
+            static long ts(ref JSONValue it) { return "takenTs" in it && it["takenTs"].type == JSONType.integer ? it["takenTs"].integer : 0; }
+            // newest first, then the higher id — the listing's own order (ORDER BY taken_ts DESC, id DESC)
+            static bool before(ref JSONValue a, ref JSONValue b)
+            {
+                immutable ta = ts(a), tb = ts(b);
+                return ta != tb ? ta > tb : a["id"].integer > b["id"].integer;
+            }
+            ups.sort!((a, b) => before(a, b));
+            JSONValue[] merged;
+            merged.reserve(items.length + ups.length);
+            size_t u;
+            foreach (ref it; items)
+            {
+                if (it["id"].integer in drop)
+                    continue;
+                while (u < ups.length && before(ups[u], it))
+                    merged ~= ups[u++];
+                merged ~= it;
+            }
+            while (u < ups.length)
+                merged ~= ups[u++];
+            items = merged;
+            total = items.length;
+            publishPage();
+        });
     }
 
     private void onEvent(string ev, JSONValue data)
@@ -2876,13 +3021,49 @@ version (WithUi)
         if (!indexing)
             setStatus(client.connected(), false, total.to!string ~ " photo" ~ (total == 1 ? "" : "s")
                 ~ (progressText.length ? " · " ~ progressText : ""));
-        JSONValue p = JSONValue.emptyObject;
-        p["total"] = total;
-        p["offset"] = cast(long) items.length;
-        p["items"] = leanItems();
-        page = p.toString();
+        page = leanPage(total, items.length);
         pageChanged.emit();
         refreshStrip();
+    }
+
+    /// {"total","offset","items":[lean items]} written straight into one reused buffer — no
+    /// JSON tree per item (22k of them per refresh was most of the heap's churn).
+    private string leanPage(long totalN, size_t offsetN)
+    {
+        import std.conv : toChars;
+
+        leanBuf.clear();
+        void num(long v) { foreach (c; toChars(v)) leanBuf.put(c); }
+        leanBuf.put(`{"total":`);
+        num(totalN);
+        leanBuf.put(`,"offset":`);
+        num(cast(long) offsetN);
+        leanBuf.put(`,"items":[`);
+        foreach (i, ref it; items)
+        {
+            if (i)
+                leanBuf.put(',');
+            leanBuf.put(`{"id":`);
+            num(it["id"].integer);
+            leanBuf.put(`,"takenTs":`);
+            auto t = "takenTs" in it;
+            num(t !is null && t.type == JSONType.integer ? t.integer : 0);
+            if (auto st = "stack" in it)
+                if (st.type == JSONType.integer)
+                {
+                    leanBuf.put(`,"stack":`);
+                    num(st.integer);
+                }
+            if (auto rr = "remote" in it)
+                if (rr.type == JSONType.true_)
+                    leanBuf.put(`,"remote":true`);
+            if (auto sn = "sent" in it)
+                if (sn.type == JSONType.true_)
+                    leanBuf.put(`,"sent":true`);
+            leanBuf.put('}');
+        }
+        leanBuf.put("]}");
+        return leanBuf.data.idup;
     }
 
     /// The open photo's filmstrip, again from the listing (it changed).

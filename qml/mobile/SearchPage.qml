@@ -65,7 +65,10 @@ Item {
                     anchors.fill: parent
                     anchors.leftMargin: 16; anchors.rightMargin: 10
                     spacing: 8
-                    Label { text: "⌕"; font.pixelSize: 18; color: theme.muted }
+                    Image {
+                        source: icons.tint(icons.search, theme.muted)
+                        sourceSize.width: 18; sourceSize.height: 18
+                    }
                     TextField {
                         id: q
                         Layout.fillWidth: true
@@ -141,13 +144,18 @@ Item {
                                 clip: true
                                 Image {
                                     anchors.fill: parent
-                                    source: modelData.cover || ""
+                                    source: modelData.coverUrl || ""
                                     fillMode: Image.PreserveAspectCrop
-                                    visible: !!modelData.cover
+                                    visible: !!modelData.coverUrl
+                                }
+                                Image {
+                                    anchors.fill: parent
+                                    source: icons.ringMask(theme.bg)
+                                    visible: !!modelData.coverUrl
                                 }
                                 Label {
                                     anchors.centerIn: parent
-                                    visible: !modelData.cover
+                                    visible: !modelData.coverUrl
                                     text: (modelData.name && modelData.name.length) ? modelData.name.charAt(0) : "?"
                                     color: theme.muted; font.pixelSize: 20; font.bold: true
                                 }

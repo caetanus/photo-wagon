@@ -730,7 +730,8 @@ ApplicationWindow {
     Timer {
         running: library.shotPath.length > 0
         interval: library.shotSend ? 12000 : 5000
-        onTriggered: root.grabToImage(function (r) {
+        // The Window scene root includes ApplicationWindow's header and footer.
+        onTriggered: root.contentItem.Window.contentItem.grabToImage(function (r) {
             r.saveToFile(library.shotPath)
             console.log("shot saved to", library.shotPath, "items:", root.pageData.items.length)
             library.quit()

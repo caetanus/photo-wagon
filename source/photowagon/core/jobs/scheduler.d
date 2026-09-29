@@ -40,6 +40,7 @@ final class Scheduler
 	private LocalManualEvent released;    // a permit came back
 	private int cachedLimit;
 	private MonoTime limitAt;
+	private MonoTime relievedAt;   // the last memory hand-back when over budget (underBudget)
 
 	private struct Waiter
 	{
@@ -67,7 +68,7 @@ final class Scheduler
 	int limit() nothrow
 	{
 		if (fixedPermits > 0)
-			return fixedPermits;
+			return underBudget(fixedPermits);
 		immutable now = MonoTime.currTime;
 		if (cachedLimit > 0 && now - limitAt < 2.seconds)
 			return cachedLimit;
@@ -87,7 +88,42 @@ final class Scheduler
 			else if (avail < 6144)
 				lim = base < 4 ? base : 4;
 		}
+		lim = underBudget(lim);
 		cachedLimit = lim;
+		return lim;
+	}
+
+	/// The PROCESS's budget over the machine's: the memory guard aborts this process past
+	/// its limit, whatever the machine has free (7 GB free did not stop six photo decodes
+	/// at once from carrying the app past its 1.5 GB guard). Background work keeps well
+	/// clear of it — at most two at once past half of the budget, one past 65 %; past 80 %
+	/// memory is also handed back (every 10 s at most). Never none: a limit of 0 would stall
+	/// the lane, the photos queued behind it and the shutdown for as long as memory stays up
+	/// — and what stays up with one at a time is not background work. A user's request
+	/// still goes: acquire(true) gets one past the limit.
+	private int underBudget(int lim) nothrow
+	{
+		import core.atomic : atomicLoad;
+		import photowagon.core.jobs.memguard : guardLimitMb, lastResidentMb, residentMb, relieveMemory;
+
+		immutable budget = atomicLoad(guardLimitMb);
+		if (budget <= 0)
+			return lim;
+		immutable last = atomicLoad(lastResidentMb);
+		immutable rss = last > 0 ? last : residentMb();
+		if (rss >= budget * 80 / 100)
+		{
+			immutable now = MonoTime.currTime;
+			if (now - relievedAt >= 10.seconds)
+			{
+				relievedAt = now;
+				relieveMemory();
+			}
+		}
+		if (rss >= budget * 65 / 100)
+			return lim < 1 ? lim : 1;
+		if (rss >= budget * 50 / 100)
+			return lim < 2 ? lim : 2;
 		return lim;
 	}
 
@@ -525,4 +561,32 @@ unittest
 	runEventLoop();
 	assert(got == [10, 20, 30, 40, 50], got.to!string);
 	assert(maxInside == 3);
+}
+
+unittest
+{
+	// background work sizes itself against the PROCESS budget (the memory guard's limit),
+	// not only the machine: 6 permits shrink to 2 and 1 as the process nears its limit,
+	// and never to 0 (that would stall the lane and ordered())
+	import core.atomic : atomicLoad, atomicStore;
+	import photowagon.core.jobs.memguard : guardLimitMb, lastResidentMb;
+
+	immutable savedLimit = atomicLoad(guardLimitMb), savedRss = atomicLoad(lastResidentMb);
+	scope (exit)
+	{
+		atomicStore(guardLimitMb, savedLimit);
+		atomicStore(lastResidentMb, savedRss);
+	}
+	auto s = new Scheduler(6);
+	atomicStore(guardLimitMb, 1000L);
+	atomicStore(lastResidentMb, 400L);
+	assert(s.limit() == 6);
+	atomicStore(lastResidentMb, 550L);
+	assert(s.limit() == 2);
+	atomicStore(lastResidentMb, 700L);
+	assert(s.limit() == 1);
+	atomicStore(lastResidentMb, 850L);
+	assert(s.limit() == 1);   // memory handed back, still one at a time: never none
+	atomicStore(guardLimitMb, 0L);   // no guard: the machine alone decides
+	assert(s.limit() == 6);
 }

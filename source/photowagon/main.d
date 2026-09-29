@@ -13,8 +13,18 @@ import photowagon.core.ipc.link : InProcessLink;
 import photowagon.core.metadata.exif : initExif;
 import photowagon.core.thumbs.vips : initVips;
 
+/// The D GC grows its heap in pools; the default lets a pool reach 64 MB, and a pool
+/// goes back to the system only when it is entirely free — after a burst (a mirror, an
+/// import) a few live objects pinned hundreds of MB of pools the GC could not return
+/// (GC.minimize released nothing). Smaller pools can be returned as bursts end.
+extern (C) __gshared string[] rt_options = ["gcopt=maxPoolSize:16 incPoolSize:2"];
+
 int main(string[] args)
 {
+	{
+		import photowagon.core.jobs.memguard : tuneAllocator;
+		tuneAllocator();   // before any thread or big allocation: fixed mmap threshold, fewer arenas
+	}
 	installQuitHandler();   // SIGTERM / SIGINT end the process: vibe's own handlers on the core thread only stop its loop
 	Config cfg;
 	try

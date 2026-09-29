@@ -5,6 +5,7 @@
 /// SIGSEGV pra podermos analisar o dump".
 module photowagon.core.jobs.memguard;
 
+import core.atomic : atomicLoad, atomicStore;
 import core.thread : Thread;
 import core.time : seconds;
 
@@ -208,13 +209,22 @@ unittest
 	}
 }
 
+/// The guard's limit (MB) while it runs, 0 without one — the process's memory budget,
+/// which background work sizes itself against (Scheduler.limit). Atomic: the guard's
+/// thread writes, the core's reads.
+shared long guardLimitMb;
+/// This process's resident size (MB) as the guard last read it (every 2 s), 0 before.
+shared long lastResidentMb;
+
 /// Starts the watchdog; `limitMb <= 0` disables it. `what` names the process in the log.
 /// `dump` = true (the desktop) ends with a SIGSEGV core dump so a leak can be read; false
 /// (the phone) exits cleanly with no dump — a giant core on a phone is never worth its cost.
+
 void startMemoryGuard(long limitMb, string what = "photo-wagon", bool dump = true)
 {
 	if (limitMb <= 0)
 		return;
+	atomicStore(guardLimitMb, limitMb);
 	if (dump)
 		allowCoreDumps();
 	else
@@ -226,6 +236,7 @@ void startMemoryGuard(long limitMb, string what = "photo-wagon", bool dump = tru
 			Thread.sleep(2.seconds);
 			memSample(tick++);
 			immutable rss = residentMb();
+			atomicStore(lastResidentMb, rss);
 			if (rss > limitMb)
 			{
 				if (dump)
@@ -288,3 +299,43 @@ unittest
 {
 	assert(residentMb() > 0);   // a running test binary is resident
 }
+
+/// Allocator settings for a process that decodes big images on several threads at once
+/// (glibc only; Android's bionic manages its own). Without them a decoded photo (tens of MB)
+/// landed in whichever thread's arena under glibc's DYNAMIC mmap threshold (it rises after
+/// each big free), and the freed space stayed in 64 MB arenas — 300–550 MB held free
+/// beside ~300 MB in use, while the memory guard counts it all.
+/// - M_MMAP_THRESHOLD fixed at 1 MiB: a big buffer is its own mapping, returned on free.
+/// - M_ARENA_MAX 4: fewer arenas to fragment (the threads mostly wait on I/O and workers).
+void tuneAllocator() nothrow @nogc
+{
+	version (CRuntime_Glibc)
+	{
+		enum M_TRIM_THRESHOLD = -1, M_MMAP_THRESHOLD = -3, M_ARENA_MAX = -8;
+		mallopt(M_MMAP_THRESHOLD, 1024 * 1024);
+		mallopt(M_TRIM_THRESHOLD, 8 * 1024 * 1024);
+		mallopt(M_ARENA_MAX, 4);
+	}
+}
+
+version (CRuntime_Glibc) private extern (C) int mallopt(int param, int value) nothrow @nogc;
+
+/// Hands memory back to the system after a burst: a full D collection, the D pools that
+/// became empty, and glibc's free pages (glibc only). Called when background work backs
+/// off near the budget.
+void relieveMemory() nothrow
+{
+	import core.memory : GC;
+
+	try
+	{
+		GC.collect();
+		GC.minimize();
+	}
+	catch (Exception)
+	{
+	}
+	version (CRuntime_Glibc)
+		malloc_trim(0);
+}
+

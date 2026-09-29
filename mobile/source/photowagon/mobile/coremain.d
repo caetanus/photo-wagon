@@ -74,9 +74,10 @@ int serviceMain()
     }
     {
         // same memory discipline as the UI process: no core dumps, bounded RSS
-        import photowagon.core.jobs.memguard : startMemoryGuard, disableCoreDumps, raiseOpenFilesLimit;
+        import photowagon.core.jobs.memguard : startMemoryGuard, disableCoreDumps, raiseOpenFilesLimit, tuneAllocator;
         disableCoreDumps();
         cast(void) raiseOpenFilesLimit();   // p2p sockets + the index's files outgrow 1024
+        tuneAllocator();   // glibc (a desktop test build) only; the phone's bionic has its own
         startMemoryGuard(1536, "photo-wagon-core", false);
     }
     cast(void) createApp(CORE_ID);

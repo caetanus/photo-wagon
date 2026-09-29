@@ -8,6 +8,7 @@ import photowagon.core.store.store : storeBytes;
 
 private extern (C) nothrow @nogc
 {
+	void* vips_image_copy_memory(void* image);
 	int vips_init(const char* argv0);
 	void vips_concurrency_set(int n);
 	void vips_cache_set_max(int max);
@@ -423,6 +424,72 @@ ubyte[] renderRegion(string source, double fx, double fy, double fw, double fh, 
 /// A JPEG of the face at (fx, fy, fw, fh) (fractions of the rotated image),
 /// padded by a third on each side, longest edge `size`, stored under
 /// `storeRoot`. Returns the hash. Worker-safe.
+/// One face box as fractions of the (rotated) image.
+struct FaceBox
+{
+	double x, y, w, h;
+}
+
+/// Every face of a photo from ONE decode: the photo is opened, rotated and decoded once
+/// and each crop cut from it (renderFaceCrop decoded the whole photo again per face —
+/// tens of MB each, several photos at once). An entry is null where its crop failed.
+string[] renderFaceCrops(string source, string storeRoot, const(FaceBox)[] boxes, int size)
+{
+	import std.algorithm : max, min;
+
+	auto out_ = new string[boxes.length];
+	if (boxes.length == 0)
+		return out_;
+	auto raw = vips_image_new_from_file(source.toStringz, null);
+	if (raw is null)
+		throw new Exception("cannot open: " ~ vipsError());
+	scope (exit)
+		g_object_unref(raw);
+	void* rotated;
+	if (vips_autorot(raw, &rotated, null) != 0)
+		throw new Exception("autorot: " ~ vipsError());
+	scope (exit)
+		g_object_unref(rotated);
+	// decoded once into memory: every crop reads from this, not from the file again
+	void* img = vips_image_copy_memory(rotated);
+	if (img is null)
+		throw new Exception("decode: " ~ vipsError());
+	scope (exit)
+		g_object_unref(img);
+	immutable W = vips_image_get_width(img), H = vips_image_get_height(img);
+	immutable pad = 0.35;
+	foreach (i, b; boxes)
+	{
+		int left = cast(int)((b.x - b.w * pad) * W), top = cast(int)((b.y - b.h * pad) * H);
+		int w = cast(int)(b.w * (1 + 2 * pad) * W), h = cast(int)(b.h * (1 + 2 * pad) * H);
+		left = max(0, left);
+		top = max(0, top);
+		w = min(w, W - left);
+		h = min(h, H - top);
+		if (w < 2 || h < 2)
+			continue;
+		void* crop;
+		if (vips_extract_area(img, &crop, left, top, w, h, null) != 0)
+			continue;
+		scope (exit)
+			g_object_unref(crop);
+		immutable scale = cast(double) size / max(w, h);
+		void* small;
+		if (vips_resize(crop, &small, scale < 1 ? scale : 1.0, null) != 0)
+			continue;
+		scope (exit)
+			g_object_unref(small);
+		void* buf;
+		size_t len;
+		if (vips_jpegsave_buffer(small, &buf, &len, "Q".ptr, 86, "strip".ptr, 1, null) != 0)
+			continue;
+		scope (exit)
+			g_free(buf);
+		out_[i] = storeBytes(storeRoot, (cast(ubyte*) buf)[0 .. len]);
+	}
+	return out_;
+}
+
 string renderFaceCrop(string source, string storeRoot, double fx, double fy, double fw, double fh, int size)
 {
 	import std.algorithm : max, min;

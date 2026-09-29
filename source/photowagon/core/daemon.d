@@ -5,7 +5,7 @@
 module photowagon.core.daemon;
 
 import core.thread : Thread;
-import core.time : Duration, seconds;
+import core.time : Duration, MonoTime, seconds;
 import std.conv : to;
 import std.file : mkdirRecurse, write, remove, exists;
 import std.path : buildPath;
@@ -105,6 +105,9 @@ final class Daemon : ServerControl
 	private ushort ipcPortInUse;
 	private RequestHandler inproc;
 	private FiberGroup own;
+	/// How long after start the enrichment queue begins (see start()).
+	enum Duration enrichmentStartDelay = 60.seconds;
+	private MonoTime enrichmentFrom;
 	private Indexer indexer;
 	version (PW_NoVision) {} else private FaceService facesService;
 	private KindService kinds;
@@ -433,7 +436,12 @@ version (PW_NoVision) {} else private StackService stacks;
 		// pick up changes since last run
 		foreach (root; roots.list())
 			indexer.start(root.id, root.path);
-		kinds.start();
+		// Enrichment (kinds → faces → scenes → places, OCR, stacks) starts a minute later:
+		// at start the roots are re-checked, the other computers' changes arrive and the UI
+		// loads its listing — all at once with a full enrichment queue carried the app past
+		// its memory guard. Nothing waits on it; photos arriving meanwhile queue behind it.
+		enrichmentFrom = MonoTime.currTime + enrichmentStartDelay;
+		startTaggingWhenQuiet();
 	}
 
 	// ---- ServerControl: the loopback/LAN listener, on demand ------------------------
@@ -538,14 +546,15 @@ version (PW_NoVision) {} else private StackService stacks;
 	private enum Duration taggingQuiet = 12.seconds;
 	private void startTaggingWhenQuiet()
 	{
-		if (indexer.activeWithin(taggingQuiet))
+		immutable early = enrichmentFrom - MonoTime.currTime;   // > 0: still in the startup minute
+		if (indexer.activeWithin(taggingQuiet) || early > Duration.zero)
 		{
 			if (!taggingArmed)
 			{
 				taggingArmed = true;
 				runTask(() nothrow {
 					try
-						sleep(taggingQuiet);
+						sleep(early > taggingQuiet ? early : taggingQuiet);
 					catch (Exception)
 					{
 					}

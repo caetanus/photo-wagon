@@ -24,7 +24,7 @@ import photowagon.core.faces.repo : FaceRepo;
 import photowagon.core.ipc.events : Events;
 import photowagon.core.library.photos : PhotoRepo;
 import photowagon.core.store.store : ContentStore;
-import photowagon.core.thumbs.vips : renderFaceCrop;
+import photowagon.core.thumbs.vips : renderFaceCrop, renderFaceCrops, FaceBox;
 
 /// Longest edge of a face crop in the store.
 enum faceThumbEdge = 192;
@@ -481,10 +481,36 @@ final class FaceService
 		immutable edgeHint = max(photo.width, photo.height);
 		auto hits = jobs.background({ return async(&detectFaces, photo.path, edgeHint).getResult(); });
 		thumbs = new string[hits.length];
+		// every kept face cut from ONE decode of the photo (see renderFaceCrops)
+		FaceBox[] boxes;
+		size_t[] at;
 		foreach (i, ref hit; hits)
 			if (kept(hit))
-				thumbs[i] = cropOf(photo.path, hit);
+			{
+				boxes ~= FaceBox(hit.x, hit.y, hit.w, hit.h);
+				at ~= i;
+			}
+		if (boxes.length)
+		{
+			immutable path = photo.path;
+			immutable(FaceBox)[] ib = boxes.idup;
+			try
+			{
+				auto crops = jobs.background({ return async(&cropsOf, path, cfg.storeDir, ib).getResult(); });
+				foreach (k, i; at)
+					thumbs[i] = crops[k];
+			}
+			catch (InterruptException)
+				throw new InterruptException;
+			catch (Exception e)
+				logWarn("faces: crops failed for %s: %s", path, e.msg);
+		}
 		return hits;
+	}
+
+	private static immutable(string)[] cropsOf(string path, string storeRoot, immutable(FaceBox)[] boxes)
+	{
+		return renderFaceCrops(path, storeRoot, boxes, faceThumbEdge).idup;
 	}
 
 	private bool kept(const ref FaceHit hit) const

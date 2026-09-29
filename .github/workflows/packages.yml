@@ -190,6 +190,10 @@ jobs:
           set -eu
           export HOME=/tmp/h APPIMAGE_EXTRACT_AND_RUN=1
           mkdir -p "$HOME"
+          # every library the image still expects from the system, listed at once
+          cd /tmp && /w/dist/*.AppImage --appimage-extract >/dev/null && cd - >/dev/null
+          missing=$(LD_LIBRARY_PATH=/tmp/squashfs-root/usr/lib ldd /tmp/squashfs-root/usr/bin/photo-wagon | grep 'not found' || true)
+          [ -z "$missing" ] || { echo "AppImage: libraries the system lacks:"; echo "$missing"; exit 1; }
           QT_FORCE_STDERR_LOGGING=1 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software PW_SHOT=/w/shot.png \
             timeout 180 /w/dist/*.AppImage --data "$HOME/library"
           test -s /w/shot.png
@@ -198,10 +202,16 @@ jobs:
           test -f "$HOME/.local/share/icons/hicolor/256x256/apps/photo-wagon.png"
           . /etc/os-release; echo "AppImage ok on $PRETTY_NAME"
           EOF
-          # the base libraries an AppImage leaves to the system (GL, fontconfig, xkbcommon)
+          # the base an AppImage leaves to the system — what every desktop has (linuxdeploy's
+          # excludelist: GL/EGL, fontconfig, freetype, harfbuzz, X11/xcb, glib, asound, gbm)
           docker run --name inst "${{ matrix.image }}" sh -c '. /etc/os-release; case "$ID" in
-            fedora) dnf install -y -q mesa-libEGL mesa-libGL fontconfig libxkbcommon ;;
-            *) apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libegl1 libgl1 libfontconfig1 libxkbcommon0 ;;
+            fedora) dnf install -y -q mesa-libEGL mesa-libGL mesa-libgbm fontconfig freetype harfbuzz \
+                      libxkbcommon libxkbcommon-x11 libX11 libX11-xcb libxcb libdrm glib2 alsa-lib dejavu-sans-fonts ;;
+            *) apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libegl1 libgl1 libgbm1 \
+                 libfontconfig1 libfreetype6 libharfbuzz0b libxkbcommon0 libxkbcommon-x11-0 libx11-6 libx11-xcb1 \
+                 libxcb1 libdrm2 libglib2.0-0 libasound2 fonts-dejavu-core || apt-get install -y -qq libegl1 libgl1 libgbm1 \
+                 libfontconfig1 libfreetype6 libharfbuzz0b libxkbcommon0 libxkbcommon-x11-0 libx11-6 libx11-xcb1 \
+                 libxcb1 libdrm2 libglib2.0-0t64 libasound2t64 fonts-dejavu-core ;;
           esac'
           docker commit inst pw-smoke >/dev/null
           docker run --rm --network=none -v "$PWD:/w" pw-smoke sh /w/run.sh
@@ -269,8 +279,32 @@ jobs:
             qt-dlang-gen/.build/qt-6.11-android-arm64-cxx-quick
             qt-dlang-gen/generated/qt-6.11-android-arm64
           key: dside-android-${{ env.DSIDE_SHA }}
+      # The APK is signed with the same key as the app already installed on the phones, so a
+      # release installs as an update. androiddeployqt's gradle build signs debug builds with
+      # ~/.android/debug.keystore; the secret puts that key there. A tag without it fails.
+      - name: The signing key
+        env:
+          ANDROID_SIGNING_KEYSTORE: ${{ secrets.ANDROID_SIGNING_KEYSTORE }}
+        run: |
+          if [ -z "$ANDROID_SIGNING_KEYSTORE" ]; then
+            case "$GITHUB_REF" in
+              refs/tags/v*) echo "::error::ANDROID_SIGNING_KEYSTORE is not set; a release APK needs the persistent key"; exit 1 ;;
+            esac
+            echo "::warning::ANDROID_SIGNING_KEYSTORE is not set; this APK is signed with a throwaway key"
+            exit 0
+          fi
+          mkdir -p ~/.android
+          echo "$ANDROID_SIGNING_KEYSTORE" | base64 -d > ~/.android/debug.keystore
+          echo "EXPECT_CERT=6242a804c6d93759f27e0bc769795bf1abfc346725850337e09c3d4259318de6" >> "$GITHUB_ENV"
       - name: Build the APK
         run: bash photo-wagon/packaging/android/build-apk.sh "$PWD/dist"
+      - name: Check its signature
+        if: env.EXPECT_CERT != ''
+        run: |
+          got=$("$ANDROID_SDK_ROOT"/build-tools/36.0.0/apksigner verify --print-certs dist/photo-wagon-mobile-debug.apk \
+                | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          [ "$got" = "$EXPECT_CERT" ] || { echo "::error::APK signed by $got, expected $EXPECT_CERT"; exit 1; }
+          echo "APK signed by the release key ($got)"
       - name: Name it
         run: mv dist/photo-wagon-mobile-debug.apk "dist/photo-wagon-${{ needs.meta.outputs.version }}.apk"
       - uses: actions/upload-artifact@v4

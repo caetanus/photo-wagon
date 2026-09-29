@@ -83,7 +83,11 @@ toolchain_files() {
                  -e "s|/home/caetano/lab/android-d|$WORK|g"
                  -e "s|/home/caetano/lab/qt-dlang-gen|$TOP/qt-dlang-gen|g")
     sed "${subst[@]}" "$SRC/mobile/toolchain/ldc2-android.conf" > "$TCW/ldc2-android.conf"
-    sed "${subst[@]}" "$SRC/mobile/toolchain/spec_cxx_quick_android.json" > "$TCW/spec_cxx_quick_android.json"
+    # the spec names the developer's clang resource dir; xiboca needs this machine's
+    local rdir
+    rdir=$(clang -print-resource-dir)
+    sed "${subst[@]}" -e "s|\"resource_dir\": *\"[^\"]*\"|\"resource_dir\": \"$rdir\"|" \
+        "$SRC/mobile/toolchain/spec_cxx_quick_android.json" > "$TCW/spec_cxx_quick_android.json"
     for pc in "$SRC"/mobile/toolchain/pkgconfig/*.pc; do sed "${subst[@]}" "$pc" > "$TCW/pkgconfig/$(basename "$pc")"; done
     export LDC_CONF=$TCW/ldc2-android.conf
 }

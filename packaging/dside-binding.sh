@@ -69,8 +69,9 @@ echo yes > "$BDIR/qml-enabled"
 for c in "$GEN"/*.cpp; do
     b=$(basename "$c" .cpp)
     case "$b" in qtdmoc|qtdmoc_qml) EX=-DQTD_ENABLE_QML ;; *) EX= ;; esac
+    # clang++, as DSide builds them: g++ refuses qtdmoc.cpp (a C and a C++ qtd_var_text)
     # shellcheck disable=SC2086
-    ${CXX:-c++} $CFLAGS $PRIV -std=c++17 -fPIC -O2 -ffunction-sections -fdata-sections $EX \
+    ${DSIDE_CXX:-clang++} $CFLAGS $PRIV -std=c++17 -fPIC -O2 -ffunction-sections -fdata-sections $EX \
         -c "$c" -o "$BDIR/ocpp/$b.o"
 done
 rm -f "$BDIR/libshims.a"

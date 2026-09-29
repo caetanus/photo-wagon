@@ -20,3 +20,31 @@ legacy/photowagond/.dub/
 legacy/.ipynb_checkpoints/
 csrc/*.o
 csrc/*.a
+mobile/android/libs/
+mobile/toolchain/android-libs/**/*.so
+
+# Converted on-device ML models (regenerate via tools/mlphone; big, like the LiteRT .so)
+models/tflite/
+calibration_image_sample_data_*.npy
+
+# on-device ML test artifacts (regenerate via tools/mlphone; keep the .py/.c scripts)
+tools/mlphone/dump/
+tools/mlphone/*.rgb
+tools/mlphone/*.f32
+tools/mlphone/*.npy
+tools/mlphone/testface*.jpg
+tools/mlphone/*.dim
+
+# tflite models bundled into the APK at build time (regenerate via tools/mlphone)
+mobile/android/assets/models/
+
+# local build/test leftovers (never versioned)
+scratchpad_*.log
+.scratch-paging/
+/hsprobe
+/photo-wagon.real
+/photo-wagon.new
+mobile/aqtinstall.log
+mobile/photo-wagon-mobile-hs
+# prebuilt native Android archives (built by vendor scripts: libcrypto, ngtcp2, libudx, d-hyperswarm)
+mobile/toolchain/android-libs/

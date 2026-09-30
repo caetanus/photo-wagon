@@ -280,8 +280,8 @@ jobs:
             qt-dlang-gen/generated/qt-6.11-android-arm64
           key: dside-android-${{ env.DSIDE_SHA }}
       # The APK is signed with the same key as the app already installed on the phones, so a
-      # release installs as an update. androiddeployqt's gradle build signs debug builds with
-      # ~/.android/debug.keystore; the secret puts that key there. A tag without it fails.
+      # release installs as an update: apksigner re-signs the built APK with the key from the
+      # ANDROID_SIGNING_KEYSTORE secret, and the signer is then checked. A tag without it fails.
       - name: The signing key
         env:
           ANDROID_SIGNING_KEYSTORE: ${{ secrets.ANDROID_SIGNING_KEYSTORE }}
@@ -293,16 +293,20 @@ jobs:
             echo "::warning::ANDROID_SIGNING_KEYSTORE is not set; this APK is signed with a throwaway key"
             exit 0
           fi
-          mkdir -p ~/.android
-          echo "$ANDROID_SIGNING_KEYSTORE" | base64 -d > ~/.android/debug.keystore
+          echo "$ANDROID_SIGNING_KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "RELEASE_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
           echo "EXPECT_CERT=6242a804c6d93759f27e0bc769795bf1abfc346725850337e09c3d4259318de6" >> "$GITHUB_ENV"
       - name: Build the APK
         run: bash photo-wagon/packaging/android/build-apk.sh "$PWD/dist"
-      - name: Check its signature
-        if: env.EXPECT_CERT != ''
+      - name: Sign it with the release key and check the signer
+        if: env.RELEASE_KEYSTORE != ''
         run: |
-          got=$("$ANDROID_SDK_ROOT"/build-tools/36.0.0/apksigner verify --print-certs dist/photo-wagon-mobile-debug.apk \
-                | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          bt="$ANDROID_SDK_ROOT/build-tools/36.0.0"
+          apk=dist/photo-wagon-mobile-debug.apk
+          "$bt/apksigner" sign --ks "$RELEASE_KEYSTORE" --ks-key-alias androiddebugkey \
+              --ks-pass pass:android --key-pass pass:android "$apk"
+          rm -f "$RELEASE_KEYSTORE"
+          got=$("$bt/apksigner" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
           [ "$got" = "$EXPECT_CERT" ] || { echo "::error::APK signed by $got, expected $EXPECT_CERT"; exit 1; }
           echo "APK signed by the release key ($got)"
       - name: Name it

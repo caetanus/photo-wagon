@@ -36,9 +36,14 @@ final class PeerRepo
 		s.run();
 	}
 
-	KnownPeer[] list()
+	/// The most recently seen first; `limit` caps how many (0 = all — the table holds every DHT
+	/// peer ever met, thousands, with their address lists).
+	KnownPeer[] list(int limit = 0)
 	{
-		auto s = db.prepare("SELECT peer_id, addrs, agent, last_seen FROM peers ORDER BY last_seen DESC");
+		auto s = db.prepare("SELECT peer_id, addrs, agent, last_seen FROM peers ORDER BY last_seen DESC"
+			~ (limit > 0 ? " LIMIT ?" : ""));
+		if (limit > 0)
+			s.bind(1, limit);
 		KnownPeer[] out_;
 		while (s.step())
 		{

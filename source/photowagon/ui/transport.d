@@ -108,6 +108,13 @@ abstract class Bridge
     // ---- shared plumbing for line-based transports ----------------------------------
 
     protected ResultCb[long] pending;
+    // PW_IPCSTAT=1: what crosses this bridge, by event and by method — bytes and count, printed
+    // to stderr every 30 s. A diagnostic for memory: every line is a fresh string and a full
+    // JSON parse, so a large payload sent often is garbage the GC has to absorb.
+    private string[long] pendingMethod;
+    private ulong[string] statBytes;
+    private ulong[string] statCount;
+    private long statSince;
     protected long nextId = 1;
 
     /// Builds the request line and remembers the callback; the subclass sends it.
@@ -120,6 +127,8 @@ abstract class Bridge
         if (params.type != JSONType.null_)
             msg["params"] = params;
         pending[id] = cb;
+        if (ipcStat)
+            pendingMethod[id] = method;
         return msg.toString() ~ "\n";
     }
 
@@ -130,11 +139,66 @@ abstract class Bridge
 
         immutable id = nextId++;
         pending[id] = cb;
+        if (ipcStat)
+            pendingMethod[id] = method;
         return `{"id":` ~ id.to!string ~ `,"method":` ~ JSONValue(method).toString() ~ `,"params":`
             ~ (paramsJson.length ? paramsJson : "null") ~ "}\n";
     }
 
     /// Routes one inbound line to its callback or to `onEvent`.
+    private static bool ipcStatChecked, ipcStatOn;
+    private static @property bool ipcStat()
+    {
+        import std.process : environment;
+
+        if (!ipcStatChecked)
+        {
+            ipcStatOn = environment.get("PW_IPCSTAT", "") == "1";
+            ipcStatChecked = true;
+        }
+        return ipcStatOn;
+    }
+
+    private void countLine(ref JSONValue obj, size_t bytes)
+    {
+        import std.algorithm : sort;
+        import std.array : array;
+        import std.datetime.systime : Clock;
+        import std.stdio : stderr;
+
+        string key;
+        if (auto ev = "event" in obj)
+            key = "event " ~ (ev.type == JSONType.string ? ev.str : "?");
+        else if (auto idp = "id" in obj)
+        {
+            immutable id = idp.type == JSONType.integer ? idp.integer : -1;
+            if (auto m = id in pendingMethod)
+            {
+                key = "reply " ~ *m;
+                pendingMethod.remove(id);
+            }
+            else
+                key = "reply ?";
+        }
+        else
+            key = "other";
+        statBytes[key] += bytes;
+        statCount[key] += 1;
+        immutable now = Clock.currStdTime / 10_000_000;
+        if (statSince == 0)
+            statSince = now;
+        if (now - statSince < 30)
+            return;
+        auto keys = statBytes.keys.array;
+        keys.sort!((a, b) => statBytes[a] > statBytes[b]);
+        foreach (k; keys[0 .. keys.length < 12 ? keys.length : 12])
+            stderr.writefln("IPCSTAT %ds %-40s %8d KB  %6d msgs", now - statSince, k, statBytes[k] / 1024, statCount[k]);
+        stderr.flush();
+        statBytes = null;
+        statCount = null;
+        statSince = now;
+    }
+
     protected void deliverLine(string line)
     {
         import std.string : strip;
@@ -153,6 +217,8 @@ abstract class Bridge
         }
         if (obj.type != JSONType.object)
             return;
+        if (ipcStat)
+            countLine(obj, line.length);
         if (auto ev = "event" in obj)
         {
             if (onEvent)
@@ -179,6 +245,7 @@ abstract class Bridge
     {
         auto cbs = pending;
         pending = null;
+        pendingMethod = null;
         JSONValue e = JSONValue.emptyObject;
         e["code"] = "disconnected";
         e["message"] = why;

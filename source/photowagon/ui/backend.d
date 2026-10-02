@@ -2415,9 +2415,12 @@ version (WithUi)
                 ? data["imported"].integer.to!string ~ " new photo" ~ (data["imported"].integer == 1 ? "" : "s")
                 : "library up to date";
             setStatus(true, false, progressText);
-            loadDates();
+            // Only the roots (their counts). A pass that changed something also emits
+            // library.changed, which refreshes the timeline, coalesced; reloading the whole
+            // listing here as well re-sent the 8 MB skeleton after EVERY pass — once per root at
+            // start, and again for each pass with nothing new — and that JSON churn is what
+            // grew the GC heap until the memory guard aborted the app (cores 29/09–01/10).
             loadRoots();
-            reload(0, pageLimit);
             break;
         case "computers.changed":
             loadComputers();
@@ -2556,7 +2559,12 @@ version (WithUi)
             }
             break;
         case "p2p.peer":
-            loadPeers();
+            // Every libp2p connect/disconnect (dozens a minute) fired a fetch of the whole peer
+            // list. Only the Peers panel shows it: while it is closed the list is only marked
+            // stale; while open, at most one fetch every 3 s.
+            peersStale = true;
+            if (peersVisible)
+                schedulePeers();
             break;
         case "faces.progress":
             setStatus(true, true, backgroundProgress("Faces", data));
@@ -2686,8 +2694,33 @@ version (WithUi)
         });
     }
 
+    private bool peersVisible, peersStale = true;
+    private QTimer peersLater;
+
+    /// The Peers panel opened or closed (PeersPanel.qml). Opening fetches the list if it went stale.
+    @Slot void setPeersVisible(bool v)
+    {
+        peersVisible = v;
+        if (v && peersStale)
+            loadPeers();
+    }
+
+    private void schedulePeers()
+    {
+        if (peersLater is null)
+        {
+            peersLater = new QTimer(cast(cppq.QObject) null);
+            peersLater.setSingleShot(true);
+            peersLater.setInterval(3000);
+            peersLater.connectTimeout(() { if (peersVisible && peersStale) loadPeers(); });
+        }
+        if (!peersLater.isActive())
+            peersLater.start();
+    }
+
     private void loadPeers()
     {
+        peersStale = false;
         client.request("p2p.status", (r, e) {
             if (e.type != JSONType.null_) return;
             peers = r.toString();

@@ -142,5 +142,14 @@ int runUi(Config cfg, InProcessLink link)
     if (roots.length == 0 || failed)
         return 1;
 
-    return QCoreApplication.exec();
+    immutable rc = QCoreApplication.exec();
+    // Tear the QML scene down HERE, while Qt is whole. Left alone, the D runtime's final
+    // collection finalizes the engine's wrapper after main returns, the wrapper deleteLater()s
+    // it, and that deferred delete is then run by Qt's own static teardown inside exit() — after
+    // QThreadStorage is gone — where ~QQuickWindow asks for the current GL context and dies
+    // (SIGSEGV in QThreadStorageData::get, core of 2026-10-01 13:24). Deleted now, destroyed()
+    // tells the wrapper, and its finalizer has nothing left to do.
+    engine.deleteLater();
+    QCoreApplication.sendPostedEvents(null, 52);   // 52 = QEvent::DeferredDelete
+    return rc;
 }

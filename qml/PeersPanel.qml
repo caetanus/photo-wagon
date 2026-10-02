@@ -11,6 +11,9 @@ Popup {
     focus: true
     padding: 16
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+    // the peer list is fetched only while this is open (backend.d, case "p2p.peer")
+    onAboutToShow: library.setPeersVisible(true)
+    onClosed: library.setPeersVisible(false)
 
     readonly property var hello: JSON.parse(library.hello)
     readonly property var peersData: JSON.parse(library.peers)

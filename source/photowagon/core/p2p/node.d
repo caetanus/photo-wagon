@@ -932,6 +932,9 @@ final class Node : Notifiee
 	private imported!"core.time".MonoTime rvAt;
 	private bool rvPublishing;
 
+	/// How many remembered-but-not-connected peers status() lists.
+	enum maxListedKnown = 100;
+
 	JSONValue status()
 	{
 		JSONValue[] ps;
@@ -946,8 +949,12 @@ final class Node : Notifiee
 				"connected": JSONValue(true)
 			]);
 		}
-		foreach (k; peers.list())
-			if (k.peerId !in live)
+		// The remembered peers that are not connected: the most recent ones only. The table keeps
+		// every DHT peer ever met (2975 on the live library, 2.7 MB of addresses) and this status
+		// was sent whole to the UI on each libp2p connect/disconnect.
+		int listedKnown;
+		foreach (k; peers.list(maxListedKnown + cast(int) live.length))
+			if (k.peerId !in live && listedKnown++ < maxListedKnown)
 			{
 				JSONValue[] a;
 				foreach (x; k.addrs)

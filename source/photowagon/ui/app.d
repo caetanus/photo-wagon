@@ -46,7 +46,7 @@ import photowagon.core.ipc.link : InProcessLink;
 
 enum APP_ID      = "photo-wagon";
 enum APP_NAME    = "Photo Wagon";
-enum APP_VERSION = "0.3.0";
+enum APP_VERSION = "0.3.1";
 
 mixin(qtdApplication!"QGuiApplication");
 // The resource tree is assembled in CTFE from qml/ui.qrc (-J=qml). No rcc step.
